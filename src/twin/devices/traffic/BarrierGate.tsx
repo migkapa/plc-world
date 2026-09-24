@@ -29,6 +29,7 @@ import {
   sharedMat,
   sharedTex,
   tmats,
+  useDisposable,
   xf,
 } from './shared';
 
@@ -179,13 +180,13 @@ function buildArmDetails(len: number) {
   return { rubber: mergeAll(rubber), refl: mergeAll(refl), leds: mergeAll(leds) };
 }
 
-const LED_RGB: Record<LedColor, string> = {
-  red: '#ff2010',
-  green: '#20ff60',
-  amber: '#ff8a00',
-  yellow: '#ffd21a',
-  blue: '#2a7dff',
-  white: '#ffffff',
+const LED_RGB: Record<LedColor, THREE.Color> = {
+  red: new THREE.Color('#ff2010'),
+  green: new THREE.Color('#20ff60'),
+  amber: new THREE.Color('#ff8a00'),
+  yellow: new THREE.Color('#ffd21a'),
+  blue: new THREE.Color('#2a7dff'),
+  white: new THREE.Color('#ffffff'),
 };
 
 export function BarrierGate({
@@ -210,6 +211,7 @@ export function BarrierGate({
     () => new THREE.MeshStandardMaterial({ color: '#4a0a08', emissive: '#ff1a0a', emissiveIntensity: 0, roughness: 0.3, toneMapped: false }),
     [],
   );
+  useDisposable(useMemo(() => [ledMat, armLedMat], [ledMat, armLedMat]));
   const g = useRef({ getPosition, getLed, getArmLights });
   g.current = { getPosition, getLed, getArmLights };
   const last = useRef(0);
@@ -229,7 +231,7 @@ export function BarrierGate({
     else c = p > 0.9 ? 'green' : 'red';
     if (c === 'off') ledMat.emissiveIntensity = 0;
     else {
-      ledMat.emissive.set(LED_RGB[c]);
+      ledMat.emissive.copy(LED_RGB[c]);
       ledMat.emissiveIntensity = 3.2;
     }
     armLedMat.emissiveIntensity = g.current.getArmLights && ledOn(g.current.getArmLights(), t) ? 4 : 0;

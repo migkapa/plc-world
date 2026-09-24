@@ -13,7 +13,7 @@ import * as THREE from 'three';
 import type { LedColor, LedMode } from '../../common';
 import type { Placement } from '../../contracts';
 import { dotMatrixTextures } from './ledTextures';
-import { boxGeo, canvasTex, cylY, ledOn, makeCanvas, planeGeo, roundedBox, sharedMat, sharedTex, tmats } from './shared';
+import { boxGeo, canvasTex, cylY, ledOn, makeCanvas, planeGeo, roundedBox, sharedMat, sharedTex, tmats, useDisposable } from './shared';
 
 const SIGN_RGB: Record<LedColor, string> = {
   red: '#ff1a0f',
@@ -64,6 +64,7 @@ function LedFace({ text, color, getLit, pitch, minCols, intensity }: FaceProps) 
       }),
     [tex.base, tex.emissive, color],
   );
+  useDisposable(useMemo(() => [mat], [mat]));
   const g = useRef(getLit);
   g.current = getLit;
   useFrame(({ clock }, dt) => {

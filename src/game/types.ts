@@ -12,6 +12,12 @@ export type TestStep =
   /** Press a momentary control for `ms` (default 200 ms) and release it. */
   | { do: 'tap'; id: string; ms?: number }
   /**
+   * Remote mode change of the controller (key switch stays in REM), e.g. to prove that a latched
+   * output does not restart the machine after a PROG -> RUN transition (prescan / S:FS lessons).
+   * `RUN` fails the step if the controller refuses (faulted / verification errors).
+   */
+  | { do: 'mode'; mode: 'PROG' | 'RUN' }
+  /**
    * Check an observable (scene) or a tag (controller) value.
    * - `equals`: exact match (booleans, integers)
    * - `min`/`max`: numeric range (inclusive)
@@ -37,6 +43,17 @@ export interface MissionTest {
   steps: TestStep[];
 }
 
+/** A value probe + condition (used by `MissionInvariant.when`). */
+export interface MissionCondition {
+  observe?: string;
+  tag?: string;
+  /** Scene control value (e.g. `{ control: 'estop', equals: true }` = while the E-stop is pushed). */
+  control?: string;
+  equals?: boolean | number;
+  min?: number;
+  max?: number;
+}
+
 /** Condition that must hold at every simulation step of every test (e.g. "never both directions green"). */
 export interface MissionInvariant {
   observe?: string;
@@ -45,6 +62,13 @@ export interface MissionInvariant {
   min?: number;
   max?: number;
   message: string;
+  /** Only enforce the invariant while this condition holds (e.g. only while the E-stop is pushed). */
+  when?: MissionCondition;
+  /**
+   * Tolerated violation time in ms (default 0): the invariant fails only when it is violated for
+   * longer than this, e.g. 20 ms = two scans for logic that reacts through an internal bit.
+   */
+  graceMs?: number;
 }
 
 export type MissionKind = 'build' | 'troubleshoot' | 'boss';
@@ -81,6 +105,8 @@ export interface MissionDef {
   parInstructions?: number;
   /** Restrict the palette (undefined = everything). */
   allowedInstructions?: string[];
+  /** Instructions the program must use (e.g. ['OTL','OTU'] in a latch lesson); checked like a verify error. */
+  requiredInstructions?: string[];
   /** Mission ids that must be completed first (defaults to the previous mission in the chapter). */
   requires?: string[];
   /** Short text shown on success. */
@@ -156,4 +182,6 @@ export interface PlayerProfile {
   streakDays: number;
   lastActiveDay?: string;
   settings: { sound: boolean; reducedMotion: boolean; quality: 'low' | 'medium' | 'high' };
+  /** Cumulative counters for achievements (e.g. sandboxMs, forcesUsed, rungEdits). */
+  stats?: Record<string, number>;
 }

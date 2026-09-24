@@ -369,7 +369,7 @@ export function galvanizedTexture(): THREE.CanvasTexture {
     const rnd = mulberry32(17);
     // spangle: voronoi-ish cells with random brightness
     const cells: [number, number, number][] = [];
-    for (let i = 0; i < 90; i++) cells.push([rnd() * S, rnd() * S, 0.85 + rnd() * 0.3]);
+    for (let i = 0; i < 160; i++) cells.push([rnd() * S, rnd() * S, 0.92 + rnd() * 0.12]);
     for (let y = 0; y < S; y++) {
       for (let x = 0; x < S; x++) {
         let best = 1e9;
@@ -386,7 +386,7 @@ export function galvanizedTexture(): THREE.CanvasTexture {
           }
         }
         const i = y * S + x;
-        const v = 255 * Math.min(1, b * (0.78 + (n[i]! - 0.5) * 0.25));
+        const v = 255 * Math.min(1, b * (0.84 + (n[i]! - 0.5) * 0.12));
         img.data[i * 4] = v;
         img.data[i * 4 + 1] = v;
         img.data[i * 4 + 2] = v;
@@ -416,7 +416,7 @@ export const tmats = {
   galvanized: () =>
     sharedMat('tr:galv', () => {
       const map = galvanizedTexture().clone();
-      map.repeat.set(2, 3);
+      map.repeat.set(3, 8);
       map.needsUpdate = true;
       return new THREE.MeshStandardMaterial({ color: TRAFFIC_COLORS.galvanized, map, roughness: 0.42, metalness: 0.75 });
     }),
@@ -543,3 +543,8 @@ export function hitMat(): THREE.MeshBasicMaterial {
 }
 
 export const damp = THREE.MathUtils.damp;
+
+/** Dispose per-instance materials/geometries when the component unmounts. */
+export function useDisposable(items: readonly { dispose: () => void }[]): void {
+  useEffect(() => () => items.forEach((i) => i.dispose()), [items]);
+}

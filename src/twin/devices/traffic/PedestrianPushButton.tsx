@@ -33,6 +33,7 @@ import {
   tmats,
   usePress,
   xf,
+  useDisposable,
 } from './shared';
 
 export interface PedestrianPushButtonProps extends Placement {
@@ -203,6 +204,7 @@ export function PedestrianPushButton({
     () => new THREE.MeshStandardMaterial({ color: '#3a0505', emissive: '#ff1a0a', emissiveIntensity: 0, roughness: 0.25, toneMapped: false }),
     [],
   );
+  useDisposable(useMemo(() => [led], [led]));
   const g = useRef({ getPressed, getLit });
   g.current = { getPressed, getLit };
   useFrame((_, dt) => {

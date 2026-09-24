@@ -384,6 +384,13 @@ export interface PlcController {
   writeInputFromField(operand: string, value: boolean | number): void;
   /** Read what the output module drives to the field. Returns false/0 when the controller is not running (PROG/FAULTED). */
   readOutputForField(operand: string): boolean | number;
+  /**
+   * Optional: the value the field wiring last wrote to an input operand, IGNORING forces (i.e. the voltage at
+   * the module terminal). A forced input's tag shows the forced value, but a real input module's ST indicator
+   * shows the field state — the 3D twins use this to teach that difference. Implementations can return the
+   * value remembered while the input is forced, else the input tag value.
+   */
+  readInputFromField?(operand: string): boolean | number;
 
   // --- events ---
   subscribe(listener: (e: ControllerEvent) => void): () => void;

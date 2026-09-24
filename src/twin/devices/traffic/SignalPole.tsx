@@ -5,9 +5,9 @@
  * arm-connection box (flange plate + gussets) with a gentle rise, rigid-mount clamps for signal heads,
  * optional street-name sign and LED "cobra head" luminaire on a davit arm.
  *
- * Origin: ground level at the pole axis. Arms extend along local +X rotated by `angle` about +Y;
- * attachments under an arm face the arm's +Z side (so heads face traffic approaching from +Z in arm
- * space). Pole attachments face +Z rotated by their `angle`.
+ * Origin: ground level at the pole axis. Arms extend along local +X rotated by `angle` about +Y
+ * (world arm direction = (cos a, 0, −sin a)); attachments under an arm face the arm's +Z side
+ * (world (sin a, 0, cos a)) or −Z with `flip`. Pole attachments face +Z rotated by their `angle`.
  */
 import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef, type ReactNode } from 'react';
@@ -35,6 +35,8 @@ export interface MastArmAttachment {
   at: number;
   /** Mounted object: its origin is placed at the clamp under the arm (e.g. a TrafficSignalHead). */
   node: ReactNode;
+  /** Turn the node 180° so it faces the arm's −Z side (e.g. far-side heads facing approaching traffic). */
+  flip?: boolean;
   key?: string | number;
 }
 
@@ -241,7 +243,9 @@ export function MastArm({ length, rise, baseDiameter = SIGNAL_POLE_DEFAULTS.armB
             <mesh geometry={roundedBox(0.12, 0.05, 0.1, 0.01, 2)} material={tmats.metal('#8d9195', 0.45)} position={[0, 0.0, 0]} castShadow />
             <mesh geometry={bandGeo(ar)} material={tmats.metal('#b4b8bb', 0.3)} position={[0, ar, 0]} rotation={[0, Math.PI / 2, 0]} />
             <mesh geometry={bandGeo(ar)} material={tmats.metal('#b4b8bb', 0.3)} position={[0.04, ar, 0]} rotation={[0, Math.PI / 2, 0]} />
-            <group position={[0, -0.025, 0]}>{a.node}</group>
+            <group position={[0, -0.025, 0]} rotation={[0, a.flip ? Math.PI : 0, 0]}>
+              {a.node}
+            </group>
           </group>
         );
       })}
@@ -262,8 +266,8 @@ function StreetSign({ at, text, width = 1.8, y, r }: { at: number; text: string;
   return (
     <group position={[at, yc, 0]}>
       <mesh geometry={roundedBox(width, h, 0.012, 0.03, 2)} material={tmats.metal('#9aa0a4', 0.4)} castShadow />
-      <mesh geometry={planeGeo(width - 0.01, h - 0.01)} material={mat} position={[0, 0, 0.0065]} />
-      <mesh geometry={planeGeo(width - 0.01, h - 0.01)} material={mat} position={[0, 0, -0.0065]} rotation={[0, Math.PI, 0]} />
+      <mesh geometry={planeGeo(width - 0.01, h - 0.01)} material={mat} position={[0, 0, 0.009]} />
+      <mesh geometry={planeGeo(width - 0.01, h - 0.01)} material={mat} position={[0, 0, -0.009]} rotation={[0, Math.PI, 0]} />
       {/* sign brackets clamped to the arm */}
       {[-width / 3, width / 3].map((dx) => (
         <mesh key={dx} geometry={boxGeo(0.05, 0.1 + r, 0.03)} material={tmats.metal('#8d9195', 0.45)} position={[dx, -h / 2 - (0.05 + r) / 2 + 0.01, 0]} />

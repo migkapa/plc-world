@@ -29,6 +29,7 @@ import {
   roundedRectShape,
   sharedGeo,
   tmats,
+  useDisposable,
   xf,
 } from './shared';
 
@@ -274,6 +275,7 @@ export function TrafficSignalHead({
   const geoms = useMemo(() => buildHeadGeoms(orientation, visor, backplate, retroBorder, hanger), [orientation, visor, backplate, retroBorder, hanger]);
   const centers = useMemo(() => sectionCenters(orientation), [orientation]);
   const lensMats = useMemo(() => (['red', 'yellow', 'green'] as const).map((c) => makeLensMaterial(c)), []);
+  useDisposable(lensMats);
   const tints = useMemo(
     () =>
       (['red', 'yellow', 'green'] as const).map((c) => ({

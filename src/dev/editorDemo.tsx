@@ -27,7 +27,7 @@
  */
 import { Cpu, Gauge, ToggleLeft } from 'lucide-react';
 import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import { createController, instructionsOf, serializeRung, type LogixController, type Rung, type TagDef, type VerifyError } from '@/plc';
 import { createProjectForScene } from '@/sim/project';
 import { createSimRuntime, type SimRuntimeEx } from '@/sim/runtime';
@@ -344,7 +344,10 @@ function Demo() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(
+// reuse the root when Vite re-executes this entry module (hot updates of dependencies)
+const holder = window as unknown as { __editorDemoRoot?: Root };
+holder.__editorDemoRoot ??= createRoot(document.getElementById('root')!);
+holder.__editorDemoRoot.render(
   <StrictMode>
     <Demo />
   </StrictMode>,

@@ -1,6 +1,8 @@
 import type { Preview } from '../../../dev/gallery';
+import { Car, CarFleet, type CarInstance } from './Car';
 import { PedestrianPushButton } from './PedestrianPushButton';
 import { PedestrianSignal } from './PedestrianSignal';
+import { SignalCabinet } from './SignalCabinet';
 import { SignalPole } from './SignalPole';
 import { TrafficSignalHead } from './TrafficSignalHead';
 
@@ -55,11 +57,10 @@ function PoleDemo() {
   const green = () => phase() === 'green';
   return (
     <SignalPole
-      rotation={[0, -Math.PI / 2, 0]}
       arms={[
         {
           length: 9,
-          angle: Math.PI / 2,
+          angle: 0,
           streetSign: { at: 6.5, text: 'LOGIX AVE' },
           attachments: [
             { at: 3.2, node: <TrafficSignalHead getRed={red} getYellow={yellow} getGreen={green} /> },
@@ -67,12 +68,52 @@ function PoleDemo() {
           ],
         },
       ]}
-      luminaire={{ angle: Math.PI / 2, getLit: () => true }}
+      luminaire={{ angle: 0, getLit: () => true }}
       attachments={[
-        { height: 3.0, angle: Math.PI, node: <PedestrianSignal getWalk={() => pedPhase().walk} getDontWalk={() => pedPhase().hand} getCountdown={() => pedPhase().count} /> },
-        { height: 0.9, angle: -Math.PI / 2, bandSpan: 0.3, node: <PedestrianPushButton mount="none" getPressed={() => false} sign /> },
+        { height: 3.0, angle: Math.PI / 2, node: <PedestrianSignal getWalk={() => pedPhase().walk} getDontWalk={() => pedPhase().hand} getCountdown={() => pedPhase().count} /> },
+        { height: 0.9, angle: 0, bandSpan: 0.3, node: <PedestrianPushButton mount="none" getPressed={() => false} sign /> },
       ]}
     />
+  );
+}
+
+function CarsDemo() {
+  const d = () => now() * 3;
+  return (
+    <group>
+      {[0, 1, 2, 3].map((v, i) => (
+        <Car key={v} variant={v} position={[(i - 1.5) * 5.2, 0, 1.6]} getDistance={d} getHeadlights={() => i % 2 === 0} getBraking={() => now() % 2 < 1} getBlinker={() => (i === 1 ? 'left' : null)} />
+      ))}
+      <CarFleet
+        capacity={8}
+        getCar={(i: number, o: CarInstance) => {
+          if (i >= 4) return false;
+          o.variant = 4 + i;
+          o.x = (i - 1.5) * 5.2;
+          o.z = -1.6;
+          o.yaw = Math.PI;
+          o.distance = d();
+          o.braking = now() % 2 >= 1;
+          o.headlights = true;
+          o.steer = i === 3 ? 0.3 : 0;
+          return true;
+        }}
+      />
+    </group>
+  );
+}
+
+function CabinetDemo() {
+  return (
+    <group>
+      <SignalCabinet position={[-0.7, 0, 0]} getDoorAngle={() => 1.9 * (0.5 - 0.5 * Math.cos(Math.min(now() * 0.8, Math.PI)))}>
+        <mesh position={[0, 0.1, 0.06]}>
+          <boxGeometry args={[0.4, 0.14, 0.12]} />
+          <meshStandardMaterial color="#1b1c1e" />
+        </mesh>
+      </SignalCabinet>
+      <SignalCabinet position={[0.8, 0, 0]} label="CAB 07" />
+    </group>
   );
 }
 
@@ -82,6 +123,16 @@ export const previews: Record<string, Preview> = {
     description: '12" LED signal heads: cycling, red, yellow housing, horizontal',
     camera: { position: [0.9, 1.1, 3.6], target: [0, 1.0, 0] },
   },
+  TRAF_Cars: {
+    Component: CarsDemo,
+    description: 'Car variants 0..7: sedan, hatchback, SUV, taxi — <Car/> (front row) and instanced <CarFleet/> (back row); wheels spin, brake lights blink',
+    camera: { position: [4, 5.5, 14], target: [0, 0.5, 0] },
+  },
+  TRAF_SignalCabinet: {
+    Component: CabinetDemo,
+    description: 'NEMA-style signal controller cabinet (door opening, interior back panel) + closed cabinet',
+    camera: { position: [1.4, 1.9, 3.6], target: [0, 0.8, 0] },
+  },
   TRAF_PedDevices: {
     Component: PedDevices,
     description: 'Countdown pedestrian signals (walk / flashing hand + countdown / cycling crate-visor) and ADA push buttons',
@@ -90,6 +141,6 @@ export const previews: Record<string, Preview> = {
   TRAF_SignalPole: {
     Component: PoleDemo,
     description: 'Galvanized mast-arm pole: 2 heads, street-name sign, LED luminaire, ped signal & push button on the pole',
-    camera: { position: [7, 3.5, 11], target: [0, 3.5, -3.5] },
+    camera: { position: [3.5, 2.6, 12.5], target: [3.6, 3.6, 0] },
   },
 };

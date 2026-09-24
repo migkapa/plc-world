@@ -11,7 +11,7 @@ import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Placement } from '../../contracts';
-import { TRAFFIC_COLORS, markingMat, mergeAll, planeGeo, sharedGeo } from './shared';
+import { TRAFFIC_COLORS, markingMat, mergeAll, planeGeo, sharedGeo, useDisposable } from './shared';
 
 export interface InductiveLoopMarkingProps extends Placement {
   /** Loop length along X (m). Default 1.8 (6 ft). */
@@ -94,6 +94,7 @@ export function InductiveLoopMarking({
     () => new THREE.MeshStandardMaterial({ color: TRAFFIC_COLORS.loopSealant, emissive: glowColor, emissiveIntensity: 0, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3, toneMapped: false }),
     [glowColor],
   );
+  useDisposable(useMemo(() => [glowMat, zoneMat, coreMat], [glowMat, zoneMat, coreMat]));
   const g = useRef(getActive);
   g.current = getActive;
   const level = useRef(0);

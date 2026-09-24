@@ -28,6 +28,7 @@ import {
   tmats,
   usePress,
   xf,
+  useDisposable,
 } from './shared';
 
 export interface TicketDispenserProps extends Placement {
@@ -49,11 +50,11 @@ export const TICKET_DISPENSER_DIMS = {
   depth: 0.36,
   height: 1.46,
   /** Height of the push button center. */
-  buttonY: 1.08,
+  buttonY: 1.06,
 } as const;
 const T = TICKET_DISPENSER_DIMS;
 
-const FACE_Y0 = 0.9;
+const FACE_Y0 = 0.8;
 const FACE_Y1 = 1.36;
 const TILT = Math.atan2(0.07, FACE_Y1 - FACE_Y0);
 
@@ -111,24 +112,21 @@ function legendTexture(): THREE.CanvasTexture {
     ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = 'bold 44px Arial, Helvetica, sans-serif';
-    ctx.fillText('PRESS FOR TICKET', 256, 470);
+    ctx.font = 'bold 42px Arial, Helvetica, sans-serif';
+    ctx.fillText('PRESS FOR TICKET', 256, 372);
     // arrow down to the button
     ctx.beginPath();
-    ctx.moveTo(236, 500);
-    ctx.lineTo(276, 500);
-    ctx.lineTo(276, 520);
-    ctx.lineTo(296, 520);
-    ctx.lineTo(256, 552);
-    ctx.lineTo(216, 520);
-    ctx.lineTo(236, 520);
+    ctx.moveTo(240, 398);
+    ctx.lineTo(272, 398);
+    ctx.lineTo(272, 414);
+    ctx.lineTo(290, 414);
+    ctx.lineTo(256, 442);
+    ctx.lineTo(222, 414);
+    ctx.lineTo(240, 414);
     ctx.closePath();
     ctx.fill();
-    ctx.font = 'bold 34px Arial, Helvetica, sans-serif';
-    ctx.fillText('TAKE TICKET', 256, 815);
-    ctx.font = 'bold 26px Arial, Helvetica, sans-serif';
-    ctx.fillText('HELP', 110, 965);
-    ctx.fillText('CARD', 400, 965);
+    ctx.font = 'bold 28px Arial, Helvetica, sans-serif';
+    ctx.fillText('TAKE TICKET', 256, 884);
     return canvasTex(c);
   });
 }
@@ -234,6 +232,7 @@ export function TicketDispenser({
     () => new THREE.MeshStandardMaterial({ map: messageTexture('PRESS BUTTON\nFOR TICKET'), emissive: '#ffffff', emissiveMap: messageTexture('PRESS BUTTON\nFOR TICKET'), emissiveIntensity: 0.9, roughness: 0.25, toneMapped: false }),
     [],
   );
+  useDisposable(useMemo(() => [ringMat, capMat, slotMat, screenMat], [ringMat, capMat, slotMat, screenMat]));
   const g = useRef({ getPressed, getButtonLit, getTicketOut, getMessage });
   g.current = { getPressed, getButtonLit, getTicketOut, getMessage };
   const lastMsg = useRef('PRESS BUTTON\nFOR TICKET');
@@ -264,7 +263,7 @@ export function TicketDispenser({
   const accent = tmats.paint(accentColor, 0.45, 0.3);
   const faceH = Math.hypot(FACE_Y1 - FACE_Y0, 0.07);
   // local face frame: origin at the bottom-center of the tilted face, +Y up the face, +Z out
-  const faceZ = T.depth / 2 + 0.018;
+  const faceZ = T.depth / 2 + 0.018; // front surface (incl. the body bevel)
   return (
     <group position={position} rotation={rotation} scale={scale}>
       {/* plinth */}
@@ -276,21 +275,21 @@ export function TicketDispenser({
         <meshStandardMaterial map={headerTexture()} emissive="#ffffff" emissiveMap={headerTexture()} emissiveIntensity={0.35} roughness={0.35} />
       </mesh>
       {/* lower front: accent service door with lock and vent slots */}
-      <mesh geometry={roundedBox(T.width - 0.06, 0.66, 0.006, 0.015, 2)} material={accent} position={[0, 0.5, faceZ - 0.012]} castShadow />
-      <mesh geometry={cylZ(0.013, 0.013, 0.012, 16)} material={tmats.metal('#d0d4d7', 0.25)} position={[T.width / 2 - 0.07, 0.72, faceZ - 0.004]} />
+      <mesh geometry={roundedBox(T.width - 0.06, 0.56, 0.006, 0.015, 2)} material={accent} position={[0, 0.45, faceZ + 0.002]} castShadow />
+      <mesh geometry={cylZ(0.013, 0.013, 0.012, 16)} material={tmats.metal('#d0d4d7', 0.25)} position={[T.width / 2 - 0.07, 0.62, faceZ + 0.008]} />
       {[0.26, 0.29, 0.32, 0.35].map((y) => (
-        <mesh key={y} geometry={boxGeo(0.22, 0.01, 0.004)} material={tmats.plastic('#0c0c0c', 0.8)} position={[0, y, faceZ - 0.008]} />
+        <mesh key={y} geometry={boxGeo(0.22, 0.01, 0.004)} material={tmats.plastic('#0c0c0c', 0.8)} position={[0, y, faceZ + 0.0055]} />
       ))}
       {/* tilted control face */}
-      <group position={[0, FACE_Y0, faceZ - 0.018]} rotation={[-TILT, 0, 0]}>
+      <group position={[0, FACE_Y0, faceZ + 0.001]} rotation={[-TILT, 0, 0]}>
         <mesh geometry={roundedBox(T.width - 0.04, faceH - 0.03, 0.01, 0.02, 2)} material={accent} position={[0, faceH / 2, 0.004]} />
         {/* legends */}
         <mesh geometry={planeGeo(T.width - 0.06, faceH - 0.04)} position={[0, faceH / 2, 0.0095]}>
           <meshStandardMaterial map={legendTexture()} transparent roughness={0.5} />
         </mesh>
         {/* display */}
-        <mesh geometry={roundedBox(0.23, 0.13, 0.012, 0.01, 2)} material={tmats.plastic('#0a0a0a', 0.3)} position={[0, 0.37, 0.01]} />
-        <mesh geometry={planeGeo(0.2, 0.1)} material={screenMat} position={[0, 0.37, 0.0165]} />
+        <mesh geometry={roundedBox(0.23, 0.13, 0.012, 0.01, 2)} material={tmats.plastic('#0a0a0a', 0.3)} position={[0, 0.445, 0.01]} />
+        <mesh geometry={planeGeo(0.2, 0.1)} material={screenMat} position={[0, 0.445, 0.0165]} />
         {/* push button */}
         <group position={[0, T.buttonY - FACE_Y0 - 0.01, 0.009]} {...handlers}>
           <mesh geometry={cylZ(0.044, 0.046, 0.012, 40)} material={tmats.metal('#b8bcc0', 0.25)} position={[0, 0, 0.006]} />
@@ -306,7 +305,7 @@ export function TicketDispenser({
           )}
         </group>
         {/* ticket mouth */}
-        <group position={[0, 0.095, 0.01]}>
+        <group position={[0, 0.14, 0.01]}>
           <mesh geometry={roundedBox(0.15, 0.04, 0.014, 0.008, 2)} material={slotMat} />
           <mesh geometry={boxGeo(0.105, 0.006, 0.02)} material={tmats.black()} position={[0, 0, 0.001]} />
           <group ref={ticket} position={[0, 0, -0.02]}>

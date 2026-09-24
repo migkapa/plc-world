@@ -1,0 +1,582 @@
+/*
+ * Ladder editor themes. Live (online) state is applied with data attributes (data-on, data-v…) by the
+ * per-rung live binding, never through React, so animation never re-renders the tree.
+ */
+
+.ld-root {
+  --ld-bg: #0b1016;
+  --ld-bg-alt: #0d131a;
+  --ld-margin: #0e141b;
+  --ld-margin-edge: #1b2530;
+  --ld-rail: #56667a;
+  --ld-wire: #607186;
+  --ld-ink: #b9c5d2;
+  --ld-tag: #e7edf4;
+  --ld-desc: #7d91a6;
+  --ld-alias: #5f748b;
+  --ld-num: #6f8298;
+  --ld-num-sel: #e0f2fe;
+  --ld-on: #2ee66f;
+  --ld-on-soft: rgba(46, 230, 111, 0.2);
+  --ld-hl: rgba(46, 230, 111, 0.38);
+  --ld-hl-stroke: #2ee66f;
+  --ld-box-fill: #10171f;
+  --ld-box-head: #151f2a;
+  --ld-box-stroke: #56667a;
+  --ld-mnemonic: #f1f5f9;
+  --ld-name: #8193a7;
+  --ld-label: #8ea0b3;
+  --ld-operand: #e7edf4;
+  --ld-value: #67e8f9;
+  --ld-chip: #1c2631;
+  --ld-chip-text: #8ea0b3;
+  --ld-sel: #38bdf8;
+  --ld-sel-fill: rgba(56, 189, 248, 0.1);
+  --ld-sel-row: rgba(56, 189, 248, 0.07);
+  --ld-hover: rgba(148, 163, 184, 0.06);
+  --ld-err: #f87171;
+  --ld-err-fill: rgba(248, 113, 113, 0.08);
+  --ld-warn: #fbbf24;
+  --ld-comment-bg: #111a23;
+  --ld-comment-edge: #223040;
+  --ld-comment-accent: #3b82f6;
+  --ld-comment-text: #a9b9c9;
+  --ld-force: #f59e0b;
+  --ld-drop: #f5c400;
+  --ld-end: #4b5b6d;
+  --ld-ov-bg: #151c24;
+  --ld-ov-bg-2: #1b242e;
+  --ld-ov-border: #2e3b4a;
+  --ld-ov-text: #e2e8f0;
+  --ld-ov-muted: #8494a7;
+  --ld-ov-active: rgba(56, 189, 248, 0.16);
+  --ld-ov-input: #0c1117;
+  --ld-chrome: #10161d;
+  --ld-chrome-2: #151c24;
+  --ld-chrome-border: #232e3a;
+  --ld-chrome-text: #cbd5e1;
+  --ld-chrome-muted: #7b8a9c;
+  background: var(--ld-bg);
+  color: var(--ld-tag);
+}
+
+.ld-root.ld-theme-classic {
+  --ld-bg: #ffffff;
+  --ld-bg-alt: #ffffff;
+  --ld-margin: #f4f4f4;
+  --ld-margin-edge: #d6d6d6;
+  --ld-rail: #000000;
+  --ld-wire: #000000;
+  --ld-ink: #000000;
+  --ld-tag: #000000;
+  --ld-desc: #3c3c3c;
+  --ld-alias: #5a5a5a;
+  --ld-num: #000000;
+  --ld-num-sel: #ffffff;
+  --ld-on: #12b812;
+  --ld-on-soft: rgba(18, 184, 18, 0.2);
+  --ld-hl: #6cf06c;
+  --ld-hl-stroke: #000000;
+  --ld-box-fill: #ffffff;
+  --ld-box-head: #ffffff;
+  --ld-box-stroke: #000000;
+  --ld-mnemonic: #000000;
+  --ld-name: #000000;
+  --ld-label: #000000;
+  --ld-operand: #000000;
+  --ld-value: #0000c8;
+  --ld-chip: #eeeeee;
+  --ld-chip-text: #333333;
+  --ld-sel: #0a5bd6;
+  --ld-sel-fill: rgba(10, 91, 214, 0.1);
+  --ld-sel-row: rgba(10, 91, 214, 0.05);
+  --ld-hover: rgba(0, 0, 0, 0.03);
+  --ld-err: #d40000;
+  --ld-err-fill: rgba(212, 0, 0, 0.06);
+  --ld-warn: #c77700;
+  --ld-comment-bg: #f7f7f2;
+  --ld-comment-edge: #c8c8c0;
+  --ld-comment-accent: #7a7a70;
+  --ld-comment-text: #1a1a1a;
+  --ld-force: #d97706;
+  --ld-drop: #ff8c00;
+  --ld-end: #000000;
+  --ld-ov-bg: #ffffff;
+  --ld-ov-bg-2: #f3f4f6;
+  --ld-ov-border: #b9bec6;
+  --ld-ov-text: #111111;
+  --ld-ov-muted: #5f6570;
+  --ld-ov-active: rgba(10, 91, 214, 0.12);
+  --ld-ov-input: #ffffff;
+  --ld-chrome: #eef0f3;
+  --ld-chrome-2: #e4e7eb;
+  --ld-chrome-border: #c5cad1;
+  --ld-chrome-text: #1f2328;
+  --ld-chrome-muted: #5f6570;
+}
+
+.ld-scroll {
+  background: var(--ld-bg);
+  scroll-behavior: smooth;
+}
+
+.ld-scroll:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ld-sel) 60%, transparent);
+}
+
+.ld-row {
+  position: relative;
+  content-visibility: auto;
+}
+
+.ld-rung {
+  display: block;
+  overflow: visible;
+  user-select: none;
+  font-family: var(--font-mono);
+}
+
+.ld-rung text {
+  pointer-events: none;
+}
+
+.ld-rung .ld-margin {
+  fill: var(--ld-margin);
+}
+.ld-rung .ld-margin-edge {
+  stroke: var(--ld-margin-edge);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.ld-row:hover .ld-rowbg {
+  fill: var(--ld-hover);
+}
+.ld-rowbg {
+  fill: transparent;
+}
+.ld-rung-selected .ld-rowbg {
+  fill: var(--ld-sel-row);
+}
+
+/* rung numbers & markers */
+.ld-num {
+  fill: var(--ld-num);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ld-numbox {
+  fill: transparent;
+  cursor: pointer;
+}
+.ld-rung-selected .ld-numbox {
+  fill: var(--ld-sel);
+}
+.ld-rung-selected .ld-num {
+  fill: var(--ld-num-sel);
+}
+.ld-marker rect {
+  rx: 3;
+}
+.ld-marker.e rect {
+  fill: var(--ld-err);
+}
+.ld-marker.w rect {
+  fill: var(--ld-warn);
+}
+.ld-marker text {
+  fill: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-sans);
+}
+.ld-theme-classic .ld-marker.w text {
+  fill: #000;
+}
+
+/* rails & wires */
+.ld-rail {
+  stroke: var(--ld-rail);
+  stroke-width: 2;
+  shape-rendering: crispEdges;
+}
+.ld-running .ld-rail {
+  stroke: var(--ld-on);
+}
+.ld-w {
+  fill: none;
+  stroke: var(--ld-wire);
+  stroke-width: 1.25;
+  shape-rendering: crispEdges;
+}
+.ld-theme-classic .ld-w {
+  stroke-width: 1;
+}
+.ld-w[data-on] {
+  stroke: var(--ld-on);
+  stroke-width: 3;
+}
+.ld-hitw {
+  fill: transparent;
+  cursor: text;
+}
+
+/* instructions */
+.ld-i {
+  cursor: pointer;
+}
+.ld-cell {
+  fill: transparent;
+}
+.ld-i:hover .ld-cell {
+  fill: var(--ld-hover);
+}
+.ld-g {
+  fill: none;
+  stroke: var(--ld-ink);
+  stroke-width: 1.6;
+  stroke-linecap: square;
+}
+.ld-theme-classic .ld-g {
+  stroke-width: 1.3;
+}
+.ld-hl {
+  fill: var(--ld-hl);
+  opacity: 0;
+  transition: opacity 60ms linear;
+}
+.ld-i[data-on] .ld-hl {
+  opacity: 1;
+}
+.ld-i[data-on] .ld-g {
+  stroke: var(--ld-hl-stroke);
+}
+.ld-t-glyph {
+  fill: var(--ld-ink);
+  font-size: 10px;
+  font-weight: 700;
+}
+.ld-i[data-on] .ld-t-glyph {
+  fill: var(--ld-hl-stroke);
+}
+.ld-t-tag {
+  fill: var(--ld-tag);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ld-t-alias {
+  fill: var(--ld-alias);
+  font-size: 9.5px;
+}
+.ld-t-desc {
+  fill: var(--ld-desc);
+  font-family: var(--font-sans);
+  font-size: 10px;
+}
+.ld-t-missing {
+  fill: var(--ld-err) !important;
+}
+
+/* box instructions */
+.ld-box {
+  fill: var(--ld-box-fill);
+  stroke: var(--ld-box-stroke);
+  stroke-width: 1.25;
+  shape-rendering: crispEdges;
+}
+.ld-box-h {
+  fill: var(--ld-box-head);
+}
+.ld-box-sep {
+  stroke: var(--ld-box-stroke);
+  stroke-width: 1;
+  opacity: 0.45;
+  shape-rendering: crispEdges;
+}
+.ld-theme-classic .ld-box-sep {
+  opacity: 0;
+}
+.ld-i[data-on] .ld-box {
+  stroke: var(--ld-on);
+}
+.ld-i[data-on] .ld-box-h {
+  fill: var(--ld-on-soft);
+}
+.ld-theme-classic .ld-i[data-on] .ld-box {
+  stroke: var(--ld-on);
+  stroke-width: 2.5;
+}
+.ld-theme-classic .ld-i[data-on] .ld-box-h {
+  fill: transparent;
+}
+.ld-t-mnemonic {
+  fill: var(--ld-mnemonic);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.ld-t-name {
+  fill: var(--ld-name);
+  font-family: var(--font-sans);
+  font-size: 10px;
+}
+.ld-t-label {
+  fill: var(--ld-label);
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+}
+.ld-t-operand {
+  fill: var(--ld-operand);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ld-val {
+  fill: var(--ld-value);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.ld-chip rect {
+  fill: var(--ld-chip);
+  rx: 3;
+}
+.ld-chip text {
+  fill: var(--ld-chip-text);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+.ld-chip[data-on] rect {
+  fill: var(--ld-on);
+}
+.ld-chip[data-on] text {
+  fill: #04130a;
+}
+.ld-chip:not([data-v]) {
+  display: none;
+}
+.ld-st line {
+  stroke: var(--ld-wire);
+  stroke-width: 1.25;
+  shape-rendering: crispEdges;
+}
+.ld-st rect {
+  fill: var(--ld-box-fill);
+  stroke: var(--ld-box-stroke);
+  stroke-width: 1.2;
+}
+.ld-st text {
+  fill: var(--ld-ink);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+.ld-st[data-on] rect {
+  fill: var(--ld-hl);
+  stroke: var(--ld-hl-stroke);
+}
+.ld-st[data-on] line {
+  stroke: var(--ld-on);
+  stroke-width: 3;
+}
+.ld-theme-classic .ld-st[data-on] line {
+  stroke-width: 2.5;
+}
+
+/* inline live values replacing literals (Preset/Accum) */
+.ld-iv[data-live] {
+  fill: var(--ld-value);
+}
+.ld-theme-classic .ld-iv[data-live] {
+  fill: var(--ld-operand);
+}
+
+/* forces */
+.ld-force rect {
+  fill: var(--ld-force);
+  rx: 2.5;
+}
+.ld-force text {
+  fill: #1a1200;
+  font-size: 8.5px;
+  font-weight: 800;
+  text-anchor: middle;
+}
+.ld-t-forced {
+  fill: var(--ld-force) !important;
+}
+
+/* selection & errors */
+.ld-selbox {
+  fill: var(--ld-sel-fill);
+  stroke: var(--ld-sel);
+  stroke-width: 1.5;
+  rx: 5;
+}
+.ld-opsel {
+  fill: color-mix(in srgb, var(--ld-sel) 22%, transparent);
+  stroke: var(--ld-sel);
+  stroke-width: 1.25;
+  rx: 3;
+}
+.ld-caret {
+  stroke: var(--ld-sel);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+.ld-caret-seg {
+  stroke: var(--ld-sel);
+  stroke-width: 3;
+  opacity: 0.55;
+}
+.ld-errbox {
+  fill: var(--ld-err-fill);
+  stroke: var(--ld-err);
+  stroke-width: 1.25;
+  stroke-dasharray: 4 3;
+  rx: 5;
+}
+.ld-warnbox {
+  fill: transparent;
+  stroke: var(--ld-warn);
+  stroke-width: 1.25;
+  stroke-dasharray: 4 3;
+  rx: 5;
+}
+.ld-squiggle {
+  fill: none;
+  stroke: var(--ld-err);
+  stroke-width: 1;
+}
+.ld-brsel {
+  fill: var(--ld-sel-fill);
+  stroke: var(--ld-sel);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  rx: 4;
+}
+.ld-brhit {
+  fill: transparent;
+  cursor: pointer;
+}
+.ld-brhit:hover {
+  fill: color-mix(in srgb, var(--ld-sel) 25%, transparent);
+}
+
+/* drop target (drag & drop) */
+.ld-drop {
+  stroke: var(--ld-drop);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.ld-drop-dot {
+  fill: var(--ld-drop);
+}
+
+/* comment */
+.ld-comment rect {
+  fill: var(--ld-comment-bg);
+  stroke: var(--ld-comment-edge);
+  stroke-width: 1;
+  rx: 4;
+}
+.ld-comment .ld-comment-accent {
+  fill: var(--ld-comment-accent);
+  stroke: none;
+  rx: 1.5;
+}
+.ld-comment text {
+  fill: var(--ld-comment-text);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+}
+.ld-comment {
+  cursor: pointer;
+}
+
+/* end rung */
+.ld-end-text {
+  fill: var(--ld-end);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-style: italic;
+}
+.ld-end-line {
+  stroke: var(--ld-end);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+
+/* dragging */
+.ld-dragging .ld-rung {
+  cursor: grabbing;
+}
+.ld-ghost {
+  pointer-events: none;
+  position: fixed;
+  z-index: 70;
+}
+
+/* entry animations */
+@keyframes ld-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.ld-pop {
+  animation: ld-pop 120ms ease-out;
+}
+@keyframes ld-flash {
+  0% {
+    background: color-mix(in srgb, var(--ld-sel) 18%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
+}
+.ld-flash {
+  animation: ld-flash 700ms ease-out;
+}
+
+/* online toolbar: animated "running" indicator (Logix Designer's moving ladder icon) */
+@keyframes ld-run-stripes {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 16px 0;
+  }
+}
+.ld-run-anim {
+  background-image: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.95) 0 3px, transparent 3px 8px);
+  background-size: 16px 100%;
+  animation: ld-run-stripes 0.6s linear infinite;
+}
+@keyframes ld-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.25;
+  }
+}
+.ld-blink {
+  animation: ld-blink 1s steps(1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ld-run-anim,
+  .ld-blink,
+  .ld-pop,
+  .ld-flash {
+    animation: none;
+  }
+  .ld-scroll {
+    scroll-behavior: auto;
+  }
+}

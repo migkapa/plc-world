@@ -1,5 +1,6 @@
 import type { Preview } from '../../../dev/gallery';
 import { BarrierGate } from './BarrierGate';
+import { ClearanceBar } from './ClearanceBar';
 import { InductiveLoopMarking } from './InductiveLoopMarking';
 import { LedSign, ParkingStatusSign } from './LedSign';
 import { TicketDispenser } from './TicketDispenser';
@@ -39,6 +40,7 @@ function SignsDemo() {
       <LedSign text="FULL" color="red" getLit={() => 'flash'} minCols={37} mount="none" position={[0.45, 0.3, 0]} />
       <ParkingStatusSign position={[0, 0, -0.8]} getFull={() => false} getOpen={() => true} mount="post" mountLength={0.1} />
       <InductiveLoopMarking position={[0, 0.001, 1.2]} length={2.4} width={1.6} getActive={() => now() % 2 < 1} />
+      <ClearanceBar position={[0, -1.3, 0.6]} width={2.4} getSwing={() => Math.sin(now() * 2) * 0.08} />
     </group>
   );
 }
@@ -47,7 +49,7 @@ export const previews: Record<string, Preview> = {
   PARK_Gate_Raising: {
     Component: GateRaising,
     description: 'Barrier gate cycling up/down (arm lights, rest post) + a second gate half open',
-    camera: { position: [2.6, 1.9, 4.6], target: [1.4, 0.9, -0.4] },
+    camera: { position: [3.2, 2.4, 9.6], target: [1.5, 1.9, -0.6] },
   },
   PARK_TicketDispenser: {
     Component: KioskDemo,

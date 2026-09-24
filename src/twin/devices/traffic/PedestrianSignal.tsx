@@ -30,6 +30,7 @@ import {
   sharedGeo,
   sharedMat,
   tmats,
+  useDisposable,
   xf,
 } from './shared';
 
@@ -158,6 +159,10 @@ function overlayMat(map: THREE.Texture): THREE.MeshBasicMaterial {
   });
 }
 
+function coverMat(): THREE.MeshStandardMaterial {
+  return sharedMat('ped:cover', () => new THREE.MeshStandardMaterial({ color: '#000000', roughness: 0.08, metalness: 0.2, transparent: true, opacity: 0.18, depthWrite: false }));
+}
+
 function faceMat(map: THREE.Texture, key: string): THREE.MeshStandardMaterial {
   return sharedMat(`ped:face:${key}`, () => new THREE.MeshStandardMaterial({ map, roughness: 0.35, metalness: 0 }));
 }
@@ -185,10 +190,11 @@ export function PedestrianSignal({
     }),
     [],
   );
+  useDisposable(useMemo(() => [mats.hand, mats.person, mats.d0, mats.d1], [mats]));
   const colors = useMemo(() => ({ orange: new THREE.Color(SIGNAL_LIT.orange), white: new THREE.Color(SIGNAL_LIT.white) }), []);
   const g = useRef({ getWalk, getDontWalk, getCountdown });
   g.current = { getWalk, getDontWalk, getCountdown };
-  const lastCount = useRef<string>('');
+  const lastCount = useRef<number | null>(-1);
 
   useFrame(({ clock }) => {
     const t = clock.elapsedTime;
@@ -199,16 +205,15 @@ export function PedestrianSignal({
     if (countdown) {
       const v = g.current.getCountdown?.() ?? null;
       const n = v === null || v < 0 || !Number.isFinite(v) ? null : Math.min(99, Math.ceil(v));
-      const s = n === null ? '' : String(n).padStart(2, ' ');
-      if (s !== lastCount.current) {
-        lastCount.current = s;
-        if (s) {
-          mats.d0.map = digitTexture(s[0]!);
-          mats.d1.map = digitTexture(s[1]!);
+      if (n !== lastCount.current) {
+        lastCount.current = n;
+        if (n !== null) {
+          mats.d0.map = digitTexture(n >= 10 ? String(Math.floor(n / 10)) : ' ');
+          mats.d1.map = digitTexture(String(n % 10));
         }
       }
-      const on = s !== '';
-      mats.d0.color.copy(colors.orange).multiplyScalar(on && s[0] !== ' ' ? intensity : 0);
+      const on = n !== null;
+      mats.d0.color.copy(colors.orange).multiplyScalar(on && n >= 10 ? intensity : 0);
       mats.d1.color.copy(colors.orange).multiplyScalar(on ? intensity : 0);
     }
   });
@@ -241,9 +246,7 @@ export function PedestrianSignal({
         </>
       )}
       {/* polycarbonate lens cover (reflections) */}
-      <mesh geometry={planeGeo(FACE_W, FACE_H)} position={[0, 0, zFace + 0.004]} renderOrder={2}>
-        <meshStandardMaterial color="#000000" roughness={0.08} metalness={0.2} transparent opacity={0.18} depthWrite={false} />
-      </mesh>
+      <mesh geometry={planeGeo(FACE_W, FACE_H)} position={[0, 0, zFace + 0.004]} renderOrder={2} material={coverMat()} />
     </group>
   );
 }

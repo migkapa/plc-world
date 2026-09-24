@@ -339,8 +339,12 @@ export function buildBody(st: BodyStyle): BuiltBody {
     const z = new Float64Array(LOWER_ROWS);
     const y = new Float64Array(LOWER_ROWS);
     const under = new Uint8Array(LOWER_ROWS);
-    const yb = yLo(x);
-    const yt = yUp(x);
+    let yb = yLo(x);
+    let yt = yUp(x);
+    // The loft ends are open rings: the end stations must collapse to a line or they leave a slit.
+    if (x <= xr + 1e-7 || x >= xf - 1e-7) {
+      yb = yt = (yb + yt) / 2;
+    }
     const h = Math.max(0, yt - yb);
     const hw = hwPlan(x);
     let ya = -Infinity;

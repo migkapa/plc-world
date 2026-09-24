@@ -59,7 +59,7 @@ function View({ name }: { name: string }) {
   const { Component } = p;
   return (
     <Canvas
-      shadows
+      shadows="percentage"
       dpr={[1, 2]}
       gl={{ preserveDrawingBuffer: true, antialias: true }}
       camera={{ position: cam ?? [0.6, 0.5, 0.9], fov: p.camera?.fov ?? 35, near: 0.005, far: 200 }}

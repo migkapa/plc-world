@@ -102,7 +102,7 @@ export function SceneCanvas({
     <StageCameraContext.Provider value={api}>
       <div className={className ?? 'relative h-full w-full'}>
         <Canvas
-          shadows={effectiveQuality !== 'low'}
+          shadows={effectiveQuality === 'low' ? false : 'percentage'}
           dpr={dpr}
           gl={{ antialias: effectiveQuality !== 'low', powerPreference: 'high-performance', preserveDrawingBuffer: false }}
           camera={{ position: first?.position ?? [3, 2.5, 4], fov: 40, near: 0.02, far: 400 }}

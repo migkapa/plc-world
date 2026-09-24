@@ -4,6 +4,7 @@ import { useHashLocation } from 'wouter/use-hash-location';
 import { Toaster } from '../ui';
 import { GameListeners } from './hud/GameListeners';
 import { PlayerHud } from './hud/PlayerHud';
+import { RouteErrorBoundary } from './RouteErrorBoundary';
 import { TopNav } from './TopNav';
 
 const HomePage = lazy(() => import('./pages/HomePage'));
@@ -28,6 +29,7 @@ export default function App() {
       <div className="flex h-full flex-col">
         <TopNav right={<PlayerHud />} />
         <main className="relative min-h-0 flex-1">
+          <RouteErrorBoundary>
           <Suspense fallback={<Loading />}>
             <Switch>
               <Route path="/" component={HomePage} />
@@ -42,6 +44,7 @@ export default function App() {
               </Route>
             </Switch>
           </Suspense>
+          </RouteErrorBoundary>
         </main>
         <Toaster />
         <GameListeners />

@@ -368,7 +368,16 @@ export interface PlcController {
   removeForce(operand: string): void;
   removeAllForces(): void;
   enableForces(enabled: boolean): void;
+  /**
+   * Installed forces. Keys are canonical, alias-resolved operand paths: forcing alias 'Stop_PB'
+   * (-> Local:1:I.Data.1) gives the key 'Local:1:I.Data.1'. Use `getForce()` to look up by operand text.
+   */
   getForces(): Record<string, boolean | number>;
+  /**
+   * Forced value of an operand as written in logic (alias or canonical path; `program` for
+   * program-scoped aliases), or undefined when it is not forced.
+   */
+  getForce?(operand: string, program?: string): boolean | number | undefined;
 
   // --- field I/O (used by the simulation runtime / scenes) ---
   /** Write a value coming from field wiring into an input image operand (e.g. 'Local:1:I.Data.0'). Forces take precedence. */

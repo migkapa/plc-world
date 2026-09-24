@@ -664,3 +664,25 @@ describe('regressions: download and fault events', () => {
     expect(plc.requestMode('RUN')).toBe(true);
   });
 });
+
+describe('readInputFromField', () => {
+  it('returns the unforced field value while an input is forced', async () => {
+    const { createController } = await import('./controller');
+    const { createProjectForScene } = await import('../sim/project');
+    const scene = {
+      hardware: { platform: 'ControlLogix' as const, chassis: '1756-A7' as const, modules: [{ slot: 0, catalog: '1756-L85E' as const }, { slot: 1, catalog: '1756-IB16' as const }] },
+      io: [],
+    };
+    const plc = createController(createProjectForScene(scene, ['XIC(Local:1:I.Data.0)NOP();']));
+    plc.writeInputFromField('Local:1:I.Data.0', false);
+    plc.setForce('Local:1:I.Data.0', true);
+    plc.enableForces(true);
+    plc.writeInputFromField('Local:1:I.Data.0', false);
+    expect(plc.tags.readBool('Local:1:I.Data.0')).toBe(true);
+    expect(plc.readInputFromField('Local:1:I.Data.0')).toBe(false);
+    plc.writeInputFromField('Local:1:I.Data.0', true);
+    expect(plc.readInputFromField('Local:1:I.Data.0')).toBe(true);
+    plc.removeAllForces();
+    expect(plc.readInputFromField('Local:1:I.Data.0')).toBe(true);
+  });
+});

@@ -649,6 +649,22 @@ class LogixControllerImpl implements LogixController {
     }
   }
 
+  /** The real field state of an input point: what the module sees before forces are applied. */
+  readInputFromField(operand: string): boolean | number {
+    const ref = this.fieldRef(operand);
+    if (!ref) return false;
+    const bool = ref.type === 'BOOL';
+    if (this.forcesOn && this.forces.has(ref.path)) {
+      const shadow = this.fieldShadow.get(ref.path);
+      if (shadow !== undefined) return bool ? shadow === true || shadow === 1 : Number(shadow);
+    }
+    try {
+      return bool ? ref.readB() : ref.readN();
+    } catch {
+      return bool ? false : 0;
+    }
+  }
+
   private fieldOut(ref: OperandRef): boolean | number {
     const bool = ref.type === 'BOOL';
     if (this.forcesOn && this.forces.size > 0) {

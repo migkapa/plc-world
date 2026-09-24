@@ -6,6 +6,7 @@
  *                   learning overlay (`useSceneOverlay().showTags`) is on.
  *  <TagOcclusion>   one per scene: dims chips hidden behind big geometry (cheap, round-robin raycasts
  *                   against a cached list of large opaque meshes — never the whole scene per frame).
+ *  <ShadowBudget>   turns off shadow casting for tiny meshes (screws, LEDs, labels) to keep the shadow pass lean.
  *  useThrottledFrame / audio helpers for scene sound loops & one-shots (no AudioContext before a user gesture).
  *
  * Values in the chips are read from the controller's I/O image (what the PLC program sees), throttled to ~8 Hz
@@ -77,7 +78,10 @@ const _hits: THREE.Intersection[] = [];
 function collectOccluders(scene: THREE.Scene): THREE.Mesh[] {
   const out: THREE.Mesh[] = [];
   const scale = new THREE.Vector3();
-  scene.traverseVisible((o) => {
+  // Visible graph only (device-level batched copies are per-device sized, cheap enough to raycast).
+  const visit = (o: THREE.Object3D) => {
+    if (!o.visible) return;
+    for (const c of o.children) visit(c);
     const m = o as THREE.Mesh;
     if (!m.isMesh || (o as THREE.InstancedMesh).isInstancedMesh || (o as THREE.SkinnedMesh).isSkinnedMesh) return;
     if (m.userData.noOcclude) return;
@@ -90,7 +94,8 @@ function collectOccluders(scene: THREE.Scene): THREE.Mesh[] {
     m.getWorldScale(scale);
     const r = (g.boundingSphere?.radius ?? 0) * Math.max(scale.x, scale.y, scale.z);
     if (r >= 0.12) out.push(m);
-  });
+  };
+  visit(scene);
   return out;
 }
 
@@ -101,10 +106,17 @@ function collectOccluders(scene: THREE.Scene): THREE.Mesh[] {
 export function TagOcclusion() {
   const scene = useThree((s) => s.scene);
   const gl = useThree((s) => s.gl);
+  const camera = useThree((s) => s.camera);
   useEffect(() => {
-    // dev-only hook for perf scripts (draw calls / mesh counts)
-    if (import.meta.env.DEV) (window as unknown as { __sceneDebug?: unknown }).__sceneDebug = { scene, gl };
-  }, [scene, gl]);
+    // dev-only hook for QA scripts (draw calls, mesh counts, world → screen projection for click tests)
+    if (!import.meta.env.DEV) return;
+    const project = (x: number, y: number, z: number) => {
+      const v = new THREE.Vector3(x, y, z).project(camera);
+      const r = gl.domElement.getBoundingClientRect();
+      return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+    };
+    (window as unknown as { __sceneDebug?: unknown }).__sceneDebug = { scene, gl, camera, project, THREE };
+  }, [scene, gl, camera]);
   const occluders = useRef<THREE.Mesh[]>([]);
   const lastScan = useRef(-1e9);
   const cursor = useRef(0);

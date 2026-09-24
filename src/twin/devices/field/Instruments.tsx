@@ -9,12 +9,12 @@
  *  <TempTransmitter>   RTD assembly: thermowell + extension neck + round head transmitter with LCD
  */
 import { useFrame } from '@react-three/fiber';
-import { useRef } from 'react';
+import { useEffect, useMemo, useRef, type RefObject } from 'react';
 import * as THREE from 'three';
 import { Led } from '../../common';
 import type { LevelSwitchProps, TransmitterProps } from '../../contracts';
 import {
-  Cable,
+  type CableRoute,
   CABLE_YELLOW,
   canvasTex,
   clickable,
@@ -28,15 +28,22 @@ import {
   latheZ,
   M12_CORDSET_LENGTH,
   M12Cordset,
+  Merge,
   PanScrew,
+  RoutedCable,
   roundRect,
   sphere,
   TAU,
   torus,
   useDisplayTexture,
+  DEVICE_ROOT,
 } from './shared';
 
-type Click = { onClick?: () => void };
+type Click = {
+  onClick?: () => void;
+  /** Where the cable goes (parent coordinates; inside <OnNozzle> use nozzleLocal()), false = stop at the device. */
+  cableTo?: CableRoute;
+};
 
 
 // ---------------------------------------------------------------------------
@@ -87,40 +94,45 @@ function drawLcd(ctx: CanvasRenderingContext2D, w: number, h: number, value: num
 // Vibrating fork level switch
 // ---------------------------------------------------------------------------
 
-export function LevelSwitch({ getActive, position, rotation, scale, onClick }: LevelSwitchProps & Click) {
+export function LevelSwitch({ getActive, position, rotation, scale, onClick, cableTo }: LevelSwitchProps & Click) {
+  const root = useRef<THREE.Group>(null);
   const ss = fm.polished();
+  // tines covered by the product look wet (glossier, slightly darker)
+  const forkMat = useMemo(() => fm.polished().clone(), []);
+  useEffect(() => () => forkMat.dispose(), [forkMat]);
+  const wet = useRef(0);
+  useFrame((_, dt) => {
+    wet.current += ((getActive() ? 1 : 0) - wet.current) * Math.min(1, dt * 2);
+    forkMat.roughness = 0.32 - 0.22 * wet.current;
+    forkMat.color.setScalar(1 - 0.25 * wet.current).multiply(FORK_TINT);
+  });
   return (
-    <group position={position} rotation={rotation} scale={scale} {...clickable(onClick)}>
-      {/* process side: G3/4 thread + fork */}
-      <mesh geometry={cylY(0.0125, 0.016, 24)} material={fm.nickelThread()} position={[0, -0.008, 0]} />
-      <mesh geometry={cylY(0.012, 0.03, 24, 0.012)} material={ss} position={[0, -0.031, 0]} />
-      {[-1, 1].map((sz) => (
-        <mesh key={sz} geometry={forkTineGeo()} material={ss} position={[0, -0.046, sz * 0.0045]} castShadow />
-      ))}
-      {/* hex + housing */}
-      <mesh geometry={hexGeo(0.032, 0.014)} material={fm.stainless()} position={[0, 0.007, 0]} rotation={[Math.PI / 2, 0, 0]} castShadow />
-      <mesh geometry={cylY(0.015, 0.075, 28)} material={ss} position={[0, 0.052, 0]} castShadow />
-      {/* translucent top with LED ring */}
-      <mesh geometry={cylY(0.0152, 0.012, 28)} material={fm.plastic('#d8dde0', 0.3)} position={[0, 0.095, 0]} />
-      <Led color="green" get={() => true} size={[0.004, 0.003, 0.002]} position={[-0.006, 0.095, 0.0145]} intensity={2.5} />
-      <Led color="yellow" get={getActive} size={[0.004, 0.003, 0.002]} position={[0.006, 0.095, 0.0145]} intensity={3.5} />
-      <Led color="yellow" get={getActive} size={[0.004, 0.003, 0.002]} position={[0.006, 0.095, -0.0145]} intensity={3.5} />
-      {/* M12 plug + cordset */}
-      <mesh geometry={cylY(0.0065, 0.012, 20)} material={fm.nickelThread()} position={[0, 0.107, 0]} />
-      <M12Cordset position={[0, 0.103, 0]} rotation={[Math.PI / 2, 0, 0]} />
-      <Cable
-        radius={0.0026}
-        color={CABLE_YELLOW}
-        points={[
-          [0, 0.103 + M12_CORDSET_LENGTH, 0],
-          [0, 0.103 + M12_CORDSET_LENGTH + 0.03, 0],
-          [0, 0.2, -0.04],
-          [0, 0.22, -0.14],
-        ]}
-      />
+    <group ref={root} position={position} rotation={rotation} scale={scale} userData={DEVICE_ROOT} {...clickable(onClick)}>
+      <Merge>
+        {/* process side: G1 thread + fork */}
+        <mesh geometry={cylY(0.0125, 0.016, 24)} material={fm.nickelThread()} position={[0, -0.008, 0]} />
+        <mesh geometry={cylY(0.012, 0.03, 24, 0.012)} material={forkMat} position={[0, -0.031, 0]} />
+        {[-1, 1].map((sz) => (
+          <mesh key={sz} geometry={forkTineGeo()} material={forkMat} position={[0, -0.046, sz * 0.0045]} castShadow />
+        ))}
+        {/* hex + housing */}
+        <mesh geometry={hexGeo(0.032, 0.014)} material={fm.stainless()} position={[0, 0.007, 0]} rotation={[Math.PI / 2, 0, 0]} castShadow />
+        <mesh geometry={cylY(0.015, 0.075, 28)} material={ss} position={[0, 0.052, 0]} castShadow />
+        {/* translucent top with LED ring */}
+        <mesh geometry={cylY(0.0152, 0.012, 28)} material={fm.plastic('#d8dde0', 0.3)} position={[0, 0.095, 0]} />
+        <Led color="green" get={() => true} size={[0.004, 0.003, 0.002]} position={[-0.006, 0.095, 0.0145]} intensity={2.5} />
+        <Led color="yellow" get={getActive} size={[0.004, 0.003, 0.002]} position={[0.006, 0.095, 0.0145]} intensity={3.5} />
+        <Led color="yellow" get={getActive} size={[0.004, 0.003, 0.002]} position={[0.006, 0.095, -0.0145]} intensity={3.5} />
+        {/* M12 plug + cordset */}
+        <mesh geometry={cylY(0.0065, 0.012, 20)} material={fm.nickelThread()} position={[0, 0.107, 0]} />
+        <M12Cordset position={[0, 0.103, 0]} rotation={[Math.PI / 2, 0, 0]} />
+        <RoutedCable rootRef={root} route={cableTo} from={[0, 0.103 + M12_CORDSET_LENGTH - 0.001, 0]} dir={[0, 1, 0]} radius={0.0026} color={CABLE_YELLOW} lead={0.035} />
+      </Merge>
     </group>
   );
 }
+
+const FORK_TINT = new THREE.Color('#d8dde1');
 
 // ---------------------------------------------------------------------------
 // Round aluminum transmitter head with a display window (shared by LT & TT)
@@ -135,7 +147,11 @@ function DisplayHead({
   range,
   decimals,
   color = '#4f6f96',
+  cableTo,
+  rootRef,
 }: {
+  cableTo?: CableRoute;
+  rootRef: RefObject<THREE.Object3D | null>;
   radius: number;
   depth: number;
   getValue: () => number;
@@ -174,33 +190,28 @@ function DisplayHead({
         <mesh geometry={cylY(0.008, 0.012, 20, 0.006)} material={fm.nickel()} position={[0, 0.022, 0]} />
       </group>
       <mesh geometry={hexGeo(0.022, 0.006)} material={fm.nickel()} position={[r + 0.002, -r * 0.35, -depth / 2]} rotation={[0, Math.PI / 2, 0]} />
-      <Cable
-        radius={0.004}
-        color="#35383c"
-        points={[
-          [-r - 0.03, -r * 0.35, -depth / 2],
-          [-r - 0.06, -r * 0.4, -depth / 2],
-          [-r - 0.09, -r * 0.9, -depth / 2 - 0.02],
-          [-r - 0.1, -r * 2.2, -depth / 2 - 0.05],
-        ]}
-      />
+      <RoutedCable rootRef={rootRef} route={cableTo} from={[-r - 0.029, -r * 0.35, -depth / 2]} dir={[-1, 0, 0]} radius={0.004} color="#35383c" lead={0.02} />
       {/* ground screw + tag plate on the side */}
       <PanScrew d={0.004} position={[r * 0.7, -r * 0.72, -depth * 0.5]} rotation={[Math.PI / 2, 0, 0]} />
-      <mesh position={[0, r + 0.0005, -depth / 2]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[r * 1.1, depth * 0.55]} />
-        <meshStandardMaterial
-          map={canvasTex(`instTag:${tag}`, 256, 96, (ctx, w, h) => {
+      <mesh
+        position={[0, r + 0.0005, -depth / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        material={fm.plate(
+          canvasTex(`instTag:${tag}`, 256, 96, (ctx, w, h) => {
             ctx.fillStyle = '#c7cccf';
             ctx.fillRect(0, 0, w, h);
+            ctx.strokeStyle = '#5b6166';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(2, 2, w - 4, h - 4);
             ctx.fillStyle = '#1b1e21';
             ctx.font = '800 50px Arial, sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(tag, w / 2, h / 2 + 2);
-          })}
-          metalness={0.5}
-          roughness={0.4}
-        />
+          }),
+        )}
+      >
+        <planeGeometry args={[r * 1.1, depth * 0.55]} />
       </mesh>
     </group>
   );
@@ -218,6 +229,47 @@ export interface LevelTransmitterExtraProps {
   /** Display range for the bar graph. */
   range?: [number, number];
   decimals?: number;
+  /** Live distance (m) from the process connection down to the product surface: the radar beam ends there. */
+  getBeamLength?: () => number;
+}
+
+/** Beam half-angles: 80 GHz lens ≈ 3–4°, 26 GHz horn ≈ 8–10°. */
+const BEAM_HALF: Record<'lens' | 'horn', number> = { lens: (4 * Math.PI) / 180, horn: (8 * Math.PI) / 180 };
+
+function radarBeamMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, uLen: { value: 1 }, uR0: { value: 0.03 }, uTan: { value: 0.07 }, uColor: { value: new THREE.Color(0.45, 0.75, 1.0) } },
+    vertexShader: `
+      uniform float uLen; uniform float uR0; uniform float uTan;
+      varying float vT;
+      varying float vRim;
+      void main() {
+        vT = -position.y;
+        vec3 p = position;
+        p.xz *= uR0 + uTan * uLen * vT;
+        p.y *= uLen;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        vec3 n = normalize(normalMatrix * normal);
+        vRim = abs(dot(n, normalize(-mv.xyz)));
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      uniform float uTime; uniform float uLen; uniform vec3 uColor;
+      varying float vT;
+      varying float vRim;
+      void main() {
+        float fade = pow(1.0 - clamp(vT, 0.0, 1.0), 0.7) * smoothstep(0.0, 0.03, vT);
+        // pulses travelling from the antenna toward the surface (~2 per meter of path)
+        float ph = fract(vT * uLen * 2.2 - uTime * 1.6);
+        float pulse = smoothstep(0.0, 0.08, ph) * (1.0 - smoothstep(0.08, 0.3, ph));
+        float a = fade * (0.35 + 0.65 * vRim) * (0.14 + 0.5 * pulse);
+        gl_FragColor = vec4(uColor * a, a);
+      }`,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.FrontSide,
+  });
 }
 
 export function LevelTransmitter({
@@ -228,67 +280,72 @@ export function LevelTransmitter({
   probeLength = 1.2,
   range = [0, 100],
   decimals = 1,
+  getBeamLength,
   position,
   rotation,
   scale,
   onClick,
+  cableTo,
 }: TransmitterProps & LevelTransmitterExtraProps & Click) {
+  const root = useRef<THREE.Group>(null);
   const ss = fm.polished();
-  const pulse = useRef<THREE.Mesh>(null);
+  const beam = useRef<THREE.Mesh>(null);
+  const beamMat = useMemo(() => radarBeamMaterial(), []);
+  useEffect(() => () => beamMat.dispose(), [beamMat]);
+  const y0 = antenna === 'lens' ? -0.046 : -0.11;
   useFrame(({ clock }) => {
-    const p = pulse.current;
-    if (!p) return;
-    const t = (clock.elapsedTime * 1.4) % 1;
-    p.scale.setScalar(0.3 + t * 1.6);
-    (p.material as THREE.MeshBasicMaterial).opacity = 0.12 * (1 - t);
+    const b = beam.current;
+    if (!b || antenna === 'rod') return;
+    const len = Math.max(0.05, (getBeamLength ? getBeamLength() : 0.9) + y0);
+    const u = beamMat.uniforms;
+    u.uTan!.value = Math.tan(BEAM_HALF[antenna]);
+    u.uR0!.value = antenna === 'lens' ? 0.026 : 0.034;
+    u.uTime!.value = clock.elapsedTime;
+    u.uLen!.value = len;
   });
   return (
-    <group position={position} rotation={rotation} scale={scale} {...clickable(onClick)}>
-      {/* DN80 flange with bolts */}
-      <mesh geometry={cylY(0.1, 0.02, 40)} material={ss} position={[0, 0.01, 0]} castShadow />
-      {Array.from({ length: 8 }, (_, i) => {
-        const a = (i / 8) * TAU + TAU / 16;
-        return (
-          <group key={i} position={[Math.cos(a) * 0.08, 0.02, Math.sin(a) * 0.08]}>
-            <mesh geometry={hexGeo(0.024, 0.013)} material={fm.zinc()} position={[0, 0.0065, 0]} rotation={[Math.PI / 2, 0, 0]} />
-            <mesh geometry={cylY(0.008, 0.022, 10)} material={fm.zinc()} position={[0, 0.012, 0]} />
+    <group ref={root} position={position} rotation={rotation} scale={scale} userData={DEVICE_ROOT} {...clickable(onClick)}>
+      <Merge>
+        {/* DN80 flange with bolts */}
+        <mesh geometry={cylY(0.1, 0.02, 40)} material={ss} position={[0, 0.01, 0]} castShadow />
+        {Array.from({ length: 8 }, (_, i) => {
+          const a = (i / 8) * TAU + TAU / 16;
+          return (
+            <group key={i} position={[Math.cos(a) * 0.08, 0.02, Math.sin(a) * 0.08]}>
+              <mesh geometry={hexGeo(0.024, 0.013)} material={fm.zinc()} position={[0, 0.0065, 0]} rotation={[Math.PI / 2, 0, 0]} />
+              <mesh geometry={cylY(0.008, 0.022, 10)} material={fm.zinc()} position={[0, 0.012, 0]} />
+            </group>
+          );
+        })}
+        {/* process adapter & neck */}
+        <mesh geometry={cylY(0.03, 0.05, 28)} material={ss} position={[0, 0.045, 0]} />
+        <mesh geometry={hexGeo(0.05, 0.02)} material={ss} position={[0, 0.08, 0]} rotation={[Math.PI / 2, 0, 0]} />
+        <mesh geometry={cylY(0.022, 0.04, 24)} material={ss} position={[0, 0.108, 0]} />
+        {/* housing */}
+        <group position={[0, 0.19, 0.0]}>
+          <mesh geometry={cylY(0.052, 0.045, 32, 0.048)} material={fm.cast('#4f6f96', 0.45)} position={[0, -0.045, -0.035]} />
+          <group position={[0, 0, 0.02]}>
+            <DisplayHead radius={0.062} depth={0.1} getValue={getValue} units={units} tag={tagLabel} range={range} decimals={decimals} cableTo={cableTo} rootRef={root} />
           </group>
-        );
-      })}
-      {/* process adapter & neck */}
-      <mesh geometry={cylY(0.03, 0.05, 28)} material={ss} position={[0, 0.045, 0]} />
-      <mesh geometry={hexGeo(0.05, 0.02)} material={ss} position={[0, 0.08, 0]} rotation={[Math.PI / 2, 0, 0]} />
-      <mesh geometry={cylY(0.022, 0.04, 24)} material={ss} position={[0, 0.108, 0]} />
-      {/* housing */}
-      <group position={[0, 0.19, 0.0]}>
-        <mesh geometry={cylY(0.052, 0.045, 32, 0.048)} material={fm.cast('#4f6f96', 0.45)} position={[0, -0.045, -0.035]} />
-        <group position={[0, 0, 0.02]}>
-          <DisplayHead radius={0.062} depth={0.1} getValue={getValue} units={units} tag={tagLabel} range={range} decimals={decimals} />
         </group>
-      </group>
-      {/* antenna (inside the vessel) */}
-      {antenna === 'lens' && (
-        <group>
-          <mesh geometry={cylY(0.036, 0.03, 32)} material={ss} position={[0, -0.015, 0]} />
-          <mesh geometry={latheY('radarLens', [[0.034, 0], [0.034, 0.006], [0.02, 0.014], [0, 0.016]], 32)} material={fm.plastic('#ece8dc', 0.35)} position={[0, -0.03, 0]} rotation={[Math.PI, 0, 0]} />
-        </group>
-      )}
-      {antenna === 'horn' && (
-        <mesh geometry={cylY(0.037, 0.11, 32, 0.02, true)} material={ss} position={[0, -0.055, 0]} castShadow />
-      )}
-      {antenna === 'rod' && (
-        <group>
-          <mesh geometry={cylY(0.014, 0.05, 20)} material={fm.plastic('#ece8dc', 0.4)} position={[0, -0.025, 0]} />
-          <mesh geometry={cylY(0.004, probeLength, 12)} material={ss} position={[0, -probeLength / 2 - 0.05, 0]} />
-          <mesh geometry={cylY(0.009, 0.03, 12)} material={ss} position={[0, -probeLength - 0.05, 0]} />
-        </group>
-      )}
-      {/* faint radar cone pulse */}
-      {antenna !== 'rod' && (
-        <mesh ref={pulse} position={[0, -0.04, 0]} geometry={pulseCone()}>
-          <meshBasicMaterial color="#9fd3ff" transparent opacity={0.08} depthWrite={false} side={THREE.DoubleSide} blending={THREE.AdditiveBlending} />
-        </mesh>
-      )}
+        {/* antenna (inside the vessel) */}
+        {antenna === 'lens' && (
+          <group>
+            <mesh geometry={cylY(0.036, 0.03, 32)} material={ss} position={[0, -0.015, 0]} />
+            <mesh geometry={latheY('radarLens', [[0.034, 0], [0.034, 0.006], [0.02, 0.014], [0, 0.016]], 32)} material={fm.plastic('#ece8dc', 0.35)} position={[0, -0.03, 0]} rotation={[Math.PI, 0, 0]} />
+          </group>
+        )}
+        {antenna === 'horn' && <mesh geometry={cylY(0.037, 0.11, 32, 0.02, true)} material={ss} position={[0, -0.055, 0]} castShadow />}
+        {antenna === 'rod' && (
+          <group>
+            <mesh geometry={cylY(0.014, 0.05, 20)} material={fm.plastic('#ece8dc', 0.4)} position={[0, -0.025, 0]} />
+            <mesh geometry={cylY(0.004, probeLength, 12)} material={ss} position={[0, -probeLength / 2 - 0.05, 0]} />
+            <mesh geometry={cylY(0.009, 0.03, 12)} material={ss} position={[0, -probeLength - 0.05, 0]} />
+          </group>
+        )}
+      </Merge>
+      {/* narrow radar beam (fades with distance, pulses travel to the surface) */}
+      {antenna !== 'rod' && <mesh ref={beam} position={[0, y0, 0]} geometry={beamCone()} material={beamMat} renderOrder={4} frustumCulled={false} userData={{ noMerge: true }} raycast={() => {}} />}
     </group>
   );
 }
@@ -311,11 +368,11 @@ function forkTineGeo() {
   });
 }
 
-/** Radar beam cone with its apex at the origin, opening toward −Y. */
-function pulseCone() {
-  return geo('radarPulseCone', () => {
-    const g = new THREE.ConeGeometry(0.12, 0.3, 24, 1, true);
-    g.translate(0, -0.15, 0);
+/** Unit open tube y ∈ [−1, 0]; the vertex shader widens it into the beam cone (no base disc). */
+function beamCone() {
+  return geo('radarBeamCone', () => {
+    const g = new THREE.CylinderGeometry(1, 1, 1, 32, 12, true);
+    g.translate(0, -0.5, 0);
     return g;
   });
 }
@@ -342,10 +399,13 @@ export function TempTransmitter({
   rotation,
   scale,
   onClick,
+  cableTo,
 }: TransmitterProps & TempTransmitterExtraProps & Click) {
+  const root = useRef<THREE.Group>(null);
   const ss = fm.polished();
   return (
-    <group position={position} rotation={rotation} scale={scale} {...clickable(onClick)}>
+    <group ref={root} position={position} rotation={rotation} scale={scale} userData={DEVICE_ROOT} {...clickable(onClick)}>
+      <Merge>
       {/* small flange / thermowell */}
       <mesh geometry={cylY(0.045, 0.014, 32)} material={ss} position={[0, 0.007, 0]} castShadow />
       {Array.from({ length: 4 }, (_, i) => {
@@ -362,8 +422,9 @@ export function TempTransmitter({
       {/* head */}
       <group position={[0, 0.16, 0.01]}>
         <mesh geometry={cylY(0.02, 0.02, 20)} material={fm.cast('#9aa2aa', 0.45)} position={[0, -0.045, -0.03]} />
-        <DisplayHead radius={0.045} depth={0.065} getValue={getValue} units={units} tag={tagLabel} range={range} decimals={decimals} color="#9aa2aa" />
+        <DisplayHead radius={0.045} depth={0.065} getValue={getValue} units={units} tag={tagLabel} range={range} decimals={decimals} color="#9aa2aa" cableTo={cableTo} rootRef={root} />
       </group>
+      </Merge>
     </group>
   );
 }

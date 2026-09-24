@@ -33,14 +33,15 @@ const LBL = { ledRow: 0.1, ledLabel: 0.175, ok: 0.2, ovl: 0.5, pot: 0.82 } as co
 
 function labelTexture(catalog: string, rating: string, w: number) {
   const px = Math.round(w * 6000);
-  return canvasTexture(`1606-label-v2:${catalog}:${rating}:${px}`, px, 380, (ctx, cw, ch) => {
+  return canvasTexture(`1606-label-v3:${catalog}:${rating}:${px}`, px, 380, (ctx, cw, ch) => {
     ctx.fillStyle = '#dcdedd';
     ctx.fillRect(0, 0, cw, ch);
     ctx.fillStyle = '#1a1a1a';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     // LED / pot legends (output end = top)
-    const small = Math.min(18, Math.floor(cw / 13));
+    // one common size so the three legends never collide on narrow (40 / 32 mm) housings
+    const small = Math.min(...['DC OK', 'OVERLOAD', '24-28V'].map((t) => fitText(ctx, t, cw * 0.27, 18, 700, NARROW_FONT)));
     ctx.font = `700 ${small}px ${NARROW_FONT}`;
     ctx.fillText('DC OK', cw * LBL.ok, ch * LBL.ledLabel);
     ctx.fillText('OVERLOAD', cw * LBL.ovl, ch * LBL.ledLabel);

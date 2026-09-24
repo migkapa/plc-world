@@ -117,26 +117,30 @@ export function DrivePlatform() {
     return out;
   }, [feet]);
   const yTop = d.top - d.t;
+  const steel = useMemo(() => {
+    const box = (min: Vec3, max: Vec3) => ({ p: [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2] as Vec3, s: [max[0] - min[0], max[1] - min[1], max[2] - min[2]] as Vec3 });
+    return [
+      ...legs,
+      ...feet,
+      box([d.x0, yTop - 0.1, d.z0], [d.x1, yTop, d.z0 + 0.05]),
+      box([d.x0, yTop - 0.1, d.z1 - 0.05], [d.x1, yTop, d.z1]),
+      box([d.x0, yTop - 0.1, d.z0], [d.x0 + 0.05, yTop, d.z1]),
+      box([d.x1 - 0.05, yTop - 0.1, d.z0], [d.x1, yTop, d.z1]),
+      box([FRAME_X, yTop - 0.1, -0.2], [d.x0, yTop, -0.19]),
+      box([FRAME_X, yTop - 0.1, 0.19], [d.x0, yTop, 0.2]),
+    ];
+  }, [legs, feet, d, yTop]);
   return (
     <group>
       {/* checker-plate deck */}
       <mesh geometry={KBOX()} material={checkerPlateMaterial()} position={[(d.x0 + d.x1) / 2, d.top - d.t / 2, (d.z0 + d.z1) / 2]} scale={[d.x1 - d.x0, d.t, d.z1 - d.z0]} castShadow receiveShadow />
-      {/* perimeter channels */}
-      <Slab min={[d.x0, yTop - 0.1, d.z0]} max={[d.x1, yTop, d.z0 + 0.05]} material={paint} castShadow />
-      <Slab min={[d.x0, yTop - 0.1, d.z1 - 0.05]} max={[d.x1, yTop, d.z1]} material={paint} castShadow />
-      <Slab min={[d.x0, yTop - 0.1, d.z0]} max={[d.x0 + 0.05, yTop, d.z1]} material={paint} />
-      <Slab min={[d.x1 - 0.05, yTop - 0.1, d.z0]} max={[d.x1, yTop, d.z1]} material={paint} />
-      {/* legs, base plates, anchors */}
-      <Instances geometry={KBOX()} material={paint} items={legs} />
-      <Instances geometry={KBOX()} material={paint} items={feet} />
+      {/* perimeter channels, legs, base plates, tie brackets (one instanced mesh) + anchors */}
+      <Instances geometry={KBOX()} material={paint} items={steel} />
       <Instances geometry={KCYL()} material={km.metal('#b9bdc1', 0.35)} items={bolts} castShadow={false} />
       {/* X bracing on the long sides */}
       {[d.z0 + 0.04, d.z1 - 0.04].map((z) => (
         <mesh key={z} geometry={KBOX()} material={paint} position={[(d.x0 + d.x1) / 2, (yTop - 0.1) / 2, z]} rotation={[0, 0, Math.atan2(yTop - 0.14, d.x1 - d.x0 - 0.1)]} scale={[Math.hypot(yTop - 0.14, d.x1 - d.x0 - 0.1), 0.04, 0.008]} castShadow />
       ))}
-      {/* tie bracket to the conveyor side frame */}
-      <Slab min={[FRAME_X, yTop - 0.1, -0.2]} max={[d.x0, yTop, -0.19]} material={paint} />
-      <Slab min={[FRAME_X, yTop - 0.1, 0.19]} max={[d.x0, yTop, 0.2]} material={paint} />
       {/* motor shim / slide base */}
       <Slab min={[DRIVE.shim.x0, d.top, DRIVE.shim.z0]} max={[DRIVE.shim.x1, DRIVE.motor[1], DRIVE.shim.z1]} material={km.paint('#3d4247', 0.45, 0.4)} castShadow />
       {/* safety-yellow edge stripe on the deck front */}
@@ -200,7 +204,7 @@ export function InlineReducer({ getInputAngle, getOutputAngle }: { getInputAngle
   );
 }
 
-/** Bolted U-shaped coupling guard (perforated yellow sheet) spanning [x0, x1] along the drive axis. */
+/** Bolted U-shaped coupling guard (perforated yellow sheet) spanning [x0, x1] along the drive axis. 2 draw calls. */
 export function CouplingGuard({ x0, x1, halfW, top }: { x0: number; x1: number; halfW: number; top: number }) {
   const mat = perforatedYellow();
   const solid = kmat('ms:guard-solid', () => new THREE.MeshStandardMaterial({ color: YELLOW, roughness: 0.5, metalness: 0.2 }));
@@ -208,21 +212,20 @@ export function CouplingGuard({ x0, x1, halfW, top }: { x0: number; x1: number; 
   const cx = (x0 + x1) / 2;
   const L = x1 - x0;
   const yT = AXIS_Y + top;
+  const parts = useMemo(() => {
+    const sides = [-1, 1].map((sd) => ({ p: [cx, (y0 + yT) / 2, HEAD_Z + sd * halfW] as Vec3, s: [L, yT - y0, 0.002] as Vec3 }));
+    const sheet: { p: Vec3; s: Vec3 }[] = [{ p: [cx, yT, HEAD_Z], s: [L, 0.003, halfW * 2 + 0.004] }];
+    for (const sd of [-1, 1]) {
+      sheet.push({ p: [cx, yT - 0.012, HEAD_Z + sd * halfW], s: [L, 0.024, 0.004] });
+      sheet.push({ p: [cx, y0 + 0.012, HEAD_Z + sd * halfW], s: [L, 0.024, 0.004] });
+      sheet.push({ p: [cx, y0 + 0.002, HEAD_Z + sd * (halfW + 0.015)], s: [L, 0.004, 0.03] });
+    }
+    return { sides, sheet };
+  }, [cx, L, y0, yT, halfW]);
   return (
     <group>
-      <mesh geometry={KBOX()} material={mat} position={[cx, (y0 + yT) / 2, HEAD_Z - halfW]} scale={[L, yT - y0, 0.002]} castShadow />
-      <mesh geometry={KBOX()} material={mat} position={[cx, (y0 + yT) / 2, HEAD_Z + halfW]} scale={[L, yT - y0, 0.002]} castShadow />
-      <mesh geometry={KBOX()} material={solid} position={[cx, yT, HEAD_Z]} scale={[L, 0.003, halfW * 2 + 0.004]} castShadow />
-      {/* folded flanges */}
-      {[-1, 1].map((s) => (
-        <mesh key={s} geometry={KBOX()} material={solid} position={[cx, yT - 0.012, HEAD_Z + s * halfW]} scale={[L, 0.024, 0.004]} />
-      ))}
-      <mesh geometry={KBOX()} material={solid} position={[cx, y0 + 0.012, HEAD_Z + halfW]} scale={[L, 0.024, 0.004]} />
-      <mesh geometry={KBOX()} material={solid} position={[cx, y0 + 0.012, HEAD_Z - halfW]} scale={[L, 0.024, 0.004]} />
-      {/* feet */}
-      {[-1, 1].map((s) => (
-        <mesh key={`f${s}`} geometry={KBOX()} material={solid} position={[cx, y0 + 0.002, HEAD_Z + s * (halfW + 0.015)]} scale={[L, 0.004, 0.03]} />
-      ))}
+      <Instances geometry={KBOX()} material={mat} items={parts.sides} />
+      <Instances geometry={KBOX()} material={solid} items={parts.sheet} />
     </group>
   );
 }

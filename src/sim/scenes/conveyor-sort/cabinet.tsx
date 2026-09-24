@@ -111,7 +111,11 @@ export function ControlCabinet({
     const rackY = lowDuct + 0.13;
     const sideX = pw / 2 - 0.035;
     const ductLen = pw - 0.11;
-    return { topDuct, rail1, midDuct, botDuct, rail2, lowDuct, rackY, sideX, ductLen };
+    // room between the rack top and the mid duct for an extra rail (tall cabinets)
+    const gapTop = midDuct - 0.03;
+    const gapBottom = rackY + 0.2;
+    const extraRail = gapTop - gapBottom > 0.13 ? (gapTop + gapBottom) / 2 : null;
+    return { topDuct, rail1, midDuct, botDuct, rail2, lowDuct, rackY, sideX, ductLen, extraRail };
   }, [pw, ph]);
 
   // rail 1: main breaker, branch breakers, PSU, distribution terminals
@@ -187,6 +191,7 @@ export function ControlCabinet({
   const tb2Labels = useMemo(() => Array.from({ length: fieldTerminals }, (_, i) => String(i + 1)), [fieldTerminals]);
   const ductWires = [WIRE_BLUE, WIRE_BLUE, WIRE_RED, WIRE_BLACK, WIRE_WHITE, WIRE_BLUE, WIRE_RED, WIRE_BLUE];
 
+  const analogCount = useMemo(() => runtime.scene.io.filter((p) => p.signal === 'analog').length, [runtime.scene]);
   // EN2T port position (for the patch cable)
   const enX = useMemo(() => {
     const en = hardware.modules.find((m) => m.catalog === '1756-EN2T' || m.catalog === '1756-EN4TR');
@@ -286,13 +291,27 @@ export function ControlCabinet({
           <FieldCable
             points={[
               [enX, L.rackY + 0.035, 0.145],
-              [enX + 0.02, L.rackY - 0.02, 0.16],
-              [L.ductLen / 2 - 0.05, L.midDuct + 0.03, 0.08],
-              [L.ductLen / 2 - 0.05, L.rail1 - 0.05, DIN_RAIL_DEPTH + 0.05],
+              [enX + 0.02, L.rackY - 0.015, 0.13],
+              [enX + 0.08, L.rackY - 0.035, 0.07],
+              [L.sideX - 0.035, L.rackY - 0.03, 0.05],
+              [L.sideX - 0.035, L.rail1 - 0.08, 0.05],
+              [L.ductLen / 2 - 0.06, L.rail1 - 0.075, DIN_RAIL_DEPTH + 0.05],
             ]}
             radius={0.0028}
             color="#2f8f4e"
           />
+        )}
+        {/* tall cabinets: signal isolators + fused terminals on an extra rail above the PLC */}
+        {L.extraRail !== null && (
+          <DinRail length={L.ductLen - 0.02} position={[0, L.extraRail, 0]}>
+            <SlimModules count={analogCount + 2} position={[-L.ductLen / 2 + 0.06, 0, 0]} />
+            <TerminalBlocks1492
+              count={12}
+              colors={Array.from({ length: 12 }, (_, i) => (i < 8 ? TB_COLORS.black : TB_COLORS.blue))}
+              labels={Array.from({ length: 12 }, (_, i) => (i < 8 ? `F${i + 1}` : `0V`))}
+              position={[-L.ductLen / 2 + 0.06 + (analogCount + 2) * 0.0125 + 0.06, 0, 0]}
+            />
+          </DinRail>
         )}
 
         {/* PSU output bundle into the mid duct */}
@@ -319,7 +338,7 @@ function CabinetLight({ size }: { size: Vec3 }) {
     <group position={[0, size[1] - 0.04, size[2] * 0.55]}>
       <mesh>
         <boxGeometry args={[size[0] * 0.5, 0.012, 0.025]} />
-        <meshStandardMaterial color="#ffffff" emissive="#f1f6ff" emissiveIntensity={1.6} toneMapped={false} />
+        <meshStandardMaterial color="#ffffff" emissive="#f1f6ff" emissiveIntensity={1.1} toneMapped={false} />
       </mesh>
       <pointLight intensity={0.22} distance={1.4} decay={2} color="#f2f6ff" position={[0, -0.05, 0.05]} />
     </group>
@@ -355,6 +374,31 @@ function EthernetSwitch({ position }: { position: Vec3 }) {
         <boxGeometry args={[0.03, 0.006, 0.001]} />
         <meshStandardMaterial color="#e8e8e0" roughness={0.6} />
       </mesh>
+    </group>
+  );
+}
+
+/** Slim 12.5 mm DIN modules (4–20 mA signal isolators / interface relays) with a green status LED; instanced. */
+function SlimModules({ count, position }: { count: number; position: Vec3 }) {
+  const items = useMemo(() => Array.from({ length: count }, (_, i) => ({ x: i * 0.0125 })), [count]);
+  return (
+    <group position={position}>
+      {items.map(({ x }, i) => (
+        <group key={i} position={[x, 0, 0]}>
+          <mesh position={[0, 0, 0.045]} castShadow>
+            <boxGeometry args={[0.012, 0.1, 0.09]} />
+            <meshStandardMaterial color={i % 3 === 2 ? '#3d4c63' : '#b9bdc0'} roughness={0.55} />
+          </mesh>
+          <mesh position={[0, 0.03, 0.0905]}>
+            <boxGeometry args={[0.004, 0.004, 0.002]} />
+            <meshStandardMaterial color="#22ff66" emissive="#22ff66" emissiveIntensity={2.2} toneMapped={false} />
+          </mesh>
+          <mesh position={[0, -0.02, 0.0905]}>
+            <boxGeometry args={[0.009, 0.03, 0.001]} />
+            <meshStandardMaterial color="#e9e9e3" roughness={0.6} />
+          </mesh>
+        </group>
+      ))}
     </group>
   );
 }

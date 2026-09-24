@@ -56,7 +56,7 @@ export const definition: SceneDefinition<ConveyorSortState> = {
     { id: 'overview', label: 'Overview', position: [6.4, 4.1, 7.6], target: [0.1, 0.7, -0.55] },
     { id: 'cabinet', label: 'Control cabinet', position: [-0.78, 1.36, -1.95], target: [-1.36, 1.2, -3.3] },
     { id: 'operator', label: 'Operator station', position: [-2.75, 1.75, 2.45], target: [-3.66, 1.25, 1.0] },
-    { id: 'pusher', label: 'Pusher & divert', position: [2.75, 2.35, 1.75], target: [0.7, 0.72, -0.5] },
+    { id: 'pusher', label: 'Pusher & divert', position: [2.15, 2.05, 1.4], target: [0.72, 0.8, -0.72] },
     { id: 'feeder', label: 'Box feeder', position: [-2.55, 2.25, 2.75], target: [-2.95, 1.3, 0] },
   ],
   accent: '#e8b90c',

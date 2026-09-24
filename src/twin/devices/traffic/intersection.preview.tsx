@@ -11,7 +11,7 @@ import { Pedestrian } from './Pedestrian';
 import { PedestrianPushButton } from './PedestrianPushButton';
 import { PedestrianSignal } from './PedestrianSignal';
 import { GroundSlab, Intersection, ParkingSpace } from './Road';
-import { SignalPole, type MastArmSpec } from './SignalPole';
+import { SignalPole, mastArmHeightForClearance, poleRadiusAt, type MastArmSpec } from './SignalPole';
 import { TicketDispenser } from './TicketDispenser';
 import { TrafficSignalHead } from './TrafficSignalHead';
 
@@ -35,17 +35,20 @@ function head(road: 'ns' | 'ew') {
   );
 }
 
+/** Pole offset from the intersection centre (on the corner walk, behind the 3 m curb return). */
+const P = 5.6;
+/** Poles stand on the 0.15 m curb; arm height solved for 16.5 ft to the backplate bottom. */
+const ARM = { length: 7.4, heads: [3.2, 5.1] };
+const ARM_H = mastArmHeightForClearance({ clearance: 5.03, at: ARM.heads[0]!, length: ARM.length, baseElevation: 0.15 });
+
 /** Far-side mast arm over the approach lanes; `angle` = arm heading. */
 function arm(angle: number, road: 'ns' | 'ew', street: string): MastArmSpec {
   return {
-    length: 7.2,
+    length: ARM.length,
     angle,
-    height: 5.6,
-    streetSign: { at: 5.9, text: street, width: 1.6 },
-    attachments: [
-      { at: 3.5, node: head(road), flip: true },
-      { at: 5.3, node: head(road), flip: true },
-    ],
+    height: ARM_H,
+    streetSign: { at: 6.4, text: street, width: 1.6 },
+    attachments: ARM.heads.map((at) => ({ at, node: head(road), flip: true })),
   };
 }
 
@@ -56,7 +59,6 @@ const PED = {
 };
 
 function IntersectionDemo() {
-  const P = 5.3;
   return (
     <group>
       <hemisphereLight args={['#dbe9ff', '#5b5147', 0.9]} />
@@ -81,7 +83,12 @@ function IntersectionDemo() {
         luminaire={{ angle: Math.PI, getLit: () => false }}
         attachments={[
           { height: 3.0, angle: -Math.PI / 2, node: <PedestrianSignal getWalk={PED.walk} getDontWalk={PED.hand} getCountdown={PED.count} /> },
-          { height: 1.0, angle: 0, bandSpan: 0.3, node: <PedestrianPushButton mount="none" arrow="left" getPressed={() => now() % 5 < 0.4} getLit={() => now() % 17 > 9} /> },
+          {
+            height: 0.95,
+            angle: 0,
+            bands: false,
+            node: <PedestrianPushButton mount="none" poleRadius={poleRadiusAt(1.1)} arrow="left" getPressed={() => now() % 5 < 0.4} getLit={() => now() % 17 > 9} />,
+          },
         ]}
       />
       {/* SW pole: SB heads (arm east) */}
@@ -95,7 +102,7 @@ function IntersectionDemo() {
         arms={[arm(-Math.PI / 2, 'ew', 'LOGIX AVE')]}
         attachments={[
           { height: 3.0, angle: Math.PI / 2, node: <PedestrianSignal getWalk={PED.walk} getDontWalk={PED.hand} getCountdown={PED.count} /> },
-          { height: 1.0, angle: 0, bandSpan: 0.3, node: <PedestrianPushButton mount="none" arrow="right" getPressed={() => false} /> },
+          { height: 0.95, angle: 0, bands: false, node: <PedestrianPushButton mount="none" poleRadius={poleRadiusAt(1.1)} arrow="right" getPressed={() => false} /> },
         ]}
       />
       {/* EW detector loops in front of the stop bars */}
@@ -103,8 +110,8 @@ function IntersectionDemo() {
       <InductiveLoopMarking position={[11.5, 0, -1.75]} rotation={[0, Math.PI, 0]} length={6} width={1.8} leadIn={0.85} getActive={() => now() % 4 < 2} />
       <CarFleet capacity={8} getCar={demoCars} />
       <Pedestrian variant={1} position={[1.2, 0, -5.2]} rotation={[0, Math.PI, 0]} getDistance={() => now() * 1.4} getWalking={() => true} />
-      <Pedestrian variant={3} position={[4.3, 0.15, -3.9]} rotation={[0, Math.PI / 2, 0]} getReach={() => (now() % 5 < 1.2 ? 1 : 0)} />
-      <Pedestrian variant={4} position={[-4.6, 0.15, -6.4]} rotation={[0, -0.3, 0]} />
+      <Pedestrian variant={3} position={[P, 0.15, -P + 0.62]} rotation={[0, Math.PI / 2, 0]} getReach={() => (now() % 5 < 1.2 ? 1 : 0)} />
+      <Pedestrian variant={4} position={[-4.6, 0.15, -6.9]} rotation={[0, -0.3, 0]} />
     </group>
   );
 }

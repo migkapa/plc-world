@@ -462,8 +462,9 @@ function steamTexture() {
   c.height = 64;
   const ctx = c.getContext('2d')!;
   const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-  g.addColorStop(0, 'rgba(255,255,255,0.9)');
-  g.addColorStop(0.5, 'rgba(255,255,255,0.35)');
+  g.addColorStop(0, 'rgba(255,255,255,0.55)');
+  g.addColorStop(0.35, 'rgba(255,255,255,0.28)');
+  g.addColorStop(0.7, 'rgba(255,255,255,0.08)');
   g.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 64, 64);
@@ -486,7 +487,18 @@ export function TankFx({ state }: { state: TankProcessState }) {
   const drip = useRef<THREE.Mesh>(null);
   const puddle = useRef<THREE.Mesh>(null);
   const puddleVol = useRef(0);
-  const mats = useMemo(() => ({ stream: streamMaterial(), sheet: streamMaterial(), puddle: new THREE.MeshStandardMaterial({ color: '#39576b', roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.7, depthWrite: false }) }), []);
+  const mats = useMemo(() => {
+    const sheet = streamMaterial();
+    sheet.opacity = 0.78;
+    sheet.color.set('#d6ecf7');
+    sheet.emissive.set('#4d7a96');
+    sheet.side = THREE.DoubleSide;
+    return {
+      stream: streamMaterial(),
+      sheet,
+      puddle: new THREE.MeshStandardMaterial({ color: '#2f4d61', roughness: 0.03, metalness: 0.2, transparent: true, opacity: 0.78, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
+    };
+  }, []);
   const sheetTex = useMemo(() => {
     const c = document.createElement('canvas');
     c.width = 32;
@@ -613,8 +625,8 @@ export function TankFx({ state }: { state: TankProcessState }) {
       const intensity = state.boiling ? 1 : THREE.MathUtils.clamp((state.temperature - 68) / 30, 0, 0.6);
       st.visible = intensity > 0.01;
       if (st.visible) {
-        steamMat.opacity = 0.18 + 0.42 * intensity;
-        steamMat.size = 0.18 + 0.2 * intensity;
+        steamMat.opacity = 0.12 + 0.3 * intensity;
+        steamMat.size = 0.25 + 0.3 * intensity;
         const arr = steamGeo.attributes.position!.array as Float32Array;
         for (let i = 0; i < NS; i++) {
           const s = seeds[i]!;
@@ -635,11 +647,11 @@ export function TankFx({ state }: { state: TankProcessState }) {
     }
     // ---- overflow spill: out of the vent, down the shell, puddle on the floor ----
     const spilling = state.spillRate > 0.01;
-    puddleVol.current = Math.max(0, puddleVol.current + (spilling ? 0.35 : -0.02) * dt);
+    puddleVol.current = Math.max(0, puddleVol.current + (spilling ? 0.6 : -0.02) * dt);
     puddleVol.current = Math.min(puddleVol.current, 1.2);
     if (spillFall.current) {
       spillFall.current.visible = spilling;
-      if (spilling) spillFall.current.scale.set(0.012 * (1 + 0.1 * Math.sin(t * 29)), 1, 0.012);
+      if (spilling) spillFall.current.scale.set(0.012 * (1 + 0.1 * Math.sin(t * 29)), SPILL_FALL, 0.012);
     }
     if (sheet.current) {
       sheet.current.visible = spilling;
@@ -647,12 +659,12 @@ export function TankFx({ state }: { state: TankProcessState }) {
     }
     if (drip.current) {
       drip.current.visible = spilling;
-      if (spilling) drip.current.scale.set(0.01 * (1 + 0.15 * Math.sin(t * 23)), 1, 0.01);
+      if (spilling) drip.current.scale.set(0.016 * (1 + 0.15 * Math.sin(t * 23)), DRIP_LEN, 0.016);
     }
     if (puddle.current) {
       const v = puddleVol.current;
       puddle.current.visible = v > 0.003;
-      const r = 0.12 + Math.sqrt(v) * 0.8;
+      const r = 0.25 + Math.sqrt(v) * 0.85;
       puddle.current.scale.set(r, r * 0.8, 1);
     }
   });
@@ -670,18 +682,20 @@ export function TankFx({ state }: { state: TankProcessState }) {
       <instancedMesh ref={bubbles} args={[sphereGeo, bubbleMat, NB]} frustumCulled={false} renderOrder={3} userData={{ noOcclude: true }} />
       <points ref={steam} geometry={steamGeo} material={steamMat} frustumCulled={false} visible={false} renderOrder={4} />
       {/* spill: vent outlet → top head */}
-      <mesh ref={spillFall} geometry={unitCylY} material={mats.stream} position={[ventOut[0], ventOut[1] - 0.08, ventOut[2]]} scale={[0.012, 0.16, 0.012]} visible={false} />
+      <mesh ref={spillFall} geometry={unitCylY} material={mats.stream} position={[ventOut[0], ventOut[1] - SPILL_FALL / 2, ventOut[2]]} scale={[0.012, SPILL_FALL, 0.012]} visible={false} />
       {/* sheet running down the shell (front-left, outside the cut-away) */}
       <mesh ref={sheet} position={[0, (sheetTop + sheetBottom) / 2, 0]} material={mats.sheet} visible={false} userData={{ noOcclude: true }}>
-        <cylinderGeometry args={[TL.radius + 0.004, TL.radius + 0.004, sheetTop - sheetBottom, 12, 1, true, phiSheet - 0.2, 0.4]} />
+        <cylinderGeometry args={[TL.radius + 0.006, TL.radius + 0.006, sheetTop - sheetBottom, 12, 1, true, phiSheet - 0.22, 0.44]} />
       </mesh>
       {/* dripping off the bottom head to the floor */}
-      <mesh ref={drip} geometry={unitCylY} material={mats.stream} position={[dripX, (TL.yT1 - 0.1 - SKID_H) / 2, dripZ]} scale={[0.01, TL.yT1 - 0.1 + SKID_H, 0.01]} visible={false} />
+      <mesh ref={drip} geometry={unitCylY} material={mats.stream} position={[dripX, (TL.yT1 - 0.1 - SKID_H) / 2, dripZ]} scale={[0.01, DRIP_LEN, 0.01]} visible={false} />
       <mesh ref={puddle} geometry={discGeo} material={mats.puddle} position={[dripX * 1.15, -SKID_H + 0.004, dripZ * 1.15 + 0.2]} rotation={[-Math.PI / 2, 0, 0]} visible={false} userData={{ noOcclude: true }} />
     </group>
   );
 }
 
+const SPILL_FALL = 0.16;
+const DRIP_LEN = TL.yT1 - 0.1 + SKID_H;
 const sphereGeo = new THREE.SphereGeometry(1, 8, 6);
 const bubbleMat = new THREE.MeshStandardMaterial({ color: '#f4fbff', emissive: '#9fc3da', emissiveIntensity: 0.35, roughness: 0.1, metalness: 0, transparent: true, opacity: 0.85, depthWrite: false });
 const discGeo = new THREE.CircleGeometry(1, 36);
@@ -737,7 +751,7 @@ export function OperatorPanel({ state, runtime }: { state: TankProcessState; run
       <Enclosure
         size={PANEL.size}
         position={[0, PANEL.y, 0]}
-        nameplate={'OP-101  MIXING TANK T-101'}
+        nameplate={'OP-101\nMIXING T-101'}
         warningLabel={false}
         docPocket={false}
         glands={2}

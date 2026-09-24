@@ -2,6 +2,8 @@ import { lazy, Suspense } from 'react';
 import { Route, Router, Switch } from 'wouter';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { Toaster } from '../ui';
+import { GameListeners } from './hud/GameListeners';
+import { PlayerHud } from './hud/PlayerHud';
 import { TopNav } from './TopNav';
 
 const HomePage = lazy(() => import('./pages/HomePage'));
@@ -24,7 +26,7 @@ export default function App() {
   return (
     <Router hook={useHashLocation}>
       <div className="flex h-full flex-col">
-        <TopNav />
+        <TopNav right={<PlayerHud />} />
         <main className="relative min-h-0 flex-1">
           <Suspense fallback={<Loading />}>
             <Switch>
@@ -42,6 +44,7 @@ export default function App() {
           </Suspense>
         </main>
         <Toaster />
+        <GameListeners />
       </div>
     </Router>
   );

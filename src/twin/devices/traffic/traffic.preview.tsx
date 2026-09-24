@@ -3,7 +3,7 @@ import { Car, CarFleet, type CarInstance } from './Car';
 import { PedestrianPushButton } from './PedestrianPushButton';
 import { PedestrianSignal } from './PedestrianSignal';
 import { SignalCabinet } from './SignalCabinet';
-import { SignalPole } from './SignalPole';
+import { SignalPole, poleRadiusAt } from './SignalPole';
 import { TrafficSignalHead } from './TrafficSignalHead';
 
 /** Demo clock (s). */
@@ -71,7 +71,7 @@ function PoleDemo() {
       luminaire={{ angle: 0, getLit: () => true }}
       attachments={[
         { height: 3.0, angle: Math.PI / 2, node: <PedestrianSignal getWalk={() => pedPhase().walk} getDontWalk={() => pedPhase().hand} getCountdown={() => pedPhase().count} /> },
-        { height: 0.9, angle: 0, bandSpan: 0.3, node: <PedestrianPushButton mount="none" getPressed={() => false} sign /> },
+        { height: 0.9, angle: 0, bands: false, node: <PedestrianPushButton mount="none" poleRadius={poleRadiusAt(1.05)} getPressed={() => false} sign /> },
       ]}
     />
   );

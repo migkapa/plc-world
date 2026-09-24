@@ -10,13 +10,13 @@
  *                        the manifold's back (mounting) face at its bottom edge; valves face +Z.
  */
 import { useFrame } from '@react-three/fiber';
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, type RefObject } from 'react';
 import * as THREE from 'three';
 import { Led } from '../../common';
 import type { SolenoidValveProps, Vec3 } from '../../contracts';
 import {
   box,
-  Cable,
+  type CableRoute,
   canvasTex,
   CapScrew,
   clickable,
@@ -27,10 +27,13 @@ import {
   hexGeo,
   latheY,
   mat,
+  Merge,
   PanScrew,
   PushInFitting,
   rbox,
+  RoutedCable,
   TAU,
+  DEVICE_ROOT,
 } from './shared';
 
 export interface SolenoidValveExtraProps {
@@ -42,8 +45,20 @@ export interface SolenoidValveExtraProps {
   stations?: number;
   /** Pneumatic manifold: extra live getters for the other stations (index 1..). */
   getStation?: (index: number) => boolean;
+  /** Process: solenoid coil cable; pneumatic: multicore from the D-sub connector. Parent coordinates. */
+  cableTo?: CableRoute;
+  /** Process: air supply tube to the pilot valve; pneumatic: P supply tube on the end plate. */
+  tubeTo?: CableRoute;
+  /** Pneumatic: working-port tubes of station 1 (A = blue, B = black), or false for none. */
+  portsTo?: { a?: CableRoute; b?: CableRoute } | false;
+  /** Pneumatic: station-1 manual override pushed in (only moves when someone presses it). */
+  getManualOverride?: () => boolean;
+  /** Pneumatic: click on the station-1 manual override button. */
+  onManualOverride?: () => void;
   onClick?: () => void;
 }
+
+type RootProps = { rootRef: RefObject<THREE.Group | null> };
 
 function tagTex(tag: string) {
   return canvasTex(`valveTag:${tag}`, 256, 96, (ctx, w, h) => {
@@ -90,7 +105,7 @@ function indicatorTex() {
 // Process valve
 // ---------------------------------------------------------------------------
 
-function ProcessValve({ getEnergized, pipeDiameter = 0.0603, tag, pipeStubs = 0.12 }: SolenoidValveProps & SolenoidValveExtraProps) {
+function ProcessValve({ getEnergized, pipeDiameter = 0.0603, tag, pipeStubs = 0.12, cableTo, tubeTo, rootRef }: SolenoidValveProps & SolenoidValveExtraProps & RootProps) {
   const pr = pipeDiameter / 2;
   const s = pipeDiameter / 0.0603;
   const bodyL = 0.19 * s;
@@ -127,7 +142,7 @@ function ProcessValve({ getEnergized, pipeDiameter = 0.0603, tag, pipeStubs = 0.
   }
 
   return (
-    <group>
+    <Merge>
       {/* pipe stubs with flanges */}
       {pipeStubs > 0 &&
         [-1, 1].map((sx) => (
@@ -198,33 +213,15 @@ function ProcessValve({ getEnergized, pipeDiameter = 0.0603, tag, pipeStubs = 0.
           <Led color="amber" get={getEnergized} shape="round" size={[0.006 * s, 0, 0.002]} position={[0, 0.036 * s, 0.0585 * s]} intensity={4} />
           <PanScrew d={0.003 * s} position={[0, 0.047 * s, 0.058 * s]} />
           <mesh geometry={cylY(0.006 * s, 0.012 * s, 16)} material={fm.plastic('#2b2d31', 0.5)} position={[0, 0.018 * s, 0.047 * s]} />
-          <Cable
-            radius={0.0035 * s}
-            color="#2a2b2e"
-            points={[
-              [0, 0.012 * s, 0.047 * s],
-              [0, -0.02 * s, 0.05 * s],
-              [0.02 * s, -0.08 * s, 0.06 * s],
-              [0.06 * s, -0.16 * s, 0.07 * s],
-            ]}
-          />
+          <RoutedCable rootRef={rootRef} route={cableTo} from={[0, 0.012 * s, 0.047 * s]} dir={[0, -1, 0]} radius={0.0035 * s} color="#2a2b2e" lead={0.03} />
           {/* exhaust silencer + supply fitting */}
           <mesh geometry={cylX(0.005 * s, 0.018 * s, 12)} material={fm.brass()} position={[-0.025 * s, -0.012 * s, 0.012 * s]} />
           <PushInFitting od={0.006} position={[0.016 * s, -0.012 * s, 0.012 * s]} rotation={[0, Math.PI / 2, 0]} />
-          <Cable
-            radius={0.003}
-            color="#1f5fd0"
-            points={[
-              [0.036 * s, -0.012 * s, 0.012 * s],
-              [0.06 * s, -0.02 * s, 0.015 * s],
-              [0.08 * s, -0.1 * s, 0.03 * s],
-              [0.09 * s, -0.2 * s, 0.04 * s],
-            ]}
-          />
+          <RoutedCable rootRef={rootRef} route={tubeTo} from={[0.016 * s + 0.012, -0.012 * s, 0.012 * s]} dir={[1, 0, 0]} radius={0.003} color="#1f5fd0" lead={0.025} sag={0.05} />
         </group>
         {/* visual position indicator on the pinion (rotates 90°) */}
         <mesh geometry={cylY(0.022 * s, 0.01 * s, 32)} material={fm.plastic('#1b1c1f', 0.5)} position={[0, actH / 2 + 0.005 * s, 0]} />
-        <group ref={pinion} position={[0, actH / 2 + 0.012 * s, 0]}>
+        <group ref={pinion} position={[0, actH / 2 + 0.012 * s, 0]} userData={{ noMerge: true }}>
           <mesh rotation={[-Math.PI / 2, 0, 0]} material={indicatorMat}>
             <circleGeometry args={[0.03 * s, 40]} />
           </mesh>
@@ -233,13 +230,12 @@ function ProcessValve({ getEnergized, pipeDiameter = 0.0603, tag, pipeStubs = 0.
         <mesh geometry={latheY('valveDome', [[0.032 * s, 0], [0.032 * s, 0.01 * s], [0.026 * s, 0.022 * s], [0.012 * s, 0.028 * s], [0, 0.029 * s]], 32)} material={domeMat} position={[0, actH / 2 + 0.008 * s, 0]} />
         {/* tag plate */}
         {tag && (
-          <mesh position={[-0.048 * s, -actH * 0.12, actD / 2 + 0.0015]}>
+          <mesh position={[-0.048 * s, -actH * 0.12, actD / 2 + 0.0015]} material={fm.plate(tagTex(tag))}>
             <planeGeometry args={[0.058 * s, 0.021 * s]} />
-            <meshStandardMaterial map={tagTex(tag)} metalness={0.6} roughness={0.35} />
           </mesh>
         )}
       </group>
-    </group>
+    </Merge>
   );
 }
 
@@ -247,7 +243,7 @@ function ProcessValve({ getEnergized, pipeDiameter = 0.0603, tag, pipeStubs = 0.
 // Pneumatic 5/2 valve manifold
 // ---------------------------------------------------------------------------
 
-function PneumaticManifold({ getEnergized, stations = 4, getStation }: SolenoidValveProps & SolenoidValveExtraProps) {
+function PneumaticManifold({ getEnergized, stations = 4, getStation, cableTo, tubeTo, portsTo, getManualOverride, onManualOverride, rootRef }: SolenoidValveProps & SolenoidValveExtraProps & RootProps) {
   const pitch = 0.016;
   const n = Math.max(1, Math.min(8, stations));
   const baseL = n * pitch;
@@ -260,10 +256,11 @@ function PneumaticManifold({ getEnergized, stations = 4, getStation }: SolenoidV
   const valveMat = fm.plastic('#2a2c30', 0.45);
   const override = useRef<THREE.Mesh>(null);
   useFrame(() => {
-    if (override.current) override.current.position.z = getEnergized() ? -0.0008 : 0;
+    if (override.current) override.current.position.z = 0.031 - (getManualOverride?.() ? 0.0012 : 0);
   });
+  const ports = portsTo === false ? null : (portsTo ?? {});
   return (
-    <group>
+    <Merge>
       {/* manifold base (anodized aluminum) with end plates */}
       <mesh geometry={rbox(baseL, len * 0.78, baseH, 0.002, 2)} material={fm.anodized('#a9b0b6')} position={[0, y0 + len * 0.39, baseH / 2]} castShadow receiveShadow />
       {[-1, 1].map((sx) => (
@@ -279,8 +276,12 @@ function PneumaticManifold({ getEnergized, stations = 4, getStation }: SolenoidV
           <CapScrew d={0.004} position={[0, -len * 0.33, baseH / 2 + 0.002]} />
         </group>
       ))}
-      {/* D-sub connector on the left end */}
+      {/* D-sub connector on the left end + multicore cable */}
       <mesh geometry={rbox(0.012, 0.04, 0.018, 0.002, 2)} material={fm.plastic('#3a3d42', 0.5)} position={[-(baseL / 2 + endW + 0.006), y0 + len * 0.55, 0.012]} />
+      <mesh geometry={rbox(0.016, 0.036, 0.02, 0.003, 2)} material={fm.plastic('#1d1e21', 0.5)} position={[-(baseL / 2 + endW + 0.02), y0 + len * 0.55, 0.012]} />
+      <RoutedCable rootRef={rootRef} route={cableTo} from={[-(baseL / 2 + endW + 0.028), y0 + len * 0.55, 0.012]} dir={[-1, 0, 0]} radius={0.0045} color="#5d6166" lead={0.02} sag={0.04} />
+      {/* P supply tube (right end plate) */}
+      <RoutedCable rootRef={rootRef} route={tubeTo} from={[baseL / 2 + endW + 0.024, y0 + len * 0.39 + 0.012, baseH / 2 + 0.002]} dir={[1, 0, 0]} radius={0.005} color="#1f5fd0" lead={0.02} sag={0.04} />
       {getters.map((get, i) => (
         <group key={i} position={[x0 + i * pitch, 0, baseH]}>
           {/* valve body */}
@@ -293,14 +294,23 @@ function PneumaticManifold({ getEnergized, stations = 4, getStation }: SolenoidV
             geometry={cylZ(0.0026, 0.002, 16)}
             material={fm.plastic('#2f6fd6', 0.4)}
             position={[0, y0 + len * 0.74, 0.031]}
+            userData={i === 0 ? { noMerge: true } : undefined}
+            onPointerDown={
+              i === 0 && onManualOverride
+                ? (e) => {
+                    e.stopPropagation();
+                    onManualOverride();
+                  }
+                : undefined
+            }
           />
           {/* A (top) / B (bottom) push-in fittings on the base underside */}
           <PushInFitting od={0.006} position={[0, y0, -baseH * 0.7]} rotation={[Math.PI / 2, 0, 0]} />
           <PushInFitting od={0.006} position={[0, y0, -baseH * 0.28]} rotation={[Math.PI / 2, 0, 0]} />
-          {i === 0 && (
+          {i === 0 && ports && (
             <>
-              <Cable radius={0.003} color="#1f5fd0" points={[[0, y0 - 0.016, -baseH * 0.7], [0, y0 - 0.05, -baseH * 0.7], [0.01, y0 - 0.12, -baseH * 0.6]]} />
-              <Cable radius={0.003} color="#1a1b1d" points={[[0, y0 - 0.016, -baseH * 0.28], [0, y0 - 0.05, -baseH * 0.25], [0.02, y0 - 0.12, -baseH * 0.1]]} />
+              <RoutedCable rootRef={rootRef} route={ports.a} from={[0, y0 - 0.016, -baseH * 0.7]} dir={[0, -1, 0]} radius={0.003} color="#1f5fd0" lead={0.02} />
+              <RoutedCable rootRef={rootRef} route={ports.b} from={[0, y0 - 0.016, -baseH * 0.28]} dir={[0, -1, 0]} radius={0.003} color="#1a1b1d" lead={0.02} />
             </>
           )}
         </group>
@@ -321,15 +331,16 @@ function PneumaticManifold({ getEnergized, stations = 4, getStation }: SolenoidV
           roughness={0.6}
         />
       </mesh>
-    </group>
+    </Merge>
   );
 }
 
 export function SolenoidValve(props: SolenoidValveProps & SolenoidValveExtraProps) {
   const { variant = 'process', position, rotation, scale, onClick } = props;
+  const root = useRef<THREE.Group>(null);
   return (
-    <group position={position} rotation={rotation} scale={scale} {...clickable(onClick)}>
-      {variant === 'process' ? <ProcessValve {...props} /> : <PneumaticManifold {...props} />}
+    <group ref={root} position={position} rotation={rotation} scale={scale} userData={DEVICE_ROOT} {...clickable(onClick)}>
+      {variant === 'process' ? <ProcessValve {...props} rootRef={root} /> : <PneumaticManifold {...props} rootRef={root} />}
     </group>
   );
 }

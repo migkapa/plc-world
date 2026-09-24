@@ -12,15 +12,20 @@ import type { CylinderProps, Vec3 } from '../../contracts';
 import {
   box,
   Cable,
+  type CableRoute,
+  canvasTex,
   CapScrew,
   cylZ,
+  DEVICE_ROOT,
   fm,
   geo,
   hexGeo,
   latheZ,
   mat,
+  Merge,
   PushInFitting,
   rbox,
+  RoutedCable,
   clickable,
 } from './shared';
 
@@ -124,34 +129,36 @@ function EndCap({ size, z, front }: { size: IsoSize; z: number; front: boolean }
   );
 }
 
-/** Reed switch (SMC D-M9 style) clipped into a sensor slot; +Z along the slot. */
-function ReedSwitch({ position, get, cableTo }: { position: Vec3; get?: () => boolean; cableTo: Vec3 }) {
+/** Reed switch (D-M9 style) clipped into a sensor slot; +Z along the slot. The lead is drawn by the cylinder. */
+function ReedSwitch({ position, get }: { position: Vec3; get?: () => boolean }) {
   const matOn = mat('f:reedLedOn', () => new THREE.MeshStandardMaterial({ color: '#ff5a2a', emissive: '#ff3a10', emissiveIntensity: 3.5, toneMapped: false }));
   const matOff = mat('f:reedLedOff', () => new THREE.MeshStandardMaterial({ color: '#4a1208', roughness: 0.3 }));
   const led = useRef<THREE.Mesh>(null);
   useFrame(() => {
     if (led.current) led.current.material = get?.() ? matOn : matOff;
   });
-  const [x, y, z] = position;
   return (
-    <group>
-      <group position={position}>
-        <mesh geometry={rbox(0.0042, 0.0042, 0.022, 0.0012, 2)} material={fm.plastic('#1c1d20', 0.5)} castShadow />
-        <mesh ref={led} geometry={box(0.0026, 0.0012, 0.0036)} material={matOff} position={[0, 0.0021, -0.007]} />
-        <mesh geometry={cylZ(0.0012, 0.0015, 10)} material={fm.zinc()} position={[0, 0.0016, 0.006]} />
-      </group>
-      <Cable
-        radius={0.0014}
-        color="#2b2d30"
-        points={[
-          [x, y, z - 0.011],
-          [x, y + 0.0005, z - 0.03],
-          [cableTo[0], cableTo[1] - 0.004, cableTo[2] + 0.02],
-          cableTo,
-        ]}
-      />
+    <group position={position}>
+      <mesh geometry={rbox(0.0042, 0.0042, 0.022, 0.0012, 2)} material={fm.plastic('#1c1d20', 0.5)} castShadow />
+      <mesh ref={led} geometry={box(0.0026, 0.0012, 0.0036)} material={matOff} position={[0, 0.0021, -0.007]} userData={{ noMerge: true }} />
+      <mesh geometry={cylZ(0.0012, 0.0015, 10)} material={fm.zinc()} position={[0, 0.0016, 0.006]} />
     </group>
   );
+}
+
+function isoLabelTex(bore: number, stroke: number) {
+  return canvasTex(`isoLabel:${bore}:${stroke}`, 512, 96, (ctx, w, h) => {
+    ctx.fillStyle = '#f0f1ee';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#1b1d20';
+    ctx.fillRect(0, 0, 14, h);
+    ctx.font = '700 34px Arial, Helvetica, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillText(`ISO 15552   Ø${Math.round(bore * 1000)} × ${Math.round(stroke * 1000)}`, 30, 34);
+    ctx.font = '600 24px Arial, Helvetica, sans-serif';
+    ctx.fillText('pmax 10 bar   PPV   -20…+80 °C', 30, 72);
+  });
 }
 
 export interface CylinderExtraProps {
@@ -162,8 +169,9 @@ export interface CylinderExtraProps {
   /** Front MF1 flange plate. Default true with a pusher. */
   flange?: boolean;
   /**
-   * Tubing ends in cylinder coordinates for the rear (extend, blue) and front (retract, black) ports;
-   * default: short loops going back & up; `false` hides the tubes.
+   * Tubing ends in CYLINDER coordinates for the rear (extend, blue) and front (retract, black) ports (e.g. the
+   * valve's A/B fittings); default: both tubes, with the reed-switch leads tied to them, drop into a floor
+   * conduit stub; `false` hides the tubes (the leads then end at the rear cap).
    */
   tubes?: { rear: Vec3; front: Vec3 } | false;
   onClick?: () => void;
@@ -208,17 +216,35 @@ export function PneumaticCylinder({
 
   const rearPort: Vec3 = [0, p / 2, zRearCap];
   const frontPort: Vec3 = [0, p / 2, zFrontCap];
-  const tubeEnds = tubes === false ? null : (tubes ?? { rear: [-0.03, p / 2 + 0.12, zRearCap - 0.12] as Vec3, front: [0.03, p / 2 + 0.12, zRearCap - 0.12] as Vec3 });
+  const tubeEnds = tubes ? tubes : null;
 
   const pusherMat = fm.plastic('#e9ebe6', 0.55);
 
+  // reed-switch leads: along the slot, out behind the rear cap, then cable-tied to the blue tube
+  const reedX = p / 2 - 0.0008;
+  const reedZ = [-size.cap - 0.02, -size.cap - profileLen + 0.02];
+  const behind = zRearCap - size.cap / 2 - 0.012;
+  const leads = reedZ.map((z, i): Vec3[] => [
+    [reedX, 0, z - 0.011],
+    [reedX + 0.0006, 0.0004, (z - 0.011 + behind) / 2],
+    [reedX + 0.002, -0.001 * i, behind + 0.004],
+    [reedX * 0.6, p / 2 * 0.5, behind - 0.006],
+  ]);
+  const rearTube = (tubeEnds ? [
+    [rearPort[0], rearPort[1] + 0.05, rearPort[2] - 0.01],
+    [tubeEnds.rear[0], tubeEnds.rear[1] - 0.03, (rearPort[2] + tubeEnds.rear[2]) / 2],
+    tubeEnds.rear,
+  ] : undefined) as Vec3[] | undefined;
+  const frontTube = (tubeEnds ? [
+    [frontPort[0], frontPort[1] + 0.05, frontPort[2] - 0.02],
+    [tubeEnds.front[0], tubeEnds.front[1] - 0.02, (frontPort[2] + tubeEnds.front[2]) / 2],
+    tubeEnds.front,
+  ] : undefined) as Vec3[] | undefined;
+  const route: CableRoute | undefined = tubes === false ? false : undefined;
+
   return (
-    <group
-      position={position}
-      rotation={rotation}
-      scale={scale}
-      {...clickable(onClick)}
-    >
+    <group position={position} rotation={rotation} scale={scale} userData={DEVICE_ROOT} {...clickable(onClick)}>
+      <Merge>
       {/* barrel profile */}
       <mesh geometry={profileGeo(size, profileLen)} material={fm.anodized('#c3c8cd')} position={[0, 0, -size.cap]} castShadow receiveShadow />
       <EndCap size={size} z={zFrontCap} front />
@@ -226,41 +252,23 @@ export function PneumaticCylinder({
       {/* ports + push-in fittings */}
       <PushInFitting od={0.008} position={rearPort} rotation={[-Math.PI / 2, 0, 0]} collar="#2a64c8" />
       <PushInFitting od={0.008} position={frontPort} rotation={[-Math.PI / 2, 0, 0]} collar="#2a64c8" />
-      {tubeEnds && (
-        <>
-          <Cable
-            radius={0.004}
-            color="#1f5fd0"
-            points={[
-              [rearPort[0], rearPort[1] + 0.02, rearPort[2]],
-              [rearPort[0], rearPort[1] + 0.05, rearPort[2] - 0.01],
-              [tubeEnds.rear[0], tubeEnds.rear[1] - 0.03, (rearPort[2] + tubeEnds.rear[2]) / 2],
-              tubeEnds.rear,
-            ]}
-          />
-          <Cable
-            radius={0.004}
-            color="#1a1b1d"
-            points={[
-              [frontPort[0], frontPort[1] + 0.02, frontPort[2]],
-              [frontPort[0], frontPort[1] + 0.05, frontPort[2] - 0.02],
-              [tubeEnds.front[0], tubeEnds.front[1] - 0.02, (frontPort[2] + tubeEnds.front[2]) / 2],
-              tubeEnds.front,
-            ]}
-          />
-        </>
-      )}
+      {/* blue (extend) tube with the reed leads tied to it, black (retract) tube */}
+      <RoutedCable
+        route={route}
+        path={rearTube}
+        from={[rearPort[0], rearPort[1] + 0.02, rearPort[2]]}
+        dir={[0, 1, 0]}
+        radius={0.004}
+        color="#1f5fd0"
+        lead={0.02}
+        companions={leads.map((l, i) => ({ lead: l, joinAt: 0.16, offset: [0.0056, (i - 0.5) * 0.004] as [number, number], radius: 0.0014, color: '#2b2d30' }))}
+      />
+      <RoutedCable route={route} path={frontTube} from={[frontPort[0], frontPort[1] + 0.02, frontPort[2]]} dir={[0, 1, 0]} radius={0.004} color="#1a1b1d" lead={0.02} sag={0.02} />
+      {tubes === false &&
+        leads.map((l, i) => <Cable key={i} radius={0.0014} color="#2b2d30" points={[...l.slice(0, 3), [reedX + 0.004, -0.004 - i * 0.003, behind - 0.004]]} />)}
       {/* reed switches in the side slot (+X face) */}
-      <ReedSwitch
-        position={[p / 2 - 0.0008, 0, -size.cap - 0.02]}
-        get={getExtendedSensor}
-        cableTo={[p / 2 + 0.004, -0.02, zRearCap - 0.1]}
-      />
-      <ReedSwitch
-        position={[p / 2 - 0.0008, 0, -size.cap - profileLen + 0.02]}
-        get={getRetractedSensor}
-        cableTo={[p / 2 + 0.004, -0.024, zRearCap - 0.1]}
-      />
+      <ReedSwitch position={[reedX, 0, reedZ[0]!]} get={getExtendedSensor} />
+      <ReedSwitch position={[reedX, 0, reedZ[1]!]} get={getRetractedSensor} />
       {/* front flange (MF1) with guide bushings */}
       {useFlange && (
         <group position={[0, 0, flangeT / 2 + 0.0001]}>
@@ -282,8 +290,14 @@ export function PneumaticCylinder({
             ))}
         </group>
       )}
+      {/* printed catalog label on the profile top */}
+      <mesh position={[0, p / 2 + 0.0003, -size.cap - profileLen / 2]} rotation={[-Math.PI / 2, 0, Math.PI / 2]} material={fm.plate(isoLabelTex(bore, stroke))}>
+        <planeGeometry args={[Math.min(0.07, profileLen * 0.6), Math.min(0.07, profileLen * 0.6) * 0.1875]} />
+      </mesh>
+      </Merge>
       {/* moving parts */}
-      <group ref={moving}>
+      <group ref={moving} userData={{ noMerge: true }}>
+        <Merge>
         <mesh geometry={rodGeo} material={fm.chrome()} position={[0, 0, rodLen / 2 - stroke]} castShadow />
         {pusher ? (
           <group position={[0, 0, size.wh + plateOffset]}>
@@ -319,12 +333,8 @@ export function PneumaticCylinder({
             <mesh geometry={rbox(size.rod * 1.6, size.rod * 0.9, size.rod * 1.6, size.rod * 0.4, 2)} material={fm.zinc()} position={[0, 0, size.rod * 1.7]} />
           </group>
         )}
+        </Merge>
       </group>
-      {/* catalog label on the profile */}
-      <mesh position={[0, p / 2 + 0.0003, -size.cap - profileLen / 2]} rotation={[-Math.PI / 2, 0, Math.PI / 2]}>
-        <planeGeometry args={[Math.min(0.06, profileLen * 0.6), 0.012]} />
-        <meshStandardMaterial color="#1b1c1f" roughness={0.6} />
-      </mesh>
     </group>
   );
 }

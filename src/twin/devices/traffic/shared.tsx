@@ -359,42 +359,225 @@ export function concreteTexture(tint = '#bdb9b0'): THREE.CanvasTexture {
   });
 }
 
-/** Hot-dip galvanized spangle (mottled crystalline zinc). Tileable. */
-export function galvanizedTexture(): THREE.CanvasTexture {
-  return sharedTex('tex:galv', () => {
-    const S = 256;
-    const [c, ctx] = makeCanvas(S, S);
-    const n = tileableNoise(S, 3, [6, 24]);
-    const img = ctx.createImageData(S, S);
-    const rnd = mulberry32(17);
-    // spangle: voronoi-ish cells with random brightness
-    const cells: [number, number, number][] = [];
-    for (let i = 0; i < 160; i++) cells.push([rnd() * S, rnd() * S, 0.92 + rnd() * 0.12]);
-    for (let y = 0; y < S; y++) {
-      for (let x = 0; x < S; x++) {
-        let best = 1e9;
-        let b = 1;
-        for (const [cx, cy, cb] of cells) {
-          let dx = Math.abs(x - cx);
-          let dy = Math.abs(y - cy);
+/**
+ * Hot-dip galvanized zinc (tileable, 1 tile ≈ GALV_TILE m): fine mm-scale spangle (jittered-grid
+ * Voronoi, ~2000 cells) with very low color contrast plus dull mottling. Returns the color map and a
+ * roughness map (G channel) that carries most of the spangle variation (0.35–0.6).
+ */
+export const GALV_TILE = 0.25;
+function galvanizedMaps(): { color: THREE.CanvasTexture; rough: THREE.CanvasTexture } {
+  const color = sharedTex('tex:galv2:color', () => buildGalv().color);
+  const rough = sharedTex('tex:galv2:rough', () => buildGalv().rough);
+  return { color, rough };
+}
+let galvBuilt: { color: THREE.CanvasTexture; rough: THREE.CanvasTexture } | null = null;
+function buildGalv() {
+  if (galvBuilt) return galvBuilt;
+  const S = 256;
+  const G = 45; // 45 × 45 jittered cells ≈ 2000 spangles per tile
+  const rnd = mulberry32(17);
+  const cx = new Float32Array(G * G);
+  const cy = new Float32Array(G * G);
+  const cb = new Float32Array(G * G);
+  const cr = new Float32Array(G * G);
+  const step = S / G;
+  for (let j = 0; j < G; j++)
+    for (let i = 0; i < G; i++) {
+      const k = j * G + i;
+      cx[k] = (i + 0.15 + rnd() * 0.7) * step;
+      cy[k] = (j + 0.15 + rnd() * 0.7) * step;
+      cb[k] = 0.985 + rnd() * 0.03;
+      cr[k] = 0.44 + rnd() * 0.14;
+    }
+  const n = tileableNoise(S, 3, [3, 9]);
+  const [c1, x1] = makeCanvas(S, S);
+  const [c2, x2] = makeCanvas(S, S);
+  const img1 = x1.createImageData(S, S);
+  const img2 = x2.createImageData(S, S);
+  for (let y = 0; y < S; y++) {
+    const gj = Math.floor(y / step);
+    for (let x = 0; x < S; x++) {
+      const gi = Math.floor(x / step);
+      let best = 1e9;
+      let bk = 0;
+      for (let dj = -1; dj <= 1; dj++)
+        for (let di = -1; di <= 1; di++) {
+          const jj = (gj + dj + G) % G;
+          const ii = (gi + di + G) % G;
+          const k = jj * G + ii;
+          let dx = Math.abs(x - cx[k]!);
+          let dy = Math.abs(y - cy[k]!);
           if (dx > S / 2) dx = S - dx;
           if (dy > S / 2) dy = S - dy;
           const d = dx * dx + dy * dy;
           if (d < best) {
             best = d;
-            b = cb;
+            bk = k;
           }
         }
-        const i = y * S + x;
-        const v = 255 * Math.min(1, b * (0.84 + (n[i]! - 0.5) * 0.12));
-        img.data[i * 4] = v;
-        img.data[i * 4 + 1] = v;
-        img.data[i * 4 + 2] = v;
-        img.data[i * 4 + 3] = 255;
+      const i4 = (y * S + x) * 4;
+      const mott = (n[y * S + x]! - 0.5) * 0.1; // dull, larger-scale mottling
+      const v = 255 * Math.min(1, 0.9 * (cb[bk]! + mott));
+      img1.data[i4] = v;
+      img1.data[i4 + 1] = v;
+      img1.data[i4 + 2] = v * 1.01;
+      img1.data[i4 + 3] = 255;
+      const r = 255 * Math.min(1, cr[bk]! + mott * 0.8);
+      img2.data[i4] = r;
+      img2.data[i4 + 1] = r;
+      img2.data[i4 + 2] = r;
+      img2.data[i4 + 3] = 255;
+    }
+  }
+  x1.putImageData(img1, 0, 0);
+  x2.putImageData(img2, 0, 0);
+  const color = canvasTex(c1, { repeat: true });
+  const rough = canvasTex(c2, { repeat: true, srgb: false });
+  rough.colorSpace = THREE.NoColorSpace;
+  galvBuilt = { color, rough };
+  return galvBuilt;
+}
+
+/**
+ * Prepare a geometry for the galvanized material: world-scaled isotropic UVs (1 tile = GALV_TILE m,
+ * picked per vertex from the dominant normal axis, or cylindrical when `cyl` is given) and vertex
+ * colors that darken slightly toward the ground (weathering / splash zone). `yOffset` = world height of
+ * the geometry's y = 0; `tone` scales the whole part (separately dipped parts differ a little).
+ */
+export function galvPrep(
+  g: THREE.BufferGeometry,
+  opts: { yOffset?: number; tone?: number; cyl?: { axis: 'x' | 'y'; radius: number } } = {},
+): THREE.BufferGeometry {
+  const n = g.index ? g.toNonIndexed() : g.clone();
+  for (const name of Object.keys(n.attributes)) if (name !== 'position' && name !== 'normal' && name !== 'uv') n.deleteAttribute(name);
+  if (!n.attributes.normal) n.computeVertexNormals();
+  const pos = n.attributes.position!;
+  const nor = n.attributes.normal!;
+  const count = pos.count;
+  const uvIn = n.attributes.uv;
+  const uv = new Float32Array(count * 2);
+  const col = new Float32Array(count * 3);
+  const tile = GALV_TILE;
+  const tone = opts.tone ?? 1;
+  const y0 = opts.yOffset ?? 0;
+  const around = opts.cyl ? Math.max(1, Math.round((2 * Math.PI * opts.cyl.radius) / tile)) : 0;
+  for (let i = 0; i < count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    if (opts.cyl && uvIn) {
+      uv[i * 2] = uvIn.getX(i) * around;
+      uv[i * 2 + 1] = (opts.cyl.axis === 'y' ? y : x) / tile;
+    } else {
+      const ax = Math.abs(nor.getX(i));
+      const ay = Math.abs(nor.getY(i));
+      const az = Math.abs(nor.getZ(i));
+      if (ax >= ay && ax >= az) {
+        uv[i * 2] = z / tile;
+        uv[i * 2 + 1] = y / tile;
+      } else if (ay >= az) {
+        uv[i * 2] = x / tile;
+        uv[i * 2 + 1] = z / tile;
+      } else {
+        uv[i * 2] = x / tile;
+        uv[i * 2 + 1] = y / tile;
       }
     }
-    ctx.putImageData(img, 0, 0);
-    return canvasTex(c, { repeat: true });
+    const wy = y + y0;
+    const k = tone * (0.8 + 0.2 * smoothstep(0.05, 1.4, wy));
+    col[i * 3] = k;
+    col[i * 3 + 1] = k;
+    col[i * 3 + 2] = k * 0.995;
+  }
+  n.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  n.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  n.clearGroups();
+  return n;
+}
+
+function smoothstep(e0: number, e1: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+}
+
+// ---------------------------------------------------------------------------
+// Per-vertex material parts: merge differently colored / finished static parts into ONE draw call
+// ---------------------------------------------------------------------------
+
+export interface VcFinish {
+  color: string;
+  roughness?: number;
+  metalness?: number;
+}
+
+const vcColor = new THREE.Color();
+/**
+ * Tag a geometry with a per-vertex finish (color, roughness, metalness) for `vcMaterial()`. Returns a
+ * non-indexed copy with position/normal/uv/color/aRM attributes (merge several with `mergeVc`).
+ */
+export function vc(g: THREE.BufferGeometry, f: VcFinish): THREE.BufferGeometry {
+  const n = g.index ? g.toNonIndexed() : g.clone();
+  for (const name of Object.keys(n.attributes)) if (name !== 'position' && name !== 'normal' && name !== 'uv') n.deleteAttribute(name);
+  if (!n.attributes.normal) n.computeVertexNormals();
+  const count = n.attributes.position!.count;
+  if (!n.attributes.uv) n.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(count * 2), 2));
+  vcColor.set(f.color);
+  const col = new Float32Array(count * 3);
+  const rm = new Float32Array(count * 2);
+  const r = f.roughness ?? 0.5;
+  const m = f.metalness ?? 0;
+  for (let i = 0; i < count; i++) {
+    col[i * 3] = vcColor.r;
+    col[i * 3 + 1] = vcColor.g;
+    col[i * 3 + 2] = vcColor.b;
+    rm[i * 2] = r;
+    rm[i * 2 + 1] = m;
+  }
+  n.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  n.setAttribute('aRM', new THREE.Float32BufferAttribute(rm, 2));
+  n.clearGroups();
+  return n;
+}
+
+/** Merge `vc()`-tagged parts. */
+export function mergeVc(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const merged = mergeGeometries(parts, false);
+  if (!merged) throw new Error('mergeVc: incompatible geometries (tag every part with vc())');
+  return merged;
+}
+
+/** Merge `galvPrep()`-prepared parts (one draw with `tmats.galvanized()`). */
+export function mergeGalv(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const merged = mergeGeometries(parts, false);
+  if (!merged) throw new Error('mergeGalv: prepare every part with galvPrep()');
+  return merged;
+}
+
+/** Common finishes for `vc()`. */
+export const FINISH = {
+  hardware: { color: '#9a9fa3', roughness: 0.4, metalness: 0.9 },
+  stainless: { color: '#c3c7ca', roughness: 0.28, metalness: 0.95 },
+  darkMetal: { color: '#6f7478', roughness: 0.45, metalness: 0.85 },
+  blackPlastic: { color: '#141516', roughness: 0.6, metalness: 0.02 },
+  rubber: { color: '#121212', roughness: 0.92, metalness: 0 },
+} as const satisfies Record<string, VcFinish>;
+
+function vcShader(s: { vertexShader: string; fragmentShader: string }): void {
+  s.vertexShader = s.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute vec2 aRM;\nvarying vec2 vRM;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvRM = aRM;');
+  s.fragmentShader = s.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying vec2 vRM;')
+    .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n\troughnessFactor = vRM.x;\n\tmetalnessFactor = vRM.y;');
+}
+
+/** Material for merged `vc()` parts (per-vertex color, roughness & metalness). Shared. */
+export function vcMaterial(): THREE.MeshStandardMaterial {
+  return sharedMat('tr:vc', () => {
+    const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0 });
+    m.onBeforeCompile = vcShader;
+    m.customProgramCacheKey = () => 'tr-vc';
+    return m;
   });
 }
 
@@ -413,12 +596,11 @@ export const tmats = {
     sharedMat(`tr:metal:${color}:${roughness}`, () => new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.95 })),
   rubber: (color = '#141414') =>
     sharedMat(`tr:rubber:${color}`, () => new THREE.MeshStandardMaterial({ color, roughness: 0.92, metalness: 0 })),
+  /** Hot-dip galvanized steel. Geometry must be prepared with `galvPrep()` (world UVs + weathering colors). */
   galvanized: () =>
-    sharedMat('tr:galv', () => {
-      const map = galvanizedTexture().clone();
-      map.repeat.set(3, 8);
-      map.needsUpdate = true;
-      return new THREE.MeshStandardMaterial({ color: TRAFFIC_COLORS.galvanized, map, roughness: 0.42, metalness: 0.75 });
+    sharedMat('tr:galv2', () => {
+      const { color, rough } = galvanizedMaps();
+      return new THREE.MeshStandardMaterial({ color: TRAFFIC_COLORS.galvanized, map: color, roughnessMap: rough, roughness: 1, metalness: 0.72, vertexColors: true });
     }),
   /** Retroreflective sheeting: bright, a bit glossy (catches headlights/sun). */
   retro: (color: string = TRAFFIC_COLORS.retroYellow) =>
@@ -537,9 +719,58 @@ export function usePress(onPress?: () => void, onRelease?: () => void) {
   return { hovered, handlers };
 }
 
+/**
+ * Click handler with hover feedback (pointer cursor while hovered). Spread `handlers` on the clickable
+ * group; show your own highlight (e.g. `<HoverShell/>`) while `hovered` is true.
+ */
+export function useClickable(onClick?: () => void) {
+  const enabled = !!onClick;
+  const [hovered, setHovered] = useState(false);
+  useCursor(hovered && enabled);
+  const cb = useRef(onClick);
+  useEffect(() => {
+    cb.current = onClick;
+  }, [onClick]);
+  const handlers = enabled
+    ? {
+        onPointerOver: (e: ThreeEvent<PointerEvent>) => {
+          e.stopPropagation();
+          setHovered(true);
+        },
+        onPointerOut: () => setHovered(false),
+        onPointerDown: (e: ThreeEvent<PointerEvent>) => {
+          e.stopPropagation();
+          if (e.button !== 0) return;
+          cb.current?.();
+        },
+      }
+    : {};
+  return { hovered: hovered && enabled, handlers };
+}
+
+/** Additive cyan "selected" glow drawn over a hovered part (same geometry, slightly inflated). */
+export function hoverMat(): THREE.MeshBasicMaterial {
+  return sharedMat(
+    'tr:hover',
+    () =>
+      new THREE.MeshBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0.22,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        polygonOffsetUnits: -4,
+      }),
+  );
+}
+
 /** Invisible (but raycastable) material for enlarged hit areas. */
 export function hitMat(): THREE.MeshBasicMaterial {
-  return sharedMat('tr:hit', () => new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false }));
+  // material.visible = false: the renderer skips it (no draw call) but raycasting still hits it
+  return sharedMat('tr:hit', () => new THREE.MeshBasicMaterial({ visible: false }));
 }
 
 export const damp = THREE.MathUtils.damp;

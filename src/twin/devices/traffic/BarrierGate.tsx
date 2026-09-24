@@ -15,21 +15,26 @@ import * as THREE from 'three';
 import type { LedColor, LedMode } from '../../common';
 import type { Placement } from '../../contracts';
 import {
+  FINISH,
   boxGeo,
   canvasTex,
   cylY,
   cylZ,
+  hoverMat,
   ledOn,
   makeCanvas,
   mergeAll,
+  mergeVc,
   planeGeo,
   roundedBox,
   roundedRectShape,
   sharedGeo,
   sharedMat,
   sharedTex,
-  tmats,
+  useClickable,
   useDisposable,
+  vc,
+  vcMaterial,
   xf,
 } from './shared';
 
@@ -46,15 +51,28 @@ export interface BarrierGateProps extends Placement {
   getArmLights?: () => LedMode;
   /** Fork rest post under the arm tip. */
   rest?: boolean;
-  /** Clicking the gate (e.g. to inspect it). */
+  /** Clicking the gate (e.g. to inspect it). Shows a pointer cursor + highlight on hover. */
   onClick?: () => void;
 }
 
+/** Common cabinet finishes. */
+export const BARRIER_COLORS = {
+  /** Safety orange (default). */
+  orange: '#e8761c',
+  /** Steel blue, RAL 5011. */
+  steelBlue: '#233a52',
+  /** Brushed stainless option. */
+  stainless: '#c6cbd0',
+  /** Traffic white, RAL 9016. */
+  white: '#eef0ec',
+} as const;
+
+/** FAAC B680H-class cabinet: 469 W × 279 D × 1100 H mm. */
 export const BARRIER_DIMS = {
-  cabinetW: 0.36,
-  cabinetD: 0.28,
-  cabinetH: 1.02,
-  pivotY: 0.9,
+  cabinetW: 0.469,
+  cabinetD: 0.279,
+  cabinetH: 1.1,
+  pivotY: 0.98,
   /** Arm plane offset in front of the cabinet (+Z). */
   armZ: 0.2,
   armH: 0.1,
@@ -112,11 +130,14 @@ function labelTexture(): THREE.CanvasTexture {
   });
 }
 
-/** Cabinet (static) geometry: body, domed top, base plate, hub, door outline. */
-function cabinetGeoms() {
-  return sharedGeo('gate:cabinet', () => {
+/** Cabinet (static) parts in one per-vertex-finish mesh: body, domed top, base plate & anchors, rear
+ * service door + lock, side louvers, LED bar housing, drive hub. */
+function cabinetGeometry(color: string): THREE.BufferGeometry {
+  return sharedGeo(`gate:cabinet2:${color}`, () => {
+    const paint = { color, roughness: 0.42, metalness: color === BARRIER_COLORS.stainless ? 0.85 : 0.25 };
     const parts: THREE.BufferGeometry[] = [];
-    parts.push(xf(roundedBox(G.cabinetW, G.cabinetH - 0.08, G.cabinetD, 0.03, 3), [0, (G.cabinetH - 0.08) / 2 + 0.02, 0]));
+    const add = (g: THREE.BufferGeometry, f: { color: string; roughness?: number; metalness?: number }, pos?: [number, number, number], rot?: [number, number, number]) => parts.push(vc(xf(g, pos, rot), f));
+    add(roundedBox(G.cabinetW, G.cabinetH - 0.08, G.cabinetD, 0.03, 3), paint, [0, (G.cabinetH - 0.08) / 2 + 0.02, 0]);
     // domed top cover (slightly larger)
     const top = new THREE.ExtrudeGeometry(roundedRectShape(G.cabinetW + 0.02, G.cabinetD + 0.02, 0.05), {
       depth: 0.04,
@@ -127,24 +148,41 @@ function cabinetGeoms() {
       curveSegments: 8,
     });
     top.rotateX(-Math.PI / 2);
-    parts.push(xf(top, [0, G.cabinetH - 0.075, 0]));
-    return mergeAll(parts);
-  });
-}
-
-function baseGeom() {
-  return sharedGeo('gate:base', () => {
-    const parts: THREE.BufferGeometry[] = [xf(roundedBox(G.cabinetW + 0.1, 0.02, G.cabinetD + 0.1, 0.006, 1), [0, 0.01, 0])];
+    add(top, paint, [0, G.cabinetH - 0.075, 0]);
+    // base plate + anchors
+    const metal = { color: '#8e9398', roughness: 0.45, metalness: 0.9 };
+    add(roundedBox(G.cabinetW + 0.1, 0.02, G.cabinetD + 0.1, 0.006, 1), metal, [0, 0.01, 0]);
     for (const [x, z] of [
       [1, 1],
       [-1, 1],
       [1, -1],
       [-1, -1],
     ] as const) {
-      parts.push(xf(cylY(0.013, 0.013, 0.05, 8), [x * (G.cabinetW / 2 + 0.03), 0.03, z * (G.cabinetD / 2 + 0.03)]));
-      parts.push(xf(cylY(0.018, 0.018, 0.016, 6), [x * (G.cabinetW / 2 + 0.03), 0.028, z * (G.cabinetD / 2 + 0.03)]));
+      add(cylY(0.013, 0.013, 0.05, 8), metal, [x * (G.cabinetW / 2 + 0.03), 0.03, z * (G.cabinetD / 2 + 0.03)]);
+      add(cylY(0.018, 0.018, 0.016, 6), metal, [x * (G.cabinetW / 2 + 0.03), 0.028, z * (G.cabinetD / 2 + 0.03)]);
     }
-    return mergeAll(parts);
+    // service door on the back (−Z): recessed seam + panel + lock
+    add(roundedBox(G.cabinetW - 0.07, G.cabinetH - 0.26, 0.004, 0.02, 2), FINISH.blackPlastic, [0, 0.52, -G.cabinetD / 2 - 0.0005]);
+    add(roundedBox(G.cabinetW - 0.08, G.cabinetH - 0.27, 0.006, 0.018, 2), paint, [0, 0.52, -G.cabinetD / 2 - 0.002]);
+    add(cylZ(0.014, 0.014, 0.012, 16), FINISH.stainless, [G.cabinetW / 2 - 0.08, 0.78, -G.cabinetD / 2 - 0.008]);
+    // vent louvers on the sides
+    for (const sx of [-1, 1]) for (const y of [0.2, 0.24, 0.28, 0.32]) add(boxGeo(0.004, 0.012, G.cabinetD * 0.55), FINISH.blackPlastic, [sx * (G.cabinetW / 2 + 0.001), y, 0]);
+    // LED status light bar housing on the top cover
+    add(roundedBox(0.24, 0.03, 0.05, 0.012, 2), { color: '#1b1b1b', roughness: 0.4, metalness: 0.05 }, [0, G.cabinetH + 0.012, 0.06]);
+    // drive hub on the front face
+    add(cylZ(0.085, 0.09, 0.05, 32), { color: '#9da2a6', roughness: 0.35, metalness: 0.9 }, [0, G.pivotY, G.cabinetD / 2 + 0.025]);
+    return mergeVc(parts);
+  });
+}
+
+/** Compact boom holder (clamp plates + shaft cap + bolts) — stays within the cabinet outline. */
+function holderGeometry(): THREE.BufferGeometry {
+  return sharedGeo('gate:holder', () => {
+    const al = { color: '#b4b8bc', roughness: 0.3, metalness: 0.9 };
+    const parts: THREE.BufferGeometry[] = [vc(xf(roundedBox(0.3, G.armH + 0.05, 0.06, 0.012, 2), [0.08, 0, -0.01]), al)];
+    parts.push(vc(xf(cylZ(0.035, 0.035, 0.02, 20), [0, 0, 0.03]), { color: '#7d8286', roughness: 0.35, metalness: 0.9 }));
+    for (const x of [-0.03, 0.08, 0.19]) for (const y of [-0.045, 0.045]) parts.push(vc(xf(cylZ(0.008, 0.008, 0.01, 6), [x, y, 0.025]), FINISH.darkMetal));
+    return mergeVc(parts);
   });
 }
 
@@ -157,27 +195,29 @@ function armGeoms(len: number) {
   });
 }
 
-// sharedGeo caches BufferGeometry only; keep detail groups in their own map
-const detailCache = new Map<number, { rubber: THREE.BufferGeometry; refl: THREE.BufferGeometry; leds: THREE.BufferGeometry }>();
-function armDetails(len: number) {
-  let d = detailCache.get(len);
-  if (!d) {
-    d = buildArmDetails(len);
-    detailCache.set(len, d);
-  }
-  return d;
+/** Boom details in one per-vertex-finish mesh: rubber skirt, end cap, red reflectors. */
+function armDetails(len: number): THREE.BufferGeometry {
+  return sharedGeo(`gate:armDetails:${len}`, () => {
+    const parts: THREE.BufferGeometry[] = [];
+    parts.push(vc(xf(roundedBox(len - 0.1, 0.035, G.armT * 0.7, 0.01, 2), [len / 2 + 0.07, -G.armH / 2 - 0.016, 0]), FINISH.rubber));
+    parts.push(vc(xf(roundedBox(0.04, G.armH + 0.035, G.armT + 0.012, 0.01, 2), [len + 0.035, -0.017, 0]), FINISH.rubber));
+    for (let x = 0.7; x < len - 0.2; x += 0.9) {
+      for (const z of [G.armT / 2 + 0.001, -G.armT / 2 - 0.001]) parts.push(vc(xf(boxGeo(0.07, 0.035, 0.002), [x, 0, z]), { color: '#e0141a', roughness: 0.3, metalness: 0.1 }));
+    }
+    return mergeVc(parts);
+  });
 }
-function buildArmDetails(len: number) {
-  const rubber: THREE.BufferGeometry[] = [];
-  rubber.push(xf(roundedBox(len - 0.1, 0.035, G.armT * 0.7, 0.01, 2), [len / 2 + 0.07, -G.armH / 2 - 0.016, 0]));
-  rubber.push(xf(roundedBox(0.04, G.armH + 0.035, G.armT + 0.012, 0.01, 2), [len + 0.035, -0.017, 0]));
-  const refl: THREE.BufferGeometry[] = [];
-  for (let x = 0.7; x < len - 0.2; x += 0.9) {
-    for (const z of [G.armT / 2 + 0.001, -G.armT / 2 - 0.001]) refl.push(xf(boxGeo(0.07, 0.035, 0.002), [x, 0, z]));
-  }
-  const leds: THREE.BufferGeometry[] = [];
-  for (let x = 0.4; x < len - 0.1; x += 0.3) leds.push(xf(cylY(0.007, 0.007, 0.006, 10), [x, G.armH / 2 + 0.003, 0]));
-  return { rubber: mergeAll(rubber), refl: mergeAll(refl), leds: mergeAll(leds) };
+
+function armLeds(len: number): THREE.BufferGeometry {
+  return sharedGeo(`gate:armLeds:${len}`, () => {
+    const leds: THREE.BufferGeometry[] = [];
+    for (let x = 0.4; x < len - 0.1; x += 0.3) leds.push(xf(cylY(0.007, 0.007, 0.006, 10), [x, G.armH / 2 + 0.003, 0]));
+    return mergeAll(leds);
+  });
+}
+
+function labelMat(): THREE.MeshStandardMaterial {
+  return sharedMat('gate:labelMat', () => new THREE.MeshStandardMaterial({ map: labelTexture(), roughness: 0.5 }));
 }
 
 const LED_RGB: Record<LedColor, THREE.Color> = {
@@ -193,7 +233,7 @@ export function BarrierGate({
   getPosition,
   armLength = 3.6,
   side = 'right',
-  housingColor = '#e8761c',
+  housingColor = BARRIER_COLORS.orange,
   getLed,
   getArmLights,
   rest = false,
@@ -237,69 +277,46 @@ export function BarrierGate({
     armLedMat.emissiveIntensity = g.current.getArmLights && ledOn(g.current.getArmLights(), t) ? 4 : 0;
   });
 
-  const housing = tmats.paint(housingColor, 0.42, 0.25);
-  const details = armDetails(armLength);
-  const handlers = onClick
-    ? {
-        onPointerDown: (e: { stopPropagation: () => void }) => {
-          e.stopPropagation();
-          onClick();
-        },
-      }
-    : {};
+  const { hovered, handlers } = useClickable(onClick);
+  const cabinet = cabinetGeometry(housingColor);
   return (
     <group position={position} rotation={rotation} scale={scale}>
       <group {...handlers}>
-        <mesh geometry={cabinetGeoms()} material={housing} castShadow receiveShadow />
-        <mesh geometry={baseGeom()} material={tmats.metal('#8e9398', 0.45)} castShadow receiveShadow />
-        {/* service door on the back (−Z): recessed seam + lock */}
-        <mesh geometry={roundedBox(G.cabinetW - 0.07, G.cabinetH - 0.26, 0.004, 0.02, 2)} material={tmats.plastic('#1a1a1a', 0.8)} position={[0, 0.5, -G.cabinetD / 2 - 0.0005]} />
-        <mesh geometry={roundedBox(G.cabinetW - 0.08, G.cabinetH - 0.27, 0.006, 0.018, 2)} material={housing} position={[0, 0.5, -G.cabinetD / 2 - 0.002]} />
-        <mesh geometry={cylZ(0.014, 0.014, 0.012, 16)} material={tmats.metal('#c9cdd0', 0.25)} position={[G.cabinetW / 2 - 0.08, 0.72, -G.cabinetD / 2 - 0.008]} />
-        {/* vent louvers on the sides */}
-        {[-1, 1].map((sx) =>
-          [0.2, 0.24, 0.28, 0.32].map((y) => (
-            <mesh key={`${sx}:${y}`} geometry={boxGeo(0.004, 0.012, G.cabinetD * 0.55)} material={tmats.plastic('#151515', 0.8)} position={[sx * (G.cabinetW / 2 + 0.001), y, 0]} />
-          )),
-        )}
+        <mesh geometry={cabinet} material={vcMaterial()} castShadow receiveShadow />
+        {hovered && <mesh geometry={cabinet} material={hoverMat()} />}
         {/* warning label on the front */}
-        <mesh geometry={planeGeo(0.2, 0.1)} position={[0, 0.45, G.cabinetD / 2 + 0.001]}>
-          <meshStandardMaterial map={labelTexture()} roughness={0.5} />
-        </mesh>
-        {/* LED status light bar on the top cover */}
-        <mesh geometry={roundedBox(0.2, 0.03, 0.05, 0.012, 2)} material={tmats.plastic('#1b1b1b', 0.4)} position={[0, G.cabinetH + 0.012, 0.06]} />
-        <mesh geometry={roundedBox(0.18, 0.022, 0.045, 0.01, 2)} material={ledMat} position={[0, G.cabinetH + 0.02, 0.06]} />
-        {/* drive hub on the front face */}
-        <mesh geometry={cylZ(0.085, 0.09, 0.05, 32)} material={tmats.metal('#9da2a6', 0.35)} position={[0, G.pivotY, G.cabinetD / 2 + 0.025]} castShadow />
+        <mesh geometry={planeGeo(0.22, 0.11)} position={[0, 0.45, G.cabinetD / 2 + 0.001]} material={labelMat()} />
+        {/* LED status light bar */}
+        <mesh geometry={roundedBox(0.22, 0.022, 0.045, 0.01, 2)} material={ledMat} position={[0, G.cabinetH + 0.02, 0.06]} />
       </group>
       {/* rotating arm assembly */}
       <group ref={arm} position={[0, G.pivotY, G.armZ]}>
         <group scale={[dir, 1, 1]}>
-          {/* arm holder bracket + shaft cap */}
-          <mesh geometry={roundedBox(0.28, G.armH + 0.05, 0.06, 0.012, 2)} material={tmats.metal('#b4b8bc', 0.3)} position={[0.04, 0, -0.01]} castShadow />
-          <mesh geometry={cylZ(0.035, 0.035, 0.02, 20)} material={tmats.metal('#7d8286', 0.35)} position={[0, 0, 0.03]} />
-          {[-0.06, 0.06, 0.14].map((x) =>
-            [-0.045, 0.045].map((y) => <mesh key={`${x}:${y}`} geometry={cylZ(0.008, 0.008, 0.01, 6)} material={tmats.metal('#6f7478', 0.4)} position={[x, y, 0.025]} />),
-          )}
-          {/* counterweight stub behind the pivot */}
-          <mesh geometry={roundedBox(0.22, G.armH * 0.9, G.armT, 0.01, 2)} material={tmats.plastic('#141414', 0.6)} position={[-0.18, 0, 0]} castShadow />
+          <mesh geometry={holderGeometry()} material={vcMaterial()} castShadow />
           <mesh geometry={armGeoms(armLength)} material={stripeMat(armLength)} castShadow />
-          <mesh geometry={details.rubber} material={tmats.rubber('#121212')} castShadow />
-          <mesh geometry={details.refl} material={tmats.retro('#e0141a')} />
-          {getArmLights && <mesh geometry={details.leds} material={armLedMat} />}
+          <mesh geometry={armDetails(armLength)} material={vcMaterial()} castShadow />
+          {getArmLights && <mesh geometry={armLeds(armLength)} material={armLedMat} />}
         </group>
       </group>
       {rest && (
         <group position={[dir * (armLength - 0.1), 0, G.armZ]}>
-          <mesh geometry={cylY(0.03, 0.03, G.pivotY - 0.08, 16)} material={tmats.paint(housingColor, 0.45, 0.25)} position={[0, (G.pivotY - 0.08) / 2, 0]} castShadow />
-          <mesh geometry={roundedBox(0.14, 0.02, 0.1, 0.005, 1)} material={tmats.metal('#8e9398', 0.45)} position={[0, 0.01, 0]} />
-          {/* fork */}
-          <mesh geometry={roundedBox(0.08, 0.02, 0.08, 0.005, 1)} material={tmats.rubber()} position={[0, G.pivotY - G.armH / 2 - 0.045, 0]} />
-          {[-1, 1].map((sz) => (
-            <mesh key={sz} geometry={boxGeo(0.06, 0.08, 0.008)} material={tmats.rubber()} position={[0, G.pivotY - G.armH / 2 - 0.005, sz * (G.armT / 2 + 0.008)]} />
-          ))}
+          <mesh geometry={restGeometry(housingColor)} material={vcMaterial()} castShadow receiveShadow />
         </group>
       )}
     </group>
   );
+}
+
+/** Fork rest post under the boom tip. */
+function restGeometry(color: string): THREE.BufferGeometry {
+  return sharedGeo(`gate:rest:${color}`, () => {
+    const paint = { color, roughness: 0.45, metalness: 0.25 };
+    const metal = { color: '#8e9398', roughness: 0.45, metalness: 0.9 };
+    const parts: THREE.BufferGeometry[] = [];
+    parts.push(vc(xf(cylY(0.03, 0.03, G.pivotY - 0.08, 16), [0, (G.pivotY - 0.08) / 2, 0]), paint));
+    parts.push(vc(xf(roundedBox(0.14, 0.02, 0.1, 0.005, 1), [0, 0.01, 0]), metal));
+    parts.push(vc(xf(roundedBox(0.08, 0.02, 0.08, 0.005, 1), [0, G.pivotY - G.armH / 2 - 0.045, 0]), FINISH.rubber));
+    for (const sz of [-1, 1]) parts.push(vc(xf(boxGeo(0.06, 0.08, 0.008), [0, G.pivotY - G.armH / 2 - 0.005, sz * (G.armT / 2 + 0.008)]), FINISH.rubber));
+    return mergeVc(parts);
+  });
 }

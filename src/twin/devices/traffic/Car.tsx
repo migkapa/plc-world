@@ -1,25 +1,32 @@
 /**
- * Stylized mid-poly passenger cars (sedan, hatchback, SUV, taxi) for the traffic & parking scenes.
+ * Passenger cars (sedan, hatchback, SUV, taxi) for the traffic & parking scenes.
  *
- * Construction: side-profile silhouettes (with real wheel-arch cut-outs) extruded across the car
- * width with rounded bevels, then shaped per vertex (plan-view nose/tail taper, cabin tumblehome,
- * tucked rocker). The greenhouse is a glass extrusion framed by body-colored pillars/roof skin with
- * window openings; door cut lines, handles, rocker trim and fuel door are a grayscale side texture
- * multiplied by the (clear-coated) paint. Lamps are unlit HDR materials (brake lights bloom).
+ * Construction (see carBody.ts): the lower body and the greenhouse are LOFTED GRIDS with smooth
+ * normals — rounded bumper fascias (nose/tail plan radius ≈ 0.3–0.5 m, bullnose side profile), real
+ * wheel-arch openings with black wells and a tight arch gap, bulged doors, shoulder shelf, tumblehome,
+ * crowned hood and roof. One body atlas carries paint vs. glass vs. gloss-black trim vs. chrome
+ * (per-texel clearcoat / roughness / paint mask), door cuts and handles; fascia parts (grille with a
+ * honeycomb mesh, lower intake with fog pods, plates, rear diffuser) and the lamp clusters (angular
+ * headlamps with projectors, DRL light guide and turn segment; wrap-around LED tail lamps) are decals
+ * PROJECTED onto the body surface so they sit flush. Lamps are clear-coated physical lenses whose
+ * emission (DRL, low beam, tail, brake, turn, taxi sign) is driven per car. Wheels: tire with tread
+ * grooves, 10-spoke concave alloy with a dark barrel, lug nuts, brake disc and caliper.
  *
  * Conventions (match the scene logics' pose helpers): the car FRONT faces +X, Y up, origin = car
  * center on the ground (x = 0 halfway between the bumpers). Right side = +Z.
  *
- *  - <Car/>       one car (≈16 draw calls; geometry & materials shared per style/color).
- *  - <CarFleet/>  many cars in ≈30 draw calls total (InstancedMesh per style/part, per-instance paint
- *                 color, wheel spin, brake/head/turn lamps). Use this for traffic.
+ *  - <Car/>       one car (≈ 10 draw calls; geometry & materials shared per style/color).
+ *  - <CarFleet/>  many cars in ≈ 23 draw calls total (InstancedMesh per style/part, per-instance paint
+ *                 color, solid vs metallic paint meshes, wheel spin/steer, lamp levels).
  */
 import { useFrame } from '@react-three/fiber';
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Placement } from '../../contracts';
-import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { canvasTex, cylY, makeCanvas, mergeAll, roundedBox, sharedMat, sharedTex, tmats, useDisposable, xf } from './shared';
+import { buildBody, UV_PAINT, type BodyStyle, type BuiltBody, type DecalSpec } from './carBody';
+import { DECAL_CELLS, LAMP_CELLS, bodyAtlas, decalAtlas, lampAtlas, type BodyAtlas } from './carTextures';
+import { FINISH, cylY, hoverMat, mergeVc, sharedMat, useClickable, useDisposable, vc, vcMaterial, xf, type VcFinish } from './shared';
 
 // ---------------------------------------------------------------------------
 // Styles & variants
@@ -31,8 +38,8 @@ export type CarColorName = 'white' | 'silver' | 'black' | 'red' | 'blue' | 'gray
 export const CAR_PAINT: Record<CarColorName, { hex: string; metallic: boolean }> = {
   white: { hex: '#e8eaeb', metallic: false },
   silver: { hex: '#a9afb5', metallic: true },
-  black: { hex: '#141619', metallic: true },
-  red: { hex: '#a8101a', metallic: false },
+  black: { hex: '#121417', metallic: true },
+  red: { hex: '#a30f19', metallic: false },
   blue: { hex: '#1c3c8c', metallic: true },
   gray: { hex: '#4a5056', metallic: true },
   yellow: { hex: '#f0b400', metallic: false },
@@ -61,376 +68,298 @@ export function carVariant(variant: number): { style: CarStyle; color: CarColorN
   return VARIANTS[((Math.floor(variant) % n) + n) % n]!;
 }
 
-interface StyleDef {
-  /** Geometry style (taxi = sedan body). */
-  base: 'sedan' | 'hatchback' | 'suv';
-  width: number;
-  cabinWidth: number;
-  wheelR: number;
-  archR: number;
-  axleF: number;
-  axleR: number;
-  tireW: number;
-  bottomY: number;
-  bottomStart: [number, number];
-  front: [number, number][];
-  top: [number, number][];
-  rear: [number, number][];
-  cabin: [number, number][];
-  roof: [number, number][];
-  windows: [number, number][][];
-  beltY: number;
-  roofY: number;
-  tumble: number;
-  /** Door cut lines (x) and handle positions. */
-  seams: number[];
-  handles: number[];
-  handleY: number;
-  lampY: { head: number; tail: number; plateF: number; plateR: number };
-  frontX: number;
-  rearX: number;
-}
+const cell = (c: readonly [number, number, number, number]) => [...c] as [number, number, number, number];
+const D = (at: [number, number, number], yaw: number, size: [number, number], c: readonly [number, number, number, number], offset: number, grid?: [number, number]): DecalSpec => ({
+  at,
+  yaw,
+  size,
+  cell: cell(c),
+  offset,
+  grid,
+});
 
-const SEDAN: StyleDef = {
+/** Mid-size sedan (≈ 4.80 × 1.84 × 1.44 m, 2.82 m wheelbase, 235/45R18). */
+const SEDAN: BodyStyle = {
   base: 'sedan',
-  width: 1.8,
-  cabinWidth: 1.6,
-  wheelR: 0.32,
-  archR: 0.378,
-  axleF: 1.36,
-  axleR: -1.34,
-  tireW: 0.215,
-  bottomY: 0.25,
-  bottomStart: [-2.05, 0.25],
-  front: [
-    [1.95, 0.25],
-    [2.17, 0.29],
-    [2.25, 0.42],
-    [2.24, 0.6],
-    [2.15, 0.7],
-    [1.6, 0.8],
-    [1.0, 0.875],
-  ],
-  top: [
-    [0.92, 0.885],
-    [-1.3, 0.925],
-    [-1.62, 0.955],
-    [-2.12, 0.955],
-  ],
-  rear: [
-    [-2.23, 0.88],
-    [-2.26, 0.62],
-    [-2.23, 0.36],
+  W: 1.84,
+  wheelR: 0.335,
+  tireW: 0.225,
+  archGap: 0.03,
+  axleF: 1.44,
+  axleR: -1.38,
+  lower: [
+    [2.4, 0.48],
+    [2.395, 0.6],
+    [2.37, 0.675],
+    [2.31, 0.72],
+    [2.2, 0.745],
+    [1.9, 0.78],
+    [1.4, 0.835],
+    [1.0, 0.89],
+    [0.6, 0.925],
+    [-0.4, 0.955],
+    [-1.2, 0.985],
+    [-1.7, 1.005],
+    [-2.1, 1.02],
+    [-2.3, 1.015],
+    [-2.37, 0.975],
+    [-2.4, 0.88],
+    [-2.4, 0.62],
+    [-2.38, 0.46],
+    [-2.31, 0.35],
     [-2.12, 0.27],
-  ],
-  cabin: [
-    [1.04, 0.86],
-    [0.12, 1.38],
-    [-0.4, 1.42],
-    [-0.98, 1.38],
-    [-1.74, 0.94],
-    [-1.72, 0.86],
+    [-1.8, 0.225],
+    [0.0, 0.21],
+    [1.9, 0.215],
+    [2.18, 0.235],
+    [2.33, 0.28],
+    [2.39, 0.37],
   ],
   roof: [
-    [0.12, 1.38],
-    [-0.4, 1.42],
-    [-0.98, 1.38],
+    [0.98, 0.895],
+    [0.7, 1.06],
+    [0.4, 1.23],
+    [0.12, 1.36],
+    [-0.12, 1.425],
+    [-0.45, 1.445],
+    [-0.85, 1.44],
+    [-1.1, 1.41],
+    [-1.35, 1.32],
+    [-1.6, 1.17],
+    [-1.82, 1.035],
   ],
+  planF: [0.3, 0.42, 2.8],
+  planR: [0.2, 0.34, 3],
+  ghPlanF: [0.35, 0.3],
+  ghPlanR: [0.3, 0.3],
+  shelf: 0.035,
+  tumble: 0.15,
+  rTop: 0.04,
+  rBot: 0.06,
+  bulge: 0.025,
+  crease: [0.66, 0.87],
+  creaseLean: 0.16,
+  crownHood: 0.035,
+  crownDeck: 0.025,
+  roofR: 0.09,
+  roofCrown: 0.035,
+  xWsTop: -0.05,
+  xRoofRear: -1.08,
   windows: [
-    [
-      [0.76, 1.0],
-      [0.16, 1.335],
-      [-0.27, 1.36],
-      [-0.27, 1.0],
-    ],
-    [
-      [-0.36, 1.0],
-      [-0.36, 1.36],
-      [-0.93, 1.335],
-      [-1.44, 1.03],
-      [-1.44, 1.0],
-    ],
+    { x0: -0.26, x1: 0.98 },
+    { x0: -1.34, x1: -0.36, rakeRear: 0.22 },
   ],
-  beltY: 0.95,
-  roofY: 1.42,
-  tumble: 0.2,
-  seams: [0.93, -0.31, -1.02],
-  handles: [-0.22, -0.93],
-  handleY: 0.84,
-  lampY: { head: 0.64, tail: 0.83, plateF: 0.4, plateR: 0.55 },
-  frontX: 2.25,
-  rearX: -2.26,
+  blackPillars: [[-0.36, -0.26]],
+  seams: [1.02, -0.31, -1.3],
+  handles: [-0.13, -1.12],
+  handleDrop: 0.11,
+  cladding: false,
+  head: D([2.26, 0.665, 0.62], 0.5, [0.52, 0.15], LAMP_CELLS.head, 0.004),
+  tail: D([-2.34, 0.88, 0.63], Math.PI - 0.55, [0.5, 0.13], LAMP_CELLS.tail, 0.004),
+  grille: D([2.4, 0.53, 0], 0, [0.8, 0.2], DECAL_CELLS.grille, 0.003),
+  intake: D([2.4, 0.33, 0], 0, [1.25, 0.13], DECAL_CELLS.intake, 0.003),
+  plateF: D([2.4, 0.4, 0], 0, [0.305, 0.152], DECAL_CELLS.plate, 0.008, [8, 4]),
+  plateR: D([-2.4, 0.66, 0], Math.PI, [0.305, 0.152], DECAL_CELLS.plate, 0.006, [8, 4]),
+  valance: D([-2.4, 0.37, 0], Math.PI, [1.4, 0.13], DECAL_CELLS.valance, 0.003),
+  splitter: D([2.36, 0.245, 0], 0, [1.35, 0.05], DECAL_CELLS.splitter, 0.003, [18, 2]),
 };
 
-const HATCH: StyleDef = {
+/** C-segment hatchback (≈ 4.28 × 1.79 × 1.46 m, 2.63 m wheelbase, 225/45R17). */
+const HATCH: BodyStyle = {
+  ...SEDAN,
   base: 'hatchback',
-  width: 1.76,
-  cabinWidth: 1.58,
-  wheelR: 0.31,
-  archR: 0.366,
-  axleF: 1.25,
-  axleR: -1.27,
-  tireW: 0.205,
-  bottomY: 0.24,
-  bottomStart: [-1.8, 0.24],
-  front: [
-    [1.72, 0.24],
-    [1.93, 0.28],
-    [2.0, 0.42],
-    [1.99, 0.6],
-    [1.9, 0.71],
-    [1.4, 0.81],
-    [0.95, 0.88],
-  ],
-  top: [
-    [0.9, 0.89],
-    [-1.72, 0.95],
-  ],
-  rear: [
-    [-1.98, 0.92],
-    [-2.0, 0.6],
-    [-1.97, 0.36],
-    [-1.86, 0.26],
-  ],
-  cabin: [
-    [0.98, 0.86],
-    [0.08, 1.42],
-    [-0.6, 1.455],
-    [-1.3, 1.45],
-    [-1.74, 1.39],
-    [-1.94, 0.98],
-    [-1.9, 0.86],
+  W: 1.79,
+  wheelR: 0.317,
+  tireW: 0.215,
+  archGap: 0.03,
+  axleF: 1.27,
+  axleR: -1.36,
+  lower: [
+    [2.14, 0.48],
+    [2.135, 0.6],
+    [2.11, 0.68],
+    [2.05, 0.73],
+    [1.93, 0.765],
+    [1.65, 0.8],
+    [1.25, 0.85],
+    [0.92, 0.905],
+    [0.5, 0.935],
+    [-0.5, 0.965],
+    [-1.3, 0.99],
+    [-1.8, 1.005],
+    [-2.02, 1.01],
+    [-2.1, 0.985],
+    [-2.135, 0.9],
+    [-2.14, 0.62],
+    [-2.125, 0.46],
+    [-2.07, 0.35],
+    [-1.93, 0.27],
+    [-1.7, 0.23],
+    [0.0, 0.215],
+    [1.7, 0.22],
+    [1.95, 0.24],
+    [2.08, 0.285],
+    [2.13, 0.37],
   ],
   roof: [
-    [0.08, 1.42],
-    [-0.6, 1.455],
-    [-1.3, 1.45],
-    [-1.74, 1.39],
+    [0.92, 0.9],
+    [0.62, 1.07],
+    [0.32, 1.25],
+    [0.06, 1.39],
+    [-0.2, 1.455],
+    [-0.7, 1.465],
+    [-1.2, 1.44],
+    [-1.52, 1.4],
+    [-1.74, 1.34],
+    [-1.9, 1.2],
+    [-2.0, 1.08],
+    [-2.05, 1.0],
   ],
-  windows: [
-    [
-      [0.72, 1.0],
-      [0.13, 1.37],
-      [-0.3, 1.395],
-      [-0.3, 1.0],
-    ],
-    [
-      [-0.38, 1.0],
-      [-0.38, 1.395],
-      [-1.15, 1.39],
-      [-1.38, 1.24],
-      [-1.38, 1.0],
-    ],
-  ],
-  beltY: 0.95,
-  roofY: 1.455,
-  tumble: 0.18,
-  seams: [0.86, -0.34, -1.0],
-  handles: [-0.25, -0.92],
-  handleY: 0.85,
-  lampY: { head: 0.65, tail: 0.84, plateF: 0.4, plateR: 0.58 },
-  frontX: 2.0,
-  rearX: -2.0,
-};
-
-const SUV: StyleDef = {
-  base: 'suv',
-  width: 1.88,
-  cabinWidth: 1.7,
-  wheelR: 0.37,
-  archR: 0.435,
-  axleF: 1.42,
-  axleR: -1.4,
-  tireW: 0.235,
-  bottomY: 0.33,
-  bottomStart: [-2.05, 0.33],
-  front: [
-    [2.05, 0.33],
-    [2.26, 0.38],
-    [2.31, 0.55],
-    [2.3, 0.86],
-    [2.2, 0.98],
-    [1.6, 1.03],
-    [1.05, 1.08],
-  ],
-  top: [
-    [1.0, 1.09],
-    [-2.0, 1.12],
-  ],
-  rear: [
-    [-2.26, 1.1],
-    [-2.3, 0.75],
-    [-2.28, 0.45],
-    [-2.15, 0.35],
-  ],
-  cabin: [
-    [1.1, 1.04],
-    [0.26, 1.66],
-    [-1.0, 1.7],
-    [-2.05, 1.68],
-    [-2.22, 1.56],
-    [-2.27, 1.12],
-    [-2.24, 1.04],
-  ],
-  roof: [
-    [0.26, 1.66],
-    [-1.0, 1.7],
-    [-2.05, 1.68],
-  ],
-  windows: [
-    [
-      [0.86, 1.17],
-      [0.32, 1.6],
-      [-0.32, 1.625],
-      [-0.32, 1.17],
-    ],
-    [
-      [-0.4, 1.17],
-      [-0.4, 1.625],
-      [-1.28, 1.635],
-      [-1.28, 1.17],
-    ],
-    [
-      [-1.36, 1.17],
-      [-1.36, 1.635],
-      [-1.98, 1.625],
-      [-2.1, 1.53],
-      [-2.1, 1.17],
-    ],
-  ],
-  beltY: 1.12,
-  roofY: 1.7,
+  planF: [0.28, 0.4, 2.8],
+  planR: [0.18, 0.3, 3.2],
+  ghPlanF: [0.35, 0.3],
+  ghPlanR: [0.2, 0.25],
+  shelf: 0.035,
   tumble: 0.14,
-  seams: [1.0, -0.36, -1.32],
-  handles: [-0.26, -1.2],
-  handleY: 1.0,
-  lampY: { head: 0.86, tail: 1.0, plateF: 0.5, plateR: 0.7 },
-  frontX: 2.31,
-  rearX: -2.3,
+  crownDeck: 0.015,
+  roofCrown: 0.03,
+  crease: [0.67, 0.86],
+  xWsTop: 0.0,
+  xRoofRear: -1.72,
+  windows: [
+    { x0: -0.3, x1: 0.92 },
+    { x0: -1.22, x1: -0.4, rakeRear: 0.1 },
+    { x0: -1.62, x1: -1.3, rakeRear: 0.22 },
+  ],
+  blackPillars: [
+    [-0.4, -0.3],
+    [-1.3, -1.22],
+  ],
+  seams: [0.95, -0.35, -1.18],
+  handles: [-0.17, -1.02],
+  handleDrop: 0.1,
+  head: D([2.02, 0.67, 0.6], 0.5, [0.48, 0.14], LAMP_CELLS.head, 0.004),
+  tail: D([-2.11, 0.86, 0.6], Math.PI - 0.6, [0.42, 0.12], LAMP_CELLS.tail, 0.004),
+  grille: D([2.14, 0.53, 0], 0, [0.72, 0.19], DECAL_CELLS.grille, 0.003),
+  intake: D([2.14, 0.33, 0], 0, [1.15, 0.12], DECAL_CELLS.intake, 0.003),
+  plateF: D([2.14, 0.4, 0], 0, [0.305, 0.152], DECAL_CELLS.plate, 0.008, [8, 4]),
+  plateR: D([-2.14, 0.62, 0], Math.PI, [0.305, 0.152], DECAL_CELLS.plate, 0.006, [8, 4]),
+  valance: D([-2.14, 0.36, 0], Math.PI, [1.3, 0.12], DECAL_CELLS.valance, 0.003),
+  splitter: D([2.1, 0.245, 0], 0, [1.25, 0.05], DECAL_CELLS.splitter, 0.003, [18, 2]),
 };
 
-const STYLES: Record<CarStyle, StyleDef> = { sedan: SEDAN, hatchback: HATCH, suv: SUV, taxi: { ...SEDAN } };
-
-/** Nominal dimensions per style (m). */
-export function carDims(style: CarStyle): { length: number; width: number; height: number; wheelR: number; wheelbase: number } {
-  const d = STYLES[style];
-  return { length: d.frontX - d.rearX + 0.1, width: d.width, height: d.roofY + 0.03, wheelR: d.wheelR, wheelbase: d.axleF - d.axleR };
-}
-
-// ---------------------------------------------------------------------------
-// Geometry building
-// ---------------------------------------------------------------------------
-
-const TEX_X0 = -2.5;
-const TEX_X1 = 2.5;
-const TEX_Y0 = 0;
-const TEX_Y1 = 2.0;
-/** UV of a plain white texel (top-left corner area of the side texture). */
-const PLAIN_UV: [number, number] = [0.02, 0.98];
-
-function lowerShape(d: StyleDef): THREE.Shape {
-  const pts: [number, number][] = [d.bottomStart];
-  for (const ax of [d.axleR, d.axleF]) {
-    // the bevel grows the silhouette by BODY_BEVEL, so cut the arch that much larger
-    const R = d.archR + BODY_BEVEL;
-    const a0 = Math.asin(THREE.MathUtils.clamp((d.bottomY - d.wheelR) / R, -1, 1));
-    const start = Math.PI - a0;
-    const end = a0;
-    const n = 20;
-    for (let i = 0; i <= n; i++) {
-      const a = start + ((end - start) * i) / n;
-      pts.push([ax + R * Math.cos(a), d.wheelR + R * Math.sin(a)]);
-    }
-  }
-  pts.push(...d.front, ...d.top, ...d.rear);
-  return new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(x, y)));
-}
-
-function polyShape(pts: [number, number][]): THREE.Shape {
-  return new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(x, y)));
-}
-
-function polyHole(pts: [number, number][]): THREE.Path {
-  return new THREE.Path(pts.map(([x, y]) => new THREE.Vector2(x, y)));
-}
-
-/** Extrude a side-profile shape symmetrically across Z (total width incl. bevel). */
-function extrudeAcross(shape: THREE.Shape, width: number, bevel: number, bevelSize = bevel, segs = 3): THREE.ExtrudeGeometry {
-  const depth = Math.max(0.001, width - 2 * bevel);
-  const g = new THREE.ExtrudeGeometry(shape, {
-    depth,
-    bevelEnabled: bevel > 0,
-    bevelThickness: bevel,
-    bevelSize,
-    bevelSegments: segs,
-    curveSegments: 6,
-  });
-  g.translate(0, 0, -depth / 2);
-  return g;
-}
-
-/** Map extrude caps (group 0) to the side texture frame, walls to a plain texel. */
-function sideUvs(g: THREE.BufferGeometry): THREE.BufferGeometry {
-  const pos = g.attributes.position!;
-  const uv = g.attributes.uv!;
-  const capGroup = g.groups.find((gr) => gr.materialIndex === 0);
-  const c0 = capGroup ? capGroup.start : 0;
-  const c1 = capGroup ? capGroup.start + capGroup.count : 0;
-  for (let i = 0; i < pos.count; i++) {
-    if (i >= c0 && i < c1) uv.setXY(i, (pos.getX(i) - TEX_X0) / (TEX_X1 - TEX_X0), (pos.getY(i) - TEX_Y0) / (TEX_Y1 - TEX_Y0));
-    else uv.setXY(i, PLAIN_UV[0], PLAIN_UV[1]);
-  }
-  uv.needsUpdate = true;
-  return g;
-}
-
-function plainUvs(g: THREE.BufferGeometry): THREE.BufferGeometry {
-  const uv = g.attributes.uv;
-  if (uv) {
-    for (let i = 0; i < uv.count; i++) uv.setXY(i, PLAIN_UV[0], PLAIN_UV[1]);
-    uv.needsUpdate = true;
-  }
-  return g;
-}
-
-const smooth = (e0: number, e1: number, x: number) => {
-  const t = THREE.MathUtils.clamp((x - e0) / (e1 - e0), 0, 1);
-  return t * t * (3 - 2 * t);
+/** Compact SUV (≈ 4.60 × 1.86 × 1.70 m, 2.69 m wheelbase, 225/60R18). */
+const SUV: BodyStyle = {
+  ...SEDAN,
+  base: 'suv',
+  W: 1.86,
+  wheelR: 0.36,
+  tireW: 0.225,
+  archGap: 0.05,
+  axleF: 1.37,
+  axleR: -1.32,
+  lower: [
+    [2.3, 0.58],
+    [2.295, 0.74],
+    [2.27, 0.86],
+    [2.2, 0.94],
+    [2.08, 0.975],
+    [1.8, 1.0],
+    [1.4, 1.04],
+    [1.1, 1.08],
+    [0.6, 1.1],
+    [-0.5, 1.125],
+    [-1.5, 1.145],
+    [-2.0, 1.155],
+    [-2.2, 1.15],
+    [-2.27, 1.12],
+    [-2.3, 1.02],
+    [-2.3, 0.66],
+    [-2.28, 0.5],
+    [-2.2, 0.39],
+    [-2.0, 0.33],
+    [-1.7, 0.3],
+    [0.0, 0.29],
+    [1.75, 0.3],
+    [2.05, 0.32],
+    [2.2, 0.38],
+    [2.28, 0.48],
+  ],
+  roof: [
+    [1.1, 1.075],
+    [0.82, 1.25],
+    [0.52, 1.47],
+    [0.28, 1.62],
+    [0.0, 1.69],
+    [-0.6, 1.705],
+    [-1.5, 1.7],
+    [-1.95, 1.68],
+    [-2.12, 1.63],
+    [-2.21, 1.5],
+    [-2.25, 1.32],
+    [-2.26, 1.12],
+  ],
+  planF: [0.3, 0.4, 3],
+  planR: [0.2, 0.32, 3.2],
+  ghPlanF: [0.35, 0.28],
+  ghPlanR: [0.18, 0.2],
+  shelf: 0.035,
+  tumble: 0.13,
+  rTop: 0.045,
+  rBot: 0.07,
+  bulge: 0.03,
+  crease: [0.86, 1.0],
+  crownHood: 0.04,
+  crownDeck: 0.01,
+  roofR: 0.1,
+  roofCrown: 0.03,
+  xWsTop: 0.25,
+  xRoofRear: -2.1,
+  windows: [
+    { x0: -0.3, x1: 1.1 },
+    { x0: -1.24, x1: -0.38 },
+    { x0: -2.02, x1: -1.32, rakeRear: 0.1 },
+  ],
+  blackPillars: [
+    [-0.38, -0.3],
+    [-1.32, -1.24],
+  ],
+  seams: [1.1, -0.34, -1.22],
+  handles: [-0.18, -1.07],
+  handleDrop: 0.1,
+  cladding: true,
+  head: D([2.17, 0.87, 0.62], 0.5, [0.5, 0.15], LAMP_CELLS.head, 0.004),
+  tail: D([-2.28, 1.0, 0.66], Math.PI - 0.6, [0.42, 0.15], LAMP_CELLS.tail, 0.004),
+  grille: D([2.3, 0.7, 0], 0, [0.86, 0.26], DECAL_CELLS.grille, 0.003),
+  intake: D([2.3, 0.43, 0], 0, [1.3, 0.15], DECAL_CELLS.intake, 0.003),
+  plateF: D([2.3, 0.52, 0], 0, [0.305, 0.152], DECAL_CELLS.plate, 0.008, [8, 4]),
+  plateR: D([-2.3, 0.8, 0], Math.PI, [0.305, 0.152], DECAL_CELLS.plate, 0.006, [8, 4]),
+  valance: D([-2.3, 0.44, 0], Math.PI, [1.4, 0.16], DECAL_CELLS.valance, 0.003),
+  splitter: D([2.26, 0.335, 0], 0, [1.1, 0.06], DECAL_CELLS.splitter, 0.003, [18, 2]),
 };
 
-/** Per-vertex body shaping: plan taper at the ends, tumblehome above the beltline, rocker tuck. */
-function shapeVertices(g: THREE.BufferGeometry, d: StyleDef): THREE.BufferGeometry {
-  const pos = g.attributes.position!;
-  const half = (d.frontX - d.rearX) / 2;
-  const mid = (d.frontX + d.rearX) / 2;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    let z = pos.getZ(i);
-    const fx = Math.abs(x - mid) / half;
-    const t = smooth(0.72, 1.02, fx);
-    z *= 1 - 0.11 * t * t;
-    const ty = THREE.MathUtils.clamp((y - d.beltY) / (d.roofY - d.beltY), 0, 1.2);
-    z *= 1 - d.tumble * ty;
-    const tuck = smooth(d.bottomY + 0.25, d.bottomY - 0.02, y);
-    z *= 1 - 0.035 * tuck;
-    pos.setZ(i, z);
-  }
-  return g;
-}
+const STYLES: Record<CarStyle, BodyStyle> = { sedan: SEDAN, hatchback: HATCH, suv: SUV, taxi: SEDAN };
 
-interface CarParts {
-  paint: THREE.BufferGeometry;
-  glass: THREE.BufferGeometry;
+// ---------------------------------------------------------------------------
+// Parts
+// ---------------------------------------------------------------------------
+
+export interface CarParts {
+  /** Painted body + glass (one mesh, body atlas). */
+  body: THREE.BufferGeometry;
+  /** Trim, chrome, mirror glass, wipers, rails, exhausts, rear calipers (per-vertex finishes). */
   trim: THREE.BufferGeometry;
-  chrome: THREE.BufferGeometry;
-  plate: THREE.BufferGeometry;
-  head: THREE.BufferGeometry;
-  tail: THREE.BufferGeometry;
-  turn: THREE.BufferGeometry;
-  /** Wheel hub positions (x, y, z) — z > 0 = right side. */
+  /** Fascia decals (grille, intake, plates, valance, splitter, taxi checker). */
+  decals: THREE.BufferGeometry;
+  /** Lamp lenses (head, tail, turn, repeaters, third brake light, taxi sign). */
+  lamps: THREE.BufferGeometry;
+  atlas: BodyAtlas;
+  /** Wheel hub positions (x, y, z) — z > 0 = right side; order FR, FL, RR, RL. */
   wheels: [number, number, number][];
-  def: StyleDef;
+  /** Nominal bumper-to-bumper length (m). */
+  length: number;
+  def: BodyStyle;
+  shape: BuiltBody;
 }
 
 const partsCache = new Map<CarStyle, CarParts>();
@@ -444,417 +373,533 @@ export function carParts(style: CarStyle): CarParts {
   return p;
 }
 
-/** Bevel size of the lower body (the silhouette grows by this much). */
-const BODY_BEVEL = 0.05;
-
-/** Point on a front/rear contour at height y: outer surface x (incl. bevel) and outward normal angle. */
-function contourAt(pts: [number, number][], y: number, bevel = BODY_BEVEL): { x: number; y: number; angle: number } {
-  for (let i = 0; i < pts.length - 1; i++) {
-    const [x0, y0] = pts[i]!;
-    const [x1, y1] = pts[i + 1]!;
-    if ((y >= Math.min(y0, y1) && y <= Math.max(y0, y1)) || i === pts.length - 2) {
-      const f = Math.abs(y1 - y0) < 1e-6 ? 0 : THREE.MathUtils.clamp((y - y0) / (y1 - y0), 0, 1);
-      const dx = x1 - x0;
-      const dy = y1 - y0;
-      // outward normal: to the right of an upward-going front contour / downward-going rear contour
-      let nx = dy;
-      let ny = -dx;
-      const l = Math.hypot(nx, ny) || 1;
-      nx /= l;
-      ny /= l;
-      return { x: x0 + dx * f + nx * bevel, y: y0 + dy * f + ny * bevel, angle: Math.atan2(ny, nx) };
-    }
-  }
-  return { x: pts[0]![0], y, angle: 0 };
+/** Nominal dimensions per style (m). */
+export function carDims(style: CarStyle): { length: number; width: number; height: number; wheelR: number; wheelbase: number } {
+  const p = carParts(style);
+  const d = p.def;
+  let top = 0;
+  for (let x = p.shape.xg1; x <= p.shape.xg0; x += 0.05) top = Math.max(top, p.shape.ghTop(x));
+  return { length: p.length, width: d.W, height: top, wheelR: d.wheelR, wheelbase: d.axleF - d.axleR };
 }
 
-/** A box of depth `dep` sitting on the front/rear contour at height y, protruding `out` m. */
-function onContour(pts: [number, number][], y: number, z: number, size: [number, number, number], out: number, radius: number): THREE.BufferGeometry {
-  const c = contourAt(pts, y);
-  const [dep, h, w] = size;
-  const off = out - dep / 2;
-  const nx = Math.cos(c.angle);
-  const ny = Math.sin(c.angle);
-  return xf(roundedBox(dep, h, w, radius, 2), [c.x + nx * off, c.y + ny * off, z], [0, 0, c.angle]);
-}
-
-function flipFaces(g: THREE.BufferGeometry): THREE.BufferGeometry {
-  const n = g.index ? g.toNonIndexed() : g;
-  const pos = n.attributes.position!;
-  const nor = n.attributes.normal;
-  const uv = n.attributes.uv;
-  for (let i = 0; i < pos.count; i += 3) {
-    for (const attr of [pos, nor, uv]) {
-      if (!attr) continue;
-      for (let k = 0; k < attr.itemSize; k++) {
-        const a = attr.getComponent(i + 1, k);
-        attr.setComponent(i + 1, k, attr.getComponent(i + 2, k));
-        attr.setComponent(i + 2, k, a);
-      }
-    }
-  }
-  if (nor) for (let i = 0; i < nor.count; i++) nor.setXYZ(i, -nor.getX(i), -nor.getY(i), -nor.getZ(i));
-  return n;
-}
-
-/** Smooth shading for extrusions: weld vertices that share position+uv, recompute normals. */
-function smoothed(g: THREE.BufferGeometry): THREE.BufferGeometry {
-  g.deleteAttribute('normal');
-  const m = mergeVertices(g, 1e-4);
-  m.computeVertexNormals();
-  return m;
-}
-
-function buildParts(style: CarStyle): CarParts {
-  const d = STYLES[style];
-  const W = d.width;
-  const Wc = d.cabinWidth;
-  const shape = (g: THREE.BufferGeometry) => shapeVertices(g, d);
-  const rx = d.rearX;
-  const frontC: [number, number][] = [[d.front[0]![0], d.bottomY], ...d.front];
-  const rearC: [number, number][] = [...d.rear, [d.bottomStart[0], d.bottomY]];
-
-  // --- paint -------------------------------------------------------------
-  const lower = smoothed(shape(sideUvs(extrudeAcross(lowerShape(d), W, 0.075, BODY_BEVEL, 4))));
-  const frameShape = polyShape(d.cabin);
-  for (const w of d.windows) frameShape.holes.push(polyHole(w));
-  const frameT = 0.018;
-  const frames = [1, -1].map((s) => {
-    const g = new THREE.ExtrudeGeometry(frameShape, { depth: frameT, bevelEnabled: false, curveSegments: 4 });
-    sideUvs(g);
-    g.translate(0, 0, s > 0 ? Wc / 2 - frameT + 0.004 : -Wc / 2 - 0.004);
-    shape(g);
-    g.computeVertexNormals();
-    return g;
-  });
-  // roof skin: band along the roof line
-  const roofTop = d.roof.map(([x, y]) => [x, y + 0.02] as [number, number]);
-  const roofBot = [...d.roof].reverse().map(([x, y]) => [x, y - 0.012] as [number, number]);
-  const roofSkin = smoothed(shape(plainUvs(extrudeAcross(polyShape([...roofTop, ...roofBot]), Wc + 0.004, 0.028, 0.01, 3))));
-  // mirrors (body color)
-  const mirrorX = d.windows[0]![0]![0] - 0.04;
-  const mirrorY = d.windows[0]![0]![1] + 0.03;
-  const mirrorZ = Wc / 2 + 0.14;
-  const mirrors = [1, -1].map((s) => plainUvs(xf(roundedBox(0.13, 0.085, 0.13, 0.03, 2), [mirrorX - 0.04, mirrorY, s * mirrorZ])));
-  const paint = mergeAll([lower, ...frames, roofSkin, ...mirrors]);
-
-  // --- glass ---------------------------------------------------------------
-  const glass = smoothed(shape(plainUvs(extrudeAcross(polyShape(d.cabin), Wc, 0.03, 0.008, 3))));
-
-  // --- trim (black plastic) -----------------------------------------------
-  const trim: THREE.BufferGeometry[] = [];
-  const grilleY = d.lampY.head - 0.09;
-  const grilleH = 0.1;
-  trim.push(onContour(frontC, grilleY, 0, [0.05, grilleH, W * 0.46], 0.012, 0.02));
-  trim.push(onContour(frontC, d.bottomY + 0.055, 0, [0.05, 0.06, W * 0.6], 0.01, 0.02));
-  trim.push(onContour(rearC, d.bottomY + 0.07, 0, [0.05, 0.06, W * 0.72], 0.01, 0.02));
-  // wheel-well liners (upper half-shells facing the wheel) + underbody
-  for (const ax of [d.axleF, d.axleR]) {
-    const liner = new THREE.CylinderGeometry(d.archR - 0.006, d.archR - 0.006, W - 0.12, 20, 1, true, Math.PI / 2 - 0.3, Math.PI + 0.6);
-    liner.rotateX(Math.PI / 2);
-    trim.push(flipFaces(xf(liner, [ax, d.wheelR, 0])));
-  }
-  trim.push(xf(roundedBox(d.axleF - d.axleR + 1.4, 0.1, W - 0.25, 0.04, 1), [(d.axleF + d.axleR) / 2, d.bottomY - 0.02, 0]));
-  // B/C-pillar blackout between side windows
-  for (let i = 0; i < d.windows.length - 1; i++) {
-    const a = d.windows[i]!;
-    const b = d.windows[i + 1]!;
-    const x0 = Math.min(...a.map((p) => p[0]));
-    const x1 = Math.max(...b.map((p) => p[0]));
-    const yb = a[0]![1];
-    const top = Math.min(Math.max(...a.map((p) => p[1])), Math.max(...b.map((p) => p[1])));
-    const h = top - yb + 0.02;
-    for (const s of [1, -1]) trim.push(xf(roundedBox(x0 - x1 + 0.012, h, 0.012, 0.003, 1), [(x0 + x1) / 2, yb + h / 2 - 0.01, s * (Wc / 2 + 0.008)]));
-  }
-  // mirror glass + stalks
-  for (const s of [1, -1]) {
-    trim.push(xf(roundedBox(0.012, 0.07, 0.11, 0.01, 1), [mirrorX - 0.106, mirrorY, s * mirrorZ]));
-    trim.push(xf(roundedBox(0.06, 0.03, 0.14, 0.01, 1), [mirrorX - 0.02, mirrorY - 0.03, s * (Wc / 2 + 0.05)]));
-  }
-  if (d.base === 'suv') {
-    for (const s of [1, -1]) {
-      const [x0, y0] = d.roof[0]!;
-      const [x1, y1] = d.roof[d.roof.length - 1]!;
-      const len = x0 - x1 - 0.3;
-      const ry = Math.max(y0, y1) + 0.075;
-      trim.push(xf(roundedBox(len, 0.03, 0.04, 0.012, 2), [(x0 + x1) / 2, ry, s * (Wc / 2 - 0.22)]));
-      for (const px of [x0 - 0.25, (x0 + x1) / 2, x1 + 0.25]) trim.push(xf(roundedBox(0.08, 0.07, 0.04, 0.01, 1), [px, ry - 0.035, s * (Wc / 2 - 0.22)]));
-    }
-  }
-  if (d.base === 'hatchback') {
-    const [x, y] = d.roof[d.roof.length - 1]!;
-    trim.push(xf(roundedBox(0.24, 0.035, Wc * 0.8, 0.015, 2), [x - 0.02, y + 0.025, 0]));
-  }
-  const [ax, ay] = d.roof[d.roof.length - 1]!;
-  trim.push(xf(roundedBox(0.16, 0.05, 0.05, 0.02, 2), [ax + 0.28, ay + 0.045, 0])); // shark-fin antenna
-  const trimG = mergeAll(trim.map((g) => shape(plainUvs(g))));
-
-  // --- chrome ----------------------------------------------------------------
-  const chrome: THREE.BufferGeometry[] = [];
-  chrome.push(onContour(frontC, grilleY + grilleH / 2 - 0.01, 0, [0.03, 0.018, W * 0.52], 0.02, 0.008));
-  const exhaust = new THREE.CylinderGeometry(0.035, 0.035, 0.14, 14);
-  exhaust.rotateZ(Math.PI / 2);
-  chrome.push(xf(exhaust, [contourAt(rearC, d.bottomY + 0.05).x + 0.03, d.bottomY + 0.05, W * 0.3]));
-  const chromeG = mergeAll(chrome.map((g) => shape(plainUvs(g))));
-
-  // --- plates ------------------------------------------------------------------
-  const pw = 0.305;
-  const ph = 0.152;
-  const pf = contourAt(frontC, d.lampY.plateF);
-  const pr = contourAt(rearC, d.lampY.plateR);
-  const plateF = new THREE.PlaneGeometry(pw, ph);
-  plateF.rotateY(Math.PI / 2);
-  const plateR = new THREE.PlaneGeometry(pw, ph);
-  plateR.rotateY(-Math.PI / 2);
-  const plate = mergeAll([
-    xf(plateF, [pf.x + 0.022 * Math.cos(pf.angle), pf.y + 0.022 * Math.sin(pf.angle), 0], [0, 0, pf.angle]),
-    xf(plateR, [pr.x + 0.012 * Math.cos(pr.angle), pr.y + 0.012 * Math.sin(pr.angle), 0], [0, 0, pr.angle - Math.PI]),
-  ]);
-  shape(plate);
-
-  // --- lamps -------------------------------------------------------------------
-  const head: THREE.BufferGeometry[] = [];
-  const tail: THREE.BufferGeometry[] = [];
-  const turn: THREE.BufferGeometry[] = [];
-  for (const s of [1, -1]) {
-    head.push(onContour(frontC, d.lampY.head, s * (W / 2 - 0.27), [0.05, 0.085, 0.36], 0.014, 0.022));
-    turn.push(onContour(frontC, d.lampY.head - 0.01, s * (W / 2 - 0.06), [0.05, 0.06, 0.07], 0.012, 0.02));
-    tail.push(onContour(rearC, d.lampY.tail, s * (W / 2 - 0.24), [0.05, 0.1, 0.4], 0.014, 0.025));
-    turn.push(onContour(rearC, d.lampY.tail - 0.085, s * (W / 2 - 0.15), [0.05, 0.045, 0.16], 0.012, 0.018));
-    // wrap-around tail piece on the rear quarter
-    tail.push(xf(roundedBox(0.2, 0.08, 0.03, 0.012, 2), [rx + 0.12, d.lampY.tail, s * (W / 2 + 0.004)]));
-    // mirror repeaters
-    turn.push(xf(roundedBox(0.05, 0.014, 0.05, 0.006, 1), [mirrorX - 0.06, mirrorY - 0.042, s * (mirrorZ + 0.03)]));
-  }
-  // third brake light at the top of the rear glass
-  const [crx, cry] = d.roof[d.roof.length - 1]!;
-  tail.push(xf(roundedBox(0.04, 0.022, 0.36, 0.01, 1), [crx - 0.06, cry - 0.035, 0]));
-  if (style === 'taxi') {
-    const [x0, y0] = d.roof[1]!;
-    head.push(xf(roundedBox(0.32, 0.15, 0.68, 0.045, 3), [x0 + 0.05, y0 + 0.09, 0]));
-  }
-  const headG = mergeAll(head.map((g) => shape(plainUvs(g))));
-  const tailG = mergeAll(tail.map((g) => shape(plainUvs(g))));
-  const turnG = mergeAll(turn.map((g) => shape(plainUvs(g))));
-  return finish(style, d, { paint, glass, trim: trimG, chrome: chromeG, plate, head: headG, tail: tailG, turn: turnG });
-}
-
-function finish(style: CarStyle, d: StyleDef, g: Omit<CarParts, 'wheels' | 'def'>): CarParts {
-  void style;
-  const zW = d.width / 2 - d.tireW / 2 - 0.035;
-  const wheels: [number, number, number][] = [
-    [d.axleF, d.wheelR, zW],
-    [d.axleF, d.wheelR, -zW],
-    [d.axleR, d.wheelR, zW],
-    [d.axleR, d.wheelR, -zW],
-  ];
-  return { ...g, wheels, def: d };
-}
-
-// --- wheels (unit radius; scale by wheelR) ------------------------------------
-
-let tireGeo: THREE.BufferGeometry | null = null;
-let rimGeo: THREE.BufferGeometry | null = null;
-
-/** Tire of radius 1 (width 0.66), axis +Z. */
-export function unitTire(): THREE.BufferGeometry {
-  if (tireGeo) return tireGeo;
-  const w = 0.33;
-  const prof: [number, number][] = [
-    [0.66, w * 0.82],
-    [0.8, w * 0.95],
-    [0.93, w * 0.98],
-    [0.985, w * 0.8],
-    [1.0, w * 0.45],
-    [1.0, -w * 0.45],
-    [0.985, -w * 0.8],
-    [0.93, -w * 0.98],
-    [0.8, -w * 0.95],
-    [0.66, -w * 0.82],
-  ];
-  const g = new THREE.LatheGeometry(
-    prof.map(([r, y]) => new THREE.Vector2(r, y)),
-    32,
-  );
-  g.rotateX(Math.PI / 2);
-  g.computeVertexNormals();
-  tireGeo = g;
+/** Give a non-indexed geometry a trivial index so it can merge with indexed ones. */
+function indexed(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  if (g.index) return g;
+  const n = g.attributes.position!.count;
+  const idx = new Uint32Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
   return g;
 }
 
-/** 5-spoke alloy rim of radius 1 scale (outer face at +Z). */
+function keepPNU(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal' && name !== 'uv') g.deleteAttribute(name);
+  if (!g.attributes.normal) g.computeVertexNormals();
+  g.clearGroups();
+  return indexed(g);
+}
+
+function mergeIdx(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const m = mergeGeometries(parts.map(keepPNU), false);
+  if (!m) throw new Error('car: merge failed');
+  return m;
+}
+
+function constUv(g: THREE.BufferGeometry, [u, v]: [number, number]): THREE.BufferGeometry {
+  const uv = g.attributes.uv!;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, u, v);
+  return g;
+}
+
+/** Map all UVs of a geometry into an atlas cell (keeps relative UVs). */
+function cellUv(g: THREE.BufferGeometry, [u0, v0, u1, v1]: [number, number, number, number]): THREE.BufferGeometry {
+  const uv = g.attributes.uv!;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, u0 + (u1 - u0) * uv.getX(i), v0 + (v1 - v0) * uv.getY(i));
+  return g;
+}
+
+/** Box whose ±X faces show `faceCell` (u along Z) and other faces a plain `sideCell` texel. */
+function signBox(w: number, h: number, d: number, faceCell: [number, number, number, number], sideCell: [number, number, number, number]): THREE.BufferGeometry {
+  const g = new THREE.BoxGeometry(d, h, w);
+  const uv = g.attributes.uv!;
+  const nor = g.attributes.normal!;
+  const [su, sv] = [(sideCell[0] + sideCell[2]) / 2, (sideCell[1] + sideCell[3]) / 2];
+  for (let i = 0; i < uv.count; i++) {
+    if (Math.abs(nor.getX(i)) > 0.5) uv.setXY(i, faceCell[0] + (faceCell[2] - faceCell[0]) * uv.getX(i), faceCell[1] + (faceCell[3] - faceCell[1]) * uv.getY(i));
+    else uv.setXY(i, su, sv);
+  }
+  return g;
+}
+
+function mirrorZ(d: DecalSpec): DecalSpec {
+  return { ...d, at: [d.at[0], d.at[1], -d.at[2]], yaw: -d.yaw + (Math.abs(d.yaw) > Math.PI / 2 ? 2 * Math.PI : 0), flipU: !d.flipU };
+}
+
+function buildParts(style: CarStyle): CarParts {
+  const st = STYLES[style];
+  const taxi = style === 'taxi';
+  const shape = buildBody(st);
+  const S = shape;
+  const atlas = bodyAtlas(style, st, shape, taxi);
+
+  // --- mirrors (paint caps), spoiler ---------------------------------------------------------------
+  const bodyParts: THREE.BufferGeometry[] = [S.lower, S.greenhouse];
+  const mx = S.xg0 - 0.22;
+  const my = S.yUp(mx) + 0.085;
+  const mz = S.hwPlan(mx) + 0.095;
+  // mirror housing: a flattened, tapered shell (wedge toward the door), open face toward the rear
+  const cap = new THREE.SphereGeometry(1, 20, 12, Math.PI / 2, Math.PI);
+  cap.scale(0.075, 0.058, 0.11);
+  {
+    const p = cap.attributes.position!;
+    for (let i = 0; i < p.count; i++) {
+      const z = p.getZ(i);
+      const t = (z + 0.11) / 0.22; // 0 inner .. 1 outer
+      p.setY(i, p.getY(i) * (0.8 + 0.25 * t));
+      p.setX(i, p.getX(i) * (0.7 + 0.4 * t));
+    }
+    cap.computeVertexNormals();
+  }
+  for (const s of [1, -1]) bodyParts.push(constUv(xf(cap, [mx, my, s * mz]), UV_PAINT));
+  if (st.base === 'hatchback') {
+    const x = st.xRoofRear;
+    const y = S.ghTop(x);
+    const hw = S.ghHalfWidth(x) - st.tumble - 0.1;
+    const sp = new THREE.BoxGeometry(0.15, 0.026, 2 * hw, 2, 1, 4);
+    bodyParts.push(constUv(xf(sp, [x - 0.02, y + 0.008, 0], [0, 0, -0.16]), UV_PAINT));
+  }
+  const body = mergeIdx(bodyParts);
+
+  // --- trim & chrome (per-vertex finishes) --------------------------------------------------------------
+  const black: VcFinish = { color: '#111213', roughness: 0.55, metalness: 0.05 };
+  const gloss: VcFinish = { color: '#0c0d0e', roughness: 0.2, metalness: 0.1 };
+  const chrome: VcFinish = { color: '#d9dee3', roughness: 0.08, metalness: 1 };
+  const mirrorGlass: VcFinish = { color: '#9aa4ad', roughness: 0.02, metalness: 1 };
+  const trim: THREE.BufferGeometry[] = [];
+  for (const s of [1, -1]) {
+    // mirror glass (rear face) + tapered stalk to the door
+    const glass = new THREE.CircleGeometry(1, 24);
+    glass.rotateY(-Math.PI / 2);
+    glass.scale(1, 0.055, 0.1);
+    trim.push(vc(xf(glass, [mx - 0.002, my, s * mz]), mirrorGlass));
+    const stalk = new THREE.BoxGeometry(0.07, 0.035, 0.13, 1, 1, 1);
+    const p = stalk.attributes.position!;
+    for (let i = 0; i < p.count; i++) if (p.getZ(i) > 0) p.setXYZ(i, p.getX(i) * 0.6, p.getY(i) * 0.7, p.getZ(i));
+    stalk.computeVertexNormals();
+    trim.push(vc(xf(stalk, [mx + 0.01, my - 0.045, s * (mz - 0.09)], [0, s > 0 ? 0 : Math.PI, 0]), gloss));
+  }
+  // wipers resting on the windshield base
+  for (const [z0, len, rot] of [
+    [-0.62, 0.62, 0.05],
+    [0.02, 0.56, 0.08],
+  ] as const) {
+    const x = S.xg0 - 0.06;
+    const w = new THREE.BoxGeometry(0.018, 0.012, len);
+    trim.push(vc(xf(w, [x, S.ghTop(x) + 0.012, z0 + len / 2], [0, rot, 0]), black));
+  }
+  // shark-fin antenna
+  {
+    const x = st.xRoofRear + 0.12;
+    const fin = new THREE.SphereGeometry(1, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+    fin.scale(0.09, 0.055, 0.03);
+    trim.push(vc(xf(fin, [x, S.ghTop(x) - 0.003, 0]), gloss));
+  }
+  // roof rails (SUV)
+  if (st.base === 'suv') {
+    const x0 = st.xRoofRear + 0.25;
+    const x1 = st.xWsTop - 0.2;
+    const xm = (x0 + x1) / 2;
+    for (const s of [1, -1]) {
+      const z = s * (S.ghHalfWidth(xm) - st.tumble - 0.1);
+      const y = S.ghTop(xm) - 0.005;
+      trim.push(vc(xf(new THREE.BoxGeometry(x1 - x0, 0.025, 0.035), [xm, y + 0.05, z]), { color: '#aab0b6', roughness: 0.3, metalness: 0.85 }));
+      for (const x of [x0 + 0.05, xm, x1 - 0.05]) trim.push(vc(xf(new THREE.BoxGeometry(0.09, 0.05, 0.045), [x, y + 0.025, z]), black));
+    }
+  }
+  // exhaust tips
+  const tips = st.base === 'hatchback' ? [0.45] : [0.52, -0.52];
+  for (const z of tips) {
+    const t = new THREE.CylinderGeometry(0.038, 0.04, 0.12, 16, 1, true);
+    t.rotateZ(Math.PI / 2);
+    const x = S.xr + 0.06;
+    trim.push(vc(xf(t, [x, S.yLo(x) + 0.06, z]), chrome));
+    const inner = new THREE.CircleGeometry(0.034, 16);
+    inner.rotateY(-Math.PI / 2);
+    trim.push(vc(xf(inner, [x - 0.02, S.yLo(x) + 0.06, z]), black));
+  }
+  // rear brake calipers (static in the body frame)
+  for (const [x, y, z] of wheelPositions(st, S).slice(2)) {
+    const g = caliperGeometry(z > 0);
+    trim.push(vc(xf(g, [x, y, z], [0, 0, 0], [st.wheelR, st.wheelR, st.wheelR]), CALIPER));
+  }
+  const trimG = mergeVc(trim);
+
+  // --- fascia decals --------------------------------------------------------------------------------
+  const decalParts: THREE.BufferGeometry[] = [];
+  for (const d of [st.grille, st.intake, st.plateF, st.plateR, st.valance, st.splitter]) decalParts.push(S.decal(d));
+  if (taxi) {
+    for (const s of [1, -1]) {
+      const d: DecalSpec = { at: [-0.05, S.yUp(0) - 0.3, s * 0.9], yaw: s * (Math.PI / 2), size: [3.2, 0.09], cell: cell(DECAL_CELLS.checker), offset: 0.003, grid: [48, 2] };
+      decalParts.push(S.decal(d));
+    }
+  }
+  const decals = mergeIdx(decalParts);
+
+  // --- lamps ----------------------------------------------------------------------------------------
+  const lampParts: THREE.BufferGeometry[] = [S.decal(st.head), S.decal(mirrorZ(st.head)), S.decal(st.tail), S.decal(mirrorZ(st.tail))];
+  // mirror turn repeaters (on the cap's lower front edge)
+  for (const s of [1, -1]) {
+    const r = new THREE.BoxGeometry(0.03, 0.012, 0.08);
+    lampParts.push(cellUv(xf(r, [mx + 0.07, my - 0.04, s * (mz + 0.03)], [0, 0, -0.3]), LAMP_CELLS.repeater));
+  }
+  // third brake light at the top of the rear glass / spoiler
+  {
+    const x = st.xRoofRear - (st.base === 'sedan' ? 0.04 : 0.02);
+    const y = S.ghTop(x) + (st.base === 'sedan' ? 0.004 : 0.03);
+    lampParts.push(signBox(0.34, 0.022, 0.035, cell(LAMP_CELLS.brake3), cell(LAMP_CELLS.brake3)).translate(x, y, 0));
+  }
+  if (taxi) {
+    const x = (st.xWsTop + st.xRoofRear) / 2 + 0.15;
+    const y = S.ghTop(x) + 0.075;
+    // sign housing sides use a plain yellow texel of the TAXI cell (they light up with the sign)
+    lampParts.push(signBox(0.6, 0.15, 0.2, cell(LAMP_CELLS.taxi), [0.005, 0.3, 0.02, 0.45]).translate(x, y, 0));
+  }
+  const lamps = mergeIdx(lampParts);
+
+  return {
+    body,
+    trim: trimG,
+    decals,
+    lamps,
+    atlas,
+    wheels: wheelPositions(st, S),
+    length: S.xf - S.xr,
+    def: st,
+    shape: S,
+  };
+}
+
+function wheelPositions(st: BodyStyle, S: BuiltBody): [number, number, number][] {
+  const z = S.zWheel;
+  return [
+    [st.axleF, st.wheelR, z],
+    [st.axleF, st.wheelR, -z],
+    [st.axleR, st.wheelR, z],
+    [st.axleR, st.wheelR, -z],
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Wheels (unit radius = tire radius; outer face toward +Z)
+// ---------------------------------------------------------------------------
+
+const RUBBER: VcFinish = { color: '#161616', roughness: 0.88, metalness: 0 };
+/** Silver-painted alloy (metallic paint rather than a mirror, so it reads bright in any light). */
+const SPOKE: VcFinish = { color: '#d2d6da', roughness: 0.32, metalness: 0.5 };
+const BARREL: VcFinish = { color: '#1a1a1a', roughness: 0.6, metalness: 0.3 };
+const DISC: VcFinish = { color: '#7a7d80', roughness: 0.42, metalness: 0.85 };
+const CALIPER: VcFinish = { color: '#34373a', roughness: 0.45, metalness: 0.6 };
+
+/** Surface of revolution about +Z; profile points [r, z] listed from the outer (+Z) face inward. */
+function lathe(profile: [number, number][], seg = 40): THREE.BufferGeometry {
+  // LatheGeometry faces outward for points ordered bottom→top in its own frame; after rotateX(+90°)
+  // that is −Z→+Z, so reverse our (+Z first) profiles to get outward-facing surfaces.
+  const g = new THREE.LatheGeometry(
+    [...profile].reverse().map(([r, z]) => new THREE.Vector2(r, z)),
+    seg,
+  );
+  g.rotateX(Math.PI / 2);
+  g.computeVertexNormals();
+  return g;
+}
+
+function flipInside(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  const n = g.index ? g.toNonIndexed() : g;
+  const pos = n.attributes.position!;
+  const nor = n.attributes.normal!;
+  for (let i = 0; i < pos.count; i += 3) {
+    for (const a of [pos, nor, n.attributes.uv!]) {
+      for (let k = 0; k < a.itemSize; k++) {
+        const t = a.getComponent(i + 1, k);
+        a.setComponent(i + 1, k, a.getComponent(i + 2, k));
+        a.setComponent(i + 2, k, t);
+      }
+    }
+  }
+  for (let i = 0; i < nor.count; i++) nor.setXYZ(i, -nor.getX(i), -nor.getY(i), -nor.getZ(i));
+  return n;
+}
+
+const TIRE_PROFILE: [number, number][] = [
+  [0.69, 0.3],
+  [0.8, 0.325],
+  [0.92, 0.33],
+  [0.975, 0.3],
+  [0.997, 0.24],
+  [1.0, 0.16],
+  [0.985, 0.15],
+  [0.985, 0.11],
+  [1.0, 0.1],
+  [1.0, 0.03],
+  [0.985, 0.02],
+  [0.985, -0.02],
+  [1.0, -0.03],
+  [1.0, -0.1],
+  [0.985, -0.11],
+  [0.985, -0.15],
+  [1.0, -0.16],
+  [0.997, -0.24],
+  [0.975, -0.3],
+  [0.92, -0.33],
+  [0.8, -0.325],
+  [0.69, -0.3],
+];
+
+let tireGeo: THREE.BufferGeometry | null = null;
+let rimGeo: THREE.BufferGeometry | null = null;
+let wheelGeo: THREE.BufferGeometry | null = null;
+
+/** Tire of radius 1 (width 0.66) with tread grooves, axis +Z. */
+export function unitTire(): THREE.BufferGeometry {
+  if (!tireGeo) tireGeo = vc(lathe(TIRE_PROFILE, 40), RUBBER);
+  return tireGeo;
+}
+
+/** 10-spoke (5 split spokes) concave alloy: lip, dark barrel & back, hub, lug nuts, brake disc. */
 export function unitRim(): THREE.BufferGeometry {
   if (rimGeo) return rimGeo;
-  const R = 0.68;
-  const s = new THREE.Shape();
-  s.absarc(0, 0, R, 0, Math.PI * 2, false);
-  for (let i = 0; i < 5; i++) {
-    const a0 = (i / 5) * Math.PI * 2 + 0.3;
-    const a1 = a0 + (Math.PI * 2) / 5 - 0.6;
-    const h = new THREE.Path();
-    h.absarc(0, 0, R * 0.86, a0, a1, false);
-    h.absarc(0, 0, R * 0.34, a1 - 0.08, a0 + 0.08, true);
-    h.closePath();
-    s.holes.push(h);
-  }
-  const face = new THREE.ExtrudeGeometry(s, { depth: 0.06, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.02, bevelSegments: 2, curveSegments: 24 });
-  face.translate(0, 0, 0.14);
-  const barrel = new THREE.CylinderGeometry(R, R, 0.5, 32, 1, true);
+  const parts: THREE.BufferGeometry[] = [];
+  // outer lip
+  parts.push(
+    vc(
+      lathe([
+        [0.575, 0.282],
+        [0.6, 0.296],
+        [0.685, 0.3],
+        [0.708, 0.288],
+        [0.712, 0.26],
+      ]),
+      SPOKE,
+    ),
+  );
+  // barrel (seen from inside through the spokes) and dark back
+  const barrel = new THREE.CylinderGeometry(0.665, 0.665, 0.5, 32, 1, true);
   barrel.rotateX(Math.PI / 2);
-  const hub = new THREE.CylinderGeometry(0.16, 0.18, 0.08, 20);
+  barrel.translate(0, 0, 0.025);
+  parts.push(vc(flipInside(barrel), BARREL));
+  const back = new THREE.CircleGeometry(0.665, 32);
+  back.translate(0, 0, -0.2);
+  parts.push(vc(back, BARREL));
+  // brake disc (rotates with the wheel) + hat
+  parts.push(
+    vc(
+      lathe([
+        [0.23, 0.02],
+        [0.55, 0.02],
+        [0.55, -0.05],
+        [0.23, -0.05],
+        [0.23, 0.02],
+      ]),
+      DISC,
+    ),
+  );
+  const hat = new THREE.CylinderGeometry(0.22, 0.22, 0.09, 24);
+  hat.rotateX(Math.PI / 2);
+  hat.translate(0, 0, 0.02);
+  parts.push(vc(hat, { color: '#4a4d50', roughness: 0.5, metalness: 0.7 }));
+  // spokes: 5 pairs, concave (hub deeper than the lip), tapered
+  for (let i = 0; i < 5; i++) {
+    for (const off of [-0.11, 0.11]) {
+      const a = (i / 5) * Math.PI * 2 + off;
+      // runs from the hub (r 0.17) into the lip (r 0.61) so spokes merge with the rim flange
+      const g = new THREE.BoxGeometry(0.44, 0.085, 0.06, 4, 1, 1);
+      const p = g.attributes.position!;
+      for (let k = 0; k < p.count; k++) {
+        const t = (p.getX(k) + 0.22) / 0.44; // 0 hub .. 1 rim
+        p.setY(k, p.getY(k) * (1 - 0.35 * t) + (off > 0 ? -1 : 1) * 0.02 * (1 - t));
+        p.setZ(k, p.getZ(k) + 0.135 + 0.135 * t);
+      }
+      g.translate(0.17 + 0.22, 0, 0);
+      g.computeVertexNormals();
+      g.rotateZ(a);
+      parts.push(vc(g, SPOKE));
+    }
+  }
+  // hub face, center cap, lug nuts
+  const hub = new THREE.CylinderGeometry(0.19, 0.205, 0.05, 30);
   hub.rotateX(Math.PI / 2);
-  const back = new THREE.CircleGeometry(R, 32);
-  back.translate(0, 0, -0.05);
-  rimGeo = mergeAll([face, barrel, xf(hub, [0, 0, 0.23]), back]);
+  hub.translate(0, 0, 0.13);
+  parts.push(vc(hub, SPOKE));
+  const capG = new THREE.CylinderGeometry(0.075, 0.08, 0.025, 24);
+  capG.rotateX(Math.PI / 2);
+  capG.translate(0, 0, 0.162);
+  parts.push(vc(capG, { color: '#2a2d30', roughness: 0.35, metalness: 0.5 }));
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + Math.PI / 5;
+    const nut = new THREE.CylinderGeometry(0.026, 0.026, 0.04, 6);
+    nut.rotateX(Math.PI / 2);
+    nut.translate(Math.cos(a) * 0.125, Math.sin(a) * 0.125, 0.16);
+    parts.push(vc(nut, { color: '#e2e6ea', roughness: 0.12, metalness: 1 }));
+  }
+  rimGeo = mergeVc(parts);
   return rimGeo;
 }
 
-// ---------------------------------------------------------------------------
-// Textures & materials
-// ---------------------------------------------------------------------------
-
-function sideTexture(style: CarStyle): THREE.CanvasTexture {
-  return sharedTex(`car:side:${style}`, () => {
-    const d = STYLES[style];
-    const W = 1024;
-    const H = 410;
-    const [c, ctx] = makeCanvas(W, H);
-    const X = (x: number) => ((x - TEX_X0) / (TEX_X1 - TEX_X0)) * W;
-    const Y = (y: number) => H - ((y - TEX_Y0) / (TEX_Y1 - TEX_Y0)) * H;
-    const px = W / (TEX_X1 - TEX_X0); // px per meter
-    ctx.fillStyle = '#efefef';
-    ctx.fillRect(0, 0, W, H);
-    // plain white corner for untextured parts
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, 40, 40);
-    // subtle shading: lighter shoulder, darker lower door
-    const gr = ctx.createLinearGradient(0, Y(d.beltY), 0, Y(d.bottomY));
-    gr.addColorStop(0, 'rgba(255,255,255,0.9)');
-    gr.addColorStop(0.35, 'rgba(255,255,255,0)');
-    gr.addColorStop(1, 'rgba(0,0,0,0.12)');
-    ctx.fillStyle = gr;
-    ctx.fillRect(0, Y(d.beltY), W, Y(d.bottomY) - Y(d.beltY));
-    // character line
-    const cl = d.bottomY + (d.beltY - d.bottomY) * 0.62;
-    ctx.fillStyle = 'rgba(0,0,0,0.16)';
-    ctx.fillRect(X(d.rearX + 0.2), Y(cl), X(d.frontX - 0.35) - X(d.rearX + 0.2), 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    ctx.fillRect(X(d.rearX + 0.2), Y(cl) - 2, X(d.frontX - 0.35) - X(d.rearX + 0.2), 2);
-    // door cut lines
-    ctx.strokeStyle = 'rgba(20,20,20,0.85)';
-    ctx.lineWidth = 2;
-    const top = d.beltY + 0.02;
-    const bot = d.bottomY + 0.07;
-    const [s0, s1, s2] = d.seams as [number, number, number];
-    ctx.beginPath();
-    ctx.moveTo(X(s0), Y(top));
-    ctx.lineTo(X(s0), Y(bot));
-    ctx.moveTo(X(s1), Y(top));
-    ctx.lineTo(X(s1), Y(bot));
-    // rear door edge wraps in front of the rear arch
-    const archFront = d.axleR + d.archR + 0.04;
-    ctx.moveTo(X(s2), Y(top));
-    ctx.lineTo(X(s2), Y(d.wheelR + d.archR * 0.55));
-    ctx.quadraticCurveTo(X(archFront), Y(d.wheelR + d.archR * 0.3), X(archFront), Y(bot));
-    // door bottoms
-    ctx.moveTo(X(s0), Y(bot));
-    ctx.lineTo(X(archFront), Y(bot));
-    ctx.stroke();
-    // handles
-    for (const hx of d.handles) {
-      ctx.fillStyle = 'rgba(25,25,25,0.8)';
-      ctx.beginPath();
-      ctx.roundRect(X(hx) - 0.07 * px, Y(d.handleY) - 0.018 * px, 0.14 * px, 0.036 * px, 0.018 * px);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.9)';
-      ctx.fillRect(X(hx) - 0.06 * px, Y(d.handleY) - 0.016 * px, 0.12 * px, 2);
-    }
-    // fuel door
-    ctx.strokeStyle = 'rgba(20,20,20,0.6)';
-    ctx.beginPath();
-    ctx.arc(X(d.axleR - 0.42), Y(d.beltY - 0.14), 0.07 * px, 0, Math.PI * 2);
-    ctx.stroke();
-    // rocker trim (black cladding) between the arches
-    ctx.fillStyle = 'rgba(18,18,18,0.95)';
-    ctx.fillRect(X(d.axleR + d.archR * 0.8), Y(d.bottomY + 0.075), X(d.axleF - d.archR * 0.8) - X(d.axleR + d.archR * 0.8), 0.1 * px);
-    // SUV arch cladding
-    if (d.base === 'suv') {
-      ctx.strokeStyle = 'rgba(18,18,18,0.95)';
-      ctx.lineWidth = 0.07 * px;
-      for (const ax of [d.axleF, d.axleR]) {
-        ctx.beginPath();
-        ctx.arc(X(ax), Y(d.wheelR), (d.archR + 0.035) * px, Math.PI, 0);
-        ctx.stroke();
-      }
-    }
-    // taxi stripe
-    if (style === 'taxi') {
-      ctx.fillStyle = '#111';
-      for (let x = X(d.rearX + 0.35); x < X(d.frontX - 0.5); x += 0.08 * px) {
-        ctx.fillRect(x, Y(cl + 0.03), 0.04 * px, 0.04 * px);
-        ctx.fillRect(x + 0.04 * px, Y(cl + 0.07), 0.04 * px, 0.04 * px);
-      }
-    }
-    return canvasTex(c, { aniso: 8 });
-  });
+/** Complete wheel (tire + rim + disc) in one geometry for one draw call. */
+export function unitWheel(): THREE.BufferGeometry {
+  if (!wheelGeo) wheelGeo = mergeVc([unitTire(), unitRim()]);
+  return wheelGeo;
 }
 
-function plateTexture(): THREE.CanvasTexture {
-  return sharedTex('car:plate', () => {
-    const [c, ctx] = makeCanvas(256, 128);
-    ctx.fillStyle = '#f6f5ef';
-    ctx.fillRect(0, 0, 256, 128);
-    ctx.strokeStyle = '#1d3b7a';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(4, 4, 248, 120);
-    ctx.fillStyle = '#1d3b7a';
-    ctx.font = 'bold 20px Arial, Helvetica, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('PLC WORLD', 128, 30);
-    ctx.fillStyle = '#16213a';
-    ctx.font = 'bold 60px "Arial Narrow", Arial, Helvetica, sans-serif';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('L5X 380', 128, 80);
-    return canvasTex(c);
-  });
+const caliperCache: Record<string, THREE.BufferGeometry> = {};
+/** Brake caliper (unit scale) at the rear-upper side of the disc; `right` = outer face +Z. */
+function caliperGeometry(right: boolean): THREE.BufferGeometry {
+  const key = right ? 'r' : 'l';
+  if (caliperCache[key]) return caliperCache[key]!;
+  const a0 = THREE.MathUtils.degToRad(122);
+  const a1 = THREE.MathUtils.degToRad(172);
+  const s = new THREE.Shape();
+  s.absarc(0, 0, 0.6, a0, a1, false);
+  s.absarc(0, 0, 0.4, a1, a0, true);
+  s.closePath();
+  const g = new THREE.ExtrudeGeometry(s, { depth: 0.16, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 2, curveSegments: 10 });
+  g.translate(0, 0, -0.08);
+  if (!right) {
+    g.scale(1, 1, -1);
+    const f = flipInside(g);
+    f.computeVertexNormals();
+    caliperCache[key] = f;
+  } else caliperCache[key] = g;
+  return caliperCache[key]!;
 }
 
+/** Caliper geometry with per-vertex finish (for instancing / <Car/>). */
+const caliperVc: Record<string, THREE.BufferGeometry> = {};
+function caliperMesh(right: boolean): THREE.BufferGeometry {
+  const k = right ? 'r' : 'l';
+  return (caliperVc[k] ??= vc(caliperGeometry(right), CALIPER));
+}
+
+// ---------------------------------------------------------------------------
+// Materials
+// ---------------------------------------------------------------------------
+
+function paintShader(s: { fragmentShader: string }): void {
+  s.fragmentShader = s.fragmentShader.replace(
+    '#include <color_fragment>',
+    `#include <color_fragment>
+	#if defined( USE_ROUGHNESSMAP ) && defined( USE_MAP )
+		// props.b = paint mask: glass / trim / chrome keep their albedo (no paint tint)
+		vec4 carProps = texture2D( roughnessMap, vRoughnessMapUv );
+		diffuseColor.rgb = mix( sampledDiffuseColor.rgb, diffuseColor.rgb, carProps.b );
+	#endif`,
+  );
+}
+
+function makePaint(style: CarStyle, color: string, metallic: boolean): THREE.MeshPhysicalMaterial {
+  const { atlas } = carParts(style);
+  const m = new THREE.MeshPhysicalMaterial({
+    color,
+    map: atlas.color,
+    roughnessMap: atlas.props,
+    metalnessMap: atlas.props,
+    clearcoatMap: atlas.props,
+    roughness: 1,
+    metalness: metallic ? 0.6 : 0.03,
+    clearcoat: 1,
+    clearcoatRoughness: 0.04,
+  });
+  m.onBeforeCompile = paintShader;
+  m.customProgramCacheKey = () => 'car-paint';
+  return m;
+}
+
+/** Clear-coated paint (+ glass / trim regions from the body atlas) for one style & color. Shared. */
 export function carPaintMaterial(style: CarStyle, color: string, metallic: boolean): THREE.MeshPhysicalMaterial {
+  return sharedMat(`car:paint2:${style}:${color}:${metallic}`, () => makePaint(style, color, metallic));
+}
+
+function decalMat(): THREE.MeshPhysicalMaterial {
   return sharedMat(
-    `car:paint:${style}:${color}:${metallic}`,
+    'car:decalMat',
     () =>
       new THREE.MeshPhysicalMaterial({
-        color,
-        map: sideTexture(style),
-        roughness: metallic ? 0.34 : 0.4,
-        metalness: metallic ? 0.55 : 0.05,
-        clearcoat: 1,
-        clearcoatRoughness: 0.06,
+        map: decalAtlas(),
+        alphaTest: 0.5,
+        roughness: 0.38,
+        metalness: 0.15,
+        clearcoat: 0.6,
+        clearcoatRoughness: 0.1,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -4,
       }),
   );
 }
 
-const carMats = {
-  glass: () => sharedMat('car:glass', () => new THREE.MeshStandardMaterial({ color: '#1b252d', roughness: 0.05, metalness: 0.7, envMapIntensity: 2 })),
-  trim: () => tmats.plastic('#121314', 0.62),
-  chrome: () => tmats.metal('#d8dde2', 0.12),
-  plate: () => sharedMat('car:plateMat', () => new THREE.MeshStandardMaterial({ map: plateTexture(), roughness: 0.45, metalness: 0.2 })),
-  tire: () => tmats.rubber('#171717'),
-  rim: () => sharedMat('car:rim', () => new THREE.MeshStandardMaterial({ color: '#c3c8cd', roughness: 0.28, metalness: 0.75 })),
-};
+/**
+ * Lamp lens material. Emission levels come from `uLamp` (head, tail, turn) or, on an InstancedMesh,
+ * from instanceColor (same channels). The function-ID map picks which level lights each texel.
+ */
+function makeLampMaterial(): THREE.MeshPhysicalMaterial & { userData: { uLamp: { value: THREE.Vector3 } } } {
+  const atlas = lampAtlas();
+  const m = new THREE.MeshPhysicalMaterial({
+    map: atlas.base,
+    emissive: '#ffffff',
+    emissiveMap: atlas.emit,
+    alphaTest: 0.5,
+    roughness: 0.12,
+    metalness: 0.1,
+    clearcoat: 1,
+    clearcoatRoughness: 0.03,
+    toneMapped: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -4,
+  });
+  const uLamp = { value: new THREE.Vector3() };
+  const uDrl = { value: LAMP.drl };
+  const lampId = { value: atlas.id };
+  m.onBeforeCompile = (s) => {
+    s.uniforms.uLamp = uLamp;
+    s.uniforms.uDrl = uDrl;
+    s.uniforms.lampId = lampId;
+    s.fragmentShader = s.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec3 uLamp;\nuniform float uDrl;\nuniform sampler2D lampId;')
+      .replace('#include <color_fragment>', '')
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+	{
+		#if defined( USE_INSTANCING_COLOR )
+			vec3 lv = vColor.rgb;
+		#else
+			vec3 lv = uLamp;
+		#endif
+		float fid = texture2D( lampId, vEmissiveMapUv ).r;
+		float lvl = 0.0;
+		if ( fid > 0.1 && fid < 0.3 ) lvl = max( uDrl, lv.x > 0.5 ? 2.5 : 0.0 );
+		else if ( fid >= 0.3 && fid < 0.5 ) lvl = lv.x;
+		else if ( fid >= 0.5 && fid < 0.7 ) lvl = lv.z;
+		else if ( fid >= 0.7 && fid < 0.9 ) lvl = lv.y;
+		else if ( fid >= 0.9 ) lvl = lv.y > 1.0 ? lv.y : 0.0;
+		totalEmissiveRadiance *= lvl;
+	}`,
+      );
+  };
+  m.customProgramCacheKey = () => 'car-lamp';
+  m.userData.uLamp = uLamp;
+  return m as THREE.MeshPhysicalMaterial & { userData: { uLamp: { value: THREE.Vector3 } } };
+}
 
-/** Lamp colors (linear RGB multipliers for unlit, HDR, toneMapped=false materials). */
+/** Emission levels (HDR multipliers; bloom threshold ≈ 1). DRL stays below the bloom threshold. */
 const LAMP = {
-  headOff: new THREE.Color(0.72, 0.74, 0.78),
-  headDrl: new THREE.Color(1.6, 1.6, 1.55),
-  headOn: new THREE.Color(5, 4.9, 4.4),
-  tailOff: new THREE.Color(0.3, 0.02, 0.025),
-  tailOn: new THREE.Color(1.3, 0.05, 0.04),
-  brake: new THREE.Color(6, 0.2, 0.12),
-  turnOff: new THREE.Color(0.5, 0.25, 0.03),
-  turnOn: new THREE.Color(6, 2.2, 0.1),
-  taxiOn: new THREE.Color(3.5, 3.2, 1.6),
-};
+  drl: 0.7,
+  head: 5,
+  tail: 0.45,
+  brake: 5,
+  turn: 5,
+} as const;
 
 // ---------------------------------------------------------------------------
 // <Car/>
@@ -877,6 +922,7 @@ export interface CarProps extends Placement {
   getBraking?: () => boolean;
   getHeadlights?: () => boolean;
   getBlinker?: () => Blinker;
+  /** Click handler (pointer cursor + ground highlight on hover). */
   onClick?: () => void;
 }
 
@@ -887,27 +933,26 @@ function resolvePaint(color: string): { hex: string; metallic: boolean } {
 /** Linear paint colors per named paint (no per-frame string parsing). */
 const PAINT_COLOR: Record<string, THREE.Color> = Object.fromEntries(Object.entries(CAR_PAINT).map(([k, v]) => [k, new THREE.Color(v.hex)]));
 
+function blinkOn(b: Blinker, side: 'left' | 'right', t: number): boolean {
+  if (!b) return false;
+  if (t % 0.8 >= 0.4) return false;
+  return b === 'hazard' || b === side;
+}
+
 export function Car({ variant = 0, style, color, length, getDistance, getSteer, getBraking, getHeadlights, getBlinker, onClick, position, rotation, scale }: CarProps) {
   const v = carVariant(variant);
   const st = style ?? v.style;
   const paint = resolvePaint(color ?? v.color);
   const parts = carParts(st);
   const d = parts.def;
-  const nominal = d.frontX - d.rearX + 0.1;
-  const sx = length ? length / nominal : 1;
-  const lamps = useMemo(
-    () => ({
-      head: new THREE.MeshBasicMaterial({ color: LAMP.headOff.clone(), toneMapped: false }),
-      tail: new THREE.MeshBasicMaterial({ color: LAMP.tailOff.clone(), toneMapped: false }),
-      turn: new THREE.MeshBasicMaterial({ color: LAMP.turnOff.clone(), toneMapped: false }),
-    }),
-    [],
-  );
-  useDisposable(useMemo(() => [lamps.head, lamps.tail, lamps.turn], [lamps]));
+  const sx = length ? length / parts.length : 1;
+  const lampMat = useMemo(() => makeLampMaterial(), []);
+  useDisposable(useMemo(() => [lampMat], [lampMat]));
   const spins = useRef<(THREE.Group | null)[]>([]);
   const steers = useRef<(THREE.Group | null)[]>([]);
   const g = useRef({ getDistance, getSteer, getBraking, getHeadlights, getBlinker });
   g.current = { getDistance, getSteer, getBraking, getHeadlights, getBlinker };
+  const { hovered, handlers } = useClickable(onClick);
   useFrame(({ clock }) => {
     const t = clock.elapsedTime;
     const dist = g.current.getDistance?.() ?? 0;
@@ -922,39 +967,30 @@ export function Car({ variant = 0, style, color, length, getDistance, getSteer, 
       if (s) s.rotation.y = steer;
     }
     const hl = g.current.getHeadlights?.() ?? false;
-    lamps.head.color.copy(hl ? LAMP.headOn : LAMP.headDrl);
-    lamps.tail.color.copy(g.current.getBraking?.() ? LAMP.brake : hl ? LAMP.tailOn : LAMP.tailOff);
+    const br = g.current.getBraking?.() ?? false;
     const bl = g.current.getBlinker?.() ?? null;
-    lamps.turn.color.copy(bl && t % 0.8 < 0.4 ? LAMP.turnOn : LAMP.turnOff);
+    const turn = blinkOn(bl, 'left', t) || blinkOn(bl, 'right', t);
+    lampMat.userData.uLamp.value.set(hl ? LAMP.head : 0, br ? LAMP.brake : hl ? LAMP.tail : 0, turn ? LAMP.turn : 0);
   });
-  const handlers = onClick
-    ? {
-        onPointerDown: (e: { stopPropagation: () => void }) => {
-          e.stopPropagation();
-          onClick();
-        },
-      }
-    : {};
   return (
     <group position={position} rotation={rotation} scale={scale} {...handlers}>
       <group scale={[sx, 1, 1]}>
-        <mesh geometry={parts.paint} material={carPaintMaterial(st, paint.hex, paint.metallic)} castShadow receiveShadow />
-        <mesh geometry={parts.glass} material={carMats.glass()} castShadow />
-        <mesh geometry={parts.trim} material={carMats.trim()} castShadow />
-        <mesh geometry={parts.chrome} material={carMats.chrome()} />
-        <mesh geometry={parts.plate} material={carMats.plate()} />
-        <mesh geometry={parts.head} material={lamps.head} />
-        <mesh geometry={parts.tail} material={lamps.tail} />
-        <mesh geometry={parts.turn} material={lamps.turn} />
+        <mesh geometry={parts.body} material={carPaintMaterial(st, paint.hex, paint.metallic)} castShadow receiveShadow />
+        <mesh geometry={parts.trim} material={vcMaterial()} castShadow />
+        <mesh geometry={parts.decals} material={decalMat()} />
+        <mesh geometry={parts.lamps} material={lampMat} />
+        {hovered && (
+          <mesh geometry={cylY(1, 1, 0.002, 40)} scale={[parts.length / 2 + 0.35, 1, d.W / 2 + 0.35]} position={[0, 0.01, 0]} material={hoverMat()} />
+        )}
       </group>
       {parts.wheels.map(([x, y, z], i) => (
         <group key={i} position={[x * sx, y, z]} ref={(el) => void (i < 2 ? (steers.current[i] = el) : undefined)}>
           <group rotation={[0, z < 0 ? Math.PI : 0, 0]}>
             <group ref={(el) => void (spins.current[i] = el)} scale={d.wheelR}>
-              <mesh geometry={unitTire()} material={carMats.tire()} castShadow />
-              <mesh geometry={unitRim()} material={carMats.rim()} />
+              <mesh geometry={unitWheel()} material={vcMaterial()} castShadow />
             </group>
           </group>
+          {i < 2 && <mesh geometry={caliperMesh(z > 0)} material={vcMaterial()} scale={d.wheelR} />}
         </group>
       ))}
     </group>
@@ -999,37 +1035,40 @@ export interface CarFleetProps {
 }
 
 const FLEET_STYLES: CarStyle[] = ['sedan', 'hatchback', 'suv', 'taxi'];
-type PartKey = 'paint' | 'glass' | 'trim' | 'chrome' | 'plate' | 'head' | 'tail' | 'turn';
-const PART_KEYS: PartKey[] = ['paint', 'glass', 'trim', 'chrome', 'plate', 'head', 'tail', 'turn'];
+type FleetPart = 'bodySolid' | 'bodyMetal' | 'trim' | 'decals' | 'lamps';
+const FLEET_PARTS: FleetPart[] = ['bodySolid', 'bodyMetal', 'trim', 'decals', 'lamps'];
 
-function fleetMaterial(style: CarStyle, key: PartKey): THREE.Material {
+function fleetMaterial(style: CarStyle, key: FleetPart): THREE.Material {
   switch (key) {
-    case 'paint':
-      return sharedMat(
-        `car:fleetPaint:${style}`,
-        () => new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: sideTexture(style), roughness: 0.36, metalness: 0.35, clearcoat: 1, clearcoatRoughness: 0.06 }),
-      );
-    case 'glass':
-      return carMats.glass();
+    case 'bodySolid':
+      return sharedMat(`car:fleetPaint:${style}:solid`, () => makePaint(style, '#ffffff', false));
+    case 'bodyMetal':
+      return sharedMat(`car:fleetPaint:${style}:metal`, () => makePaint(style, '#ffffff', true));
     case 'trim':
-      return carMats.trim();
-    case 'chrome':
-      return carMats.chrome();
-    case 'plate':
-      return carMats.plate();
+      return vcMaterial();
+    case 'decals':
+      return decalMat();
     default:
-      return sharedMat('car:fleetLamp', () => new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false }));
+      return sharedMat('car:fleetLamp', () => makeLampMaterial());
   }
+}
+
+function fleetGeometry(style: CarStyle, key: FleetPart): THREE.BufferGeometry {
+  const p = carParts(style);
+  return key === 'bodySolid' || key === 'bodyMetal' ? p.body : p[key];
 }
 
 function newInstance(): CarInstance {
   return { x: 0, y: 0, z: 0, yaw: 0, variant: 0, length: 0, distance: 0, steer: 0, braking: false, headlights: false, blinker: null, roll: 0, pitch: 0 };
 }
 
+const DEFAULT_INSTANCE: CarInstance = newInstance();
+
 export function CarFleet({ capacity, getCar, castShadow = true }: CarFleetProps) {
   const meshes = useRef<Record<string, THREE.InstancedMesh | null>>({});
-  const tires = useRef<THREE.InstancedMesh>(null);
-  const rims = useRef<THREE.InstancedMesh>(null);
+  const wheels = useRef<THREE.InstancedMesh>(null);
+  const calR = useRef<THREE.InstancedMesh>(null);
+  const calL = useRef<THREE.InstancedMesh>(null);
   const tmp = useMemo(
     () => ({
       inst: newInstance(),
@@ -1052,22 +1091,16 @@ export function CarFleet({ capacity, getCar, castShadow = true }: CarFleetProps)
     for (const mesh of Object.values(meshes.current)) {
       if (!mesh) continue;
       mesh.count = 0;
-      mesh.frustumCulled = false;
     }
-    for (const r of [tires.current, rims.current]) {
-      if (r) {
-        r.count = 0;
-        r.frustumCulled = false;
-      }
-    }
+    for (const r of [wheels.current, calR.current, calL.current]) if (r) r.count = 0;
   }, []);
 
   useFrame(({ clock }) => {
     const t = clock.elapsedTime;
-    const blinkOn = t % 0.8 < 0.4;
     const counts = tmp.counts;
-    for (const s of FLEET_STYLES) counts[s] = 0;
+    for (const s of FLEET_STYLES) for (const k of FLEET_PARTS) counts[`${s}:${k}`] = 0;
     let wheelN = 0;
+    let calN = 0;
     const inst = tmp.inst;
     for (let i = 0; i < capacity; i++) {
       Object.assign(inst, DEFAULT_INSTANCE);
@@ -1075,89 +1108,107 @@ export function CarFleet({ capacity, getCar, castShadow = true }: CarFleetProps)
       const v = carVariant(inst.variant);
       const parts = carParts(v.style);
       const d = parts.def;
-      const k = counts[v.style]!;
-      counts[v.style] = k + 1;
-      const nominal = d.frontX - d.rearX + 0.1;
-      const sx = inst.length > 0 ? inst.length / nominal : 1;
+      const sx = inst.length > 0 ? inst.length / parts.length : 1;
       tmp.e.set(inst.pitch, inst.yaw, inst.roll, 'YXZ');
       tmp.q.setFromEuler(tmp.e);
       tmp.p.set(inst.x, inst.y, inst.z);
       tmp.s.set(sx, 1, 1);
       tmp.body.compose(tmp.p, tmp.q, tmp.s);
-      const paintColor = PAINT_COLOR[v.color]!;
-      for (const key of PART_KEYS) {
-        const mesh = meshes.current[`${v.style}:${key}`];
+      const paint = CAR_PAINT[v.color];
+      const bodyKey: FleetPart = paint.metallic ? 'bodyMetal' : 'bodySolid';
+      const turn = blinkOn(inst.blinker, 'left', t) || blinkOn(inst.blinker, 'right', t);
+      for (const key of FLEET_PARTS) {
+        if ((key === 'bodySolid' || key === 'bodyMetal') && key !== bodyKey) continue;
+        const id = `${v.style}:${key}`;
+        const mesh = meshes.current[id];
         if (!mesh) continue;
+        const k = counts[id]!;
+        counts[id] = k + 1;
         mesh.setMatrixAt(k, tmp.body);
-        if (key === 'paint') mesh.setColorAt(k, paintColor);
-        else if (key === 'head') mesh.setColorAt(k, inst.headlights ? (v.style === 'taxi' ? LAMP.taxiOn : LAMP.headOn) : LAMP.headDrl);
-        else if (key === 'tail') mesh.setColorAt(k, inst.braking ? LAMP.brake : inst.headlights ? LAMP.tailOn : LAMP.tailOff);
-        else if (key === 'turn') mesh.setColorAt(k, inst.blinker && blinkOn ? LAMP.turnOn : LAMP.turnOff);
+        if (key === bodyKey) mesh.setColorAt(k, PAINT_COLOR[v.color]!);
+        else if (key === 'lamps') {
+          tmp.c.setRGB(inst.headlights ? LAMP.head : 0, inst.braking ? LAMP.brake : inst.headlights ? LAMP.tail : 0, turn ? LAMP.turn : 0, THREE.LinearSRGBColorSpace);
+          mesh.setColorAt(k, tmp.c);
+        }
       }
-      // wheels
+      // wheels & front calipers (body frame without the length stretch)
       tmp.s.set(1, 1, 1);
       tmp.body.compose(tmp.p, tmp.q, tmp.s);
       const ang = inst.distance / d.wheelR;
       for (let w = 0; w < 4; w++) {
         const [wx, wy, wz] = parts.wheels[w]!;
         const right = wz > 0;
-        tmp.e.set(0, (w < 2 ? inst.steer : 0) + (right ? 0 : Math.PI), right ? -ang : ang, 'YXZ');
+        const steer = w < 2 ? inst.steer : 0;
+        tmp.e.set(0, steer + (right ? 0 : Math.PI), right ? -ang : ang, 'YXZ');
         tmp.q.setFromEuler(tmp.e);
         tmp.p.set(wx * sx, wy, wz);
         tmp.s.setScalar(d.wheelR);
         tmp.w.compose(tmp.p, tmp.q, tmp.s);
         tmp.m.multiplyMatrices(tmp.body, tmp.w);
-        tires.current?.setMatrixAt(wheelN, tmp.m);
-        rims.current?.setMatrixAt(wheelN, tmp.m);
-        wheelN++;
+        wheels.current?.setMatrixAt(wheelN++, tmp.m);
+        if (w < 2) {
+          tmp.e.set(0, steer, 0, 'YXZ');
+          tmp.q.setFromEuler(tmp.e);
+          tmp.w.compose(tmp.p, tmp.q, tmp.s);
+          tmp.m.multiplyMatrices(tmp.body, tmp.w);
+          (right ? calR : calL).current?.setMatrixAt(calN, tmp.m);
+          if (!right) calN++;
+        }
       }
       tmp.p.set(inst.x, inst.y, inst.z);
     }
     for (const s of FLEET_STYLES) {
-      for (const key of PART_KEYS) {
-        const mesh = meshes.current[`${s}:${key}`];
+      for (const key of FLEET_PARTS) {
+        const id = `${s}:${key}`;
+        const mesh = meshes.current[id];
         if (!mesh) continue;
-        mesh.count = counts[s]!;
+        mesh.count = counts[id]!;
+        mesh.visible = mesh.count > 0; // no empty draw calls (incl. shadow passes)
         mesh.instanceMatrix.needsUpdate = true;
         if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       }
     }
-    for (const r of [tires.current, rims.current]) {
+    if (wheels.current) {
+      wheels.current.count = wheelN;
+      wheels.current.visible = wheelN > 0;
+      wheels.current.instanceMatrix.needsUpdate = true;
+    }
+    for (const r of [calR.current, calL.current]) {
       if (!r) continue;
-      r.count = wheelN;
+      r.count = calN;
+      r.visible = calN > 0;
       r.instanceMatrix.needsUpdate = true;
     }
   });
 
   return (
     <group>
-      {FLEET_STYLES.map((s) => {
-        const parts = carParts(s);
-        return PART_KEYS.map((key) => (
+      {FLEET_STYLES.map((s) =>
+        FLEET_PARTS.map((key) => (
           <instancedMesh
             key={`${s}:${key}`}
             ref={(el) => {
               meshes.current[`${s}:${key}`] = el;
-              if (el && !el.instanceColor && (key === 'paint' || key === 'head' || key === 'tail' || key === 'turn')) {
-                el.setColorAt(0, new THREE.Color(1, 1, 1));
-              }
+              if (el && !el.instanceColor && (key === 'bodySolid' || key === 'bodyMetal' || key === 'lamps')) el.setColorAt(0, new THREE.Color(1, 1, 1));
             }}
-            args={[parts[key], fleetMaterial(s, key), capacity]}
-            castShadow={castShadow && (key === 'paint' || key === 'glass' || key === 'trim')}
-            receiveShadow={key === 'paint'}
+            args={[fleetGeometry(s, key), fleetMaterial(s, key), capacity]}
+            castShadow={castShadow && key !== 'decals' && key !== 'lamps'}
+            receiveShadow={key === 'bodySolid' || key === 'bodyMetal'}
             frustumCulled={false}
           />
-        ));
-      })}
-      <instancedMesh ref={tires} args={[unitTire(), carMats.tire(), capacity * 4]} castShadow={castShadow} frustumCulled={false} />
-      <instancedMesh ref={rims} args={[unitRim(), carMats.rim(), capacity * 4]} frustumCulled={false} />
+        )),
+      )}
+      <instancedMesh ref={wheels} args={[unitWheel(), vcMaterial(), capacity * 4]} castShadow={castShadow} frustumCulled={false} />
+      <instancedMesh ref={calR} args={[caliperMesh(true), vcMaterial(), capacity]} frustumCulled={false} />
+      <instancedMesh ref={calL} args={[caliperMesh(false), vcMaterial(), capacity]} frustumCulled={false} />
     </group>
   );
 }
-
-const DEFAULT_INSTANCE: CarInstance = newInstance();
 
 /** Soft blob shadow under a car (cheap alternative to shadow maps for far cars). */
 export function carShadowGeometry() {
   return cylY(1, 1, 0.001, 24);
 }
+
+/** Finish helpers re-exported for scenes that add props to cars. */
+export const CAR_FINISH = { rubber: RUBBER, spoke: SPOKE, chrome: FINISH.stainless } as const;

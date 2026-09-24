@@ -9,7 +9,7 @@ import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { ProxSensorProps } from '../../contracts';
-import { CABLE_YELLOW, lBracketGeo, clickable, cylZ, fm, hexGeo, latheZ, M12_CORDSET_LENGTH, M12Cordset, mat, Merge, PanScrew, RoutedCable, TAU, torus, type CableRoute } from './shared';
+import { CABLE_YELLOW, DEVICE_ROOT, lBracketGeo, clickable, cylZ, fm, hexGeo, latheZ, M12_CORDSET_LENGTH, M12Cordset, mat, Merge, PanScrew, RoutedCable, TAU, torus, type CableRoute } from './shared';
 
 const LED_ON = new THREE.Color('#ffcf5a');
 const LED_OFF = new THREE.Color('#6b4a10');
@@ -58,7 +58,7 @@ export function ProxSensor872C({ getActive, diameter = 0.018, bracket = true, no
   });
 
   return (
-    <group ref={root} position={position} rotation={rotation} scale={scale} {...clickable(onClick)}>
+    <group ref={root} position={position} rotation={rotation} scale={scale} userData={DEVICE_ROOT} {...clickable(onClick)}>
       <Merge>
       {/* PBT sensing face */}
       <mesh

@@ -36,6 +36,7 @@ import {
   torus,
   useSpin,
   clickable,
+  DEVICE_ROOT,
 } from './shared';
 
 export type MotorFrame = 'small' | 'medium' | 'large';
@@ -885,7 +886,7 @@ export function Motor({
   );
 
   return (
-    <group ref={root} position={position} rotation={rotation} scale={scale} {...clickable(onClick)}>
+    <group ref={root} position={position} rotation={rotation} scale={scale} userData={DEVICE_ROOT} {...clickable(onClick)}>
       <group ref={vib}>
         {mount === 'foot' ? (
           <group position={[0, baseH, 0]}>
@@ -944,6 +945,9 @@ export interface GearMotorProps extends Placement {
   torqueArmAngle?: number;
   /** Route of the motor power cable (default: floor stub). */
   cableTo?: CableRoute;
+  /** Part of a larger device (e.g. a conveyor drive): `cableTo` points are then in the PARENT coordinates of
+   *  the enclosing device's root (e.g. the conveyor's parent). */
+  nestedIn?: boolean;
 }
 
 /** Key dimensions of the gear motor (for mounting). */
@@ -997,6 +1001,7 @@ export function GearMotor({
   torqueArm = 0.14,
   torqueArmAngle = 0,
   cableTo,
+  nestedIn = false,
   position,
   rotation,
   scale,
@@ -1017,7 +1022,7 @@ export function GearMotor({
   const armLen = armR0 + torqueArm;
 
   return (
-    <group ref={root} position={position} rotation={rotation} scale={scale}>
+    <group ref={root} position={position} rotation={rotation} scale={scale} userData={nestedIn ? undefined : DEVICE_ROOT}>
       <Merge>
         {/* main housing: rounded lower part around the output, block above for the helical stages */}
         <mesh geometry={rbox(0.15, 0.15, depth - 0.012, 0.024, 3)} material={cast} position={[sgn * 0.004, 0.036, depth / 2 + 0.006]} castShadow receiveShadow />
@@ -1122,7 +1127,7 @@ export function GearMotor({
           shaft={false}
           conduit="gland"
           cableTo={cableTo}
-          rootRef={root}
+          rootRef={nestedIn ? undefined : root}
           liftingEye={false}
           nameplateAngle={hand === 'left' ? Math.PI / 2 : -Math.PI / 2}
           nameplateFlip={hand === 'left'}

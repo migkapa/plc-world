@@ -15,8 +15,8 @@ import { useFrame } from '@react-three/fiber';
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { ConveyorProps } from '../../contracts';
-import { GearMotor, MOTOR_BLUE } from './Motor';
-import { box, canvasTex, CapScrew, clickable, cylZ, fm, geo, HexBolt, mulberry32, rbox, sphere, TAU } from './shared';
+import { GEARMOTOR, GearMotor, gearMotorTorqueArmEnd, MOTOR_BLUE } from './Motor';
+import { box, type CableRoute, canvasTex, CapScrew, clickable, cylZ, DEVICE_ROOT, fm, geo, HexBolt, Merge, mulberry32, rbox, sphere, TAU } from './shared';
 
 export interface ConveyorExtraProps {
   /** 'extrusion' (clear anodized aluminum profiles, default) or 'powder' (painted formed steel). */
@@ -37,6 +37,8 @@ export interface ConveyorExtraProps {
   motorColor?: string;
   /** Show the leg/stand (false for a table-top section). */
   legs?: boolean;
+  /** Gear-motor power cable (conveyor PARENT coordinates, false = stop at the gland); default: floor stub. */
+  motorCableTo?: CableRoute;
   onClick?: () => void;
 }
 
@@ -417,6 +419,7 @@ export function Conveyor({
   beltColor = '#2a2b2e',
   motorColor = MOTOR_BLUE,
   legs = true,
+  motorCableTo,
   onClick,
   position,
   rotation,
@@ -619,12 +622,23 @@ export function Conveyor({
   const bearingZ = lay.frameOuterZ;
   const gmZ = bearingZ + 0.05;
   const getMotorAngle = useMemo(() => () => ((driveZSign > 0 ? 1 : -1) * getBeltPosition() * ratio) / rp, [getBeltPosition, driveZSign, rp]);
+  // torque arm: horizontal toward the tail, pinned through a rubber buffer into a standoff on the side frame web
+  const armDx = 0.2;
+  const armDy = -0.03;
+  const armLen = Math.hypot(armDx, armDy) - GEARMOTOR.armR0;
+  const armAngle = driveZSign * Math.atan2(-armDx, -armDy);
+  const armEnd = gearMotorTorqueArmEnd(armLen, armAngle);
+  const armWorldX = L + (driveZSign > 0 ? armEnd[0] : -armEnd[0]);
+  const armWorldY = yc + armEnd[1];
+  const armPlaneZ = gmZ + GEARMOTOR.armZ; // |z| of the arm plane
+  const standoff = armPlaneZ - 0.012 - lay.frameOuterZ;
 
 
   const guardY0 = lay.frameBottom - 0.13;
 
   return (
-    <group position={position} rotation={rotation} scale={scale} {...clickable(onClick)}>
+    <group position={position} rotation={rotation} scale={scale} userData={DEVICE_ROOT} {...clickable(onClick)}>
+      <Merge>
       {/* belt */}
       <mesh geometry={beltGeo(L, W)} material={beltMat} position={[0, yc, 0]} castShadow receiveShadow />
       {/* slider bed */}
@@ -652,7 +666,7 @@ export function Conveyor({
         { ref: headPulley, x: L },
         { ref: tailPulley, x: 0 },
       ].map(({ ref, x }, i) => (
-        <group key={i} ref={ref} position={[x, yc, 0]}>
+        <group key={i} ref={ref} position={[x, yc, 0]} userData={{ noMerge: true }}>
           <mesh geometry={cylZ(rp, W + 0.012, 40)} material={i === 0 ? fm.rubber('#2a2b2d') : fm.zinc()} castShadow />
           <mesh geometry={cylZ(0.0175, 2 * lay.frameOuterZ + 0.08, 20)} material={fm.steel()} />
         </group>
@@ -717,17 +731,28 @@ export function Conveyor({
           <mesh key={`${x}:${sz}`} geometry={cylZ(0.028, 0.04, 24)} material={fm.sheet('#f1c40f', 0.45)} position={[x as number, yc, sz * (bearingZ + 0.052)]} castShadow />
         )),
       )}
+      {/* torque-arm standoff bracket on the side frame (drive side) */}
+      {driveSide !== 'none' && (
+        <group position={[armWorldX, armWorldY, driveZSign * lay.frameOuterZ]} rotation={driveZSign > 0 ? undefined : [0, Math.PI, 0]}>
+          <mesh geometry={rbox(0.085, 0.07, 0.006, 0.004, 2)} material={fm.sheet('#2e3134', 0.5)} position={[0, 0, 0.003]} castShadow />
+          <mesh geometry={rbox(0.045, 0.045, standoff - 0.006, 0.004, 2)} material={fm.sheet('#2e3134', 0.5)} position={[0, 0, 0.006 + (standoff - 0.006) / 2]} castShadow />
+          {[-0.031, 0.031].map((dx) => (
+            <HexBolt key={dx} d={0.008} position={[dx, 0, 0.006]} />
+          ))}
+        </group>
+      )}
+      </Merge>
       {/* drive */}
       {driveSide !== 'none' && (
         <group position={[L, yc, driveZSign * gmZ]} rotation={driveZSign > 0 ? undefined : [0, Math.PI, 0]}>
-          <GearMotor ratio={ratio} hand={driveZSign > 0 ? 'left' : 'right'} color={motorColor} getMotorAngle={getMotorAngle} torqueArm={0.12} />
+          <GearMotor ratio={ratio} hand={driveZSign > 0 ? 'left' : 'right'} color={motorColor} getMotorAngle={getMotorAngle} torqueArm={armLen} torqueArmAngle={armAngle} cableTo={motorCableTo} nestedIn />
         </group>
       )}
       {/* frame ID plate */}
-      <mesh position={[L - 0.6, frameCY, lay.frameOuterZ + 0.0015]}>
-        <planeGeometry args={[0.12, 0.04]} />
-        <meshStandardMaterial
-          map={canvasTex('convPlate', 256, 96, (ctx, w, h) => {
+      <mesh
+        position={[L - 0.6, frameCY, lay.frameOuterZ + 0.0015]}
+        material={fm.plate(
+          canvasTex('convPlate', 256, 96, (ctx, w, h) => {
             ctx.fillStyle = '#e8e9e4';
             ctx.fillRect(0, 0, w, h);
             ctx.strokeStyle = '#222';
@@ -740,9 +765,10 @@ export function Conveyor({
             ctx.fillText('CV-101', w / 2, 34);
             ctx.font = '600 18px Arial, sans-serif';
             ctx.fillText('0.5 m/s  ·  1 HP  ·  460 V', w / 2, 70);
-          })}
-          roughness={0.5}
-        />
+          }),
+        )}
+      >
+        <planeGeometry args={[0.12, 0.04]} />
       </mesh>
       {[-0.055, 0.055].map((dx) => (
         <CapScrew key={dx} d={0.004} position={[L - 0.6 + dx, frameCY, lay.frameOuterZ + 0.0015]} />

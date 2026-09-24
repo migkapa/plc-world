@@ -23,6 +23,7 @@ import {
   canvasTexture,
   concreteTexture,
   drawSafetySign,
+  fitFont,
   hazardTexture,
   kmat,
   km,
@@ -147,22 +148,37 @@ function FloorMarkings() {
   );
 }
 
-function IColumn({ x }: { x: number }) {
+/** Painted steel I-columns with yellow column guards (instanced: 3 draw calls for all columns). */
+function IColumns({ xs }: { xs: number[] }) {
   const z = BAY.wallZ + 0.16;
-  const paint = km.paint('#4d6a86', 0.5, 0.4);
   const H = BAY.height;
+  const box = (min: Vec3, max: Vec3) => ({ p: [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2] as Vec3, s: [max[0] - min[0], max[1] - min[1], max[2] - min[2]] as Vec3 });
+  const parts = useMemo(() => {
+    const steel: { p: Vec3; s: Vec3 }[] = [];
+    const guard: { p: Vec3; s: Vec3 }[] = [];
+    const bands: { p: Vec3; s: Vec3 }[] = [];
+    for (const x of xs) {
+      steel.push(box([x - 0.15, 0, z - 0.14], [x + 0.15, H, z - 0.12]), box([x - 0.15, 0, z + 0.12], [x + 0.15, H, z + 0.14]), box([x - 0.008, 0, z - 0.12], [x + 0.008, H, z + 0.12]));
+      guard.push(box([x - 0.19, 0, z - 0.18], [x + 0.19, 1.1, z + 0.18]));
+      bands.push(box([x - 0.2, 0.2, z - 0.19], [x + 0.2, 0.3, z + 0.19]), box([x - 0.2, 0.7, z - 0.19], [x + 0.2, 0.8, z + 0.19]));
+    }
+    return { steel, guard, bands };
+  }, [xs.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <group>
-      <Slab min={[x - 0.15, 0, z - 0.14]} max={[x + 0.15, H, z - 0.12]} material={paint} castShadow />
-      <Slab min={[x - 0.15, 0, z + 0.12]} max={[x + 0.15, H, z + 0.14]} material={paint} castShadow />
-      <Slab min={[x - 0.008, 0, z - 0.12]} max={[x + 0.008, H, z + 0.12]} material={paint} castShadow />
-      {/* yellow column guard */}
-      <Slab min={[x - 0.19, 0, z - 0.18]} max={[x + 0.19, 1.1, z + 0.18]} material={kmat('ms:colguard', () => new THREE.MeshStandardMaterial({ color: YELLOW, roughness: 0.45, metalness: 0.3 }))} castShadow />
-      <Slab min={[x - 0.2, 0.2, z - 0.19]} max={[x + 0.2, 0.3, z + 0.19]} material={km.paint('#161616', 0.5)} />
-      <Slab min={[x - 0.2, 0.7, z - 0.19]} max={[x + 0.2, 0.8, z + 0.19]} material={km.paint('#161616', 0.5)} />
+      <Instances geometry={KBOX()} material={km.paint('#4d6a86', 0.5, 0.4)} items={parts.steel} />
+      <Instances geometry={KBOX()} material={kmat('ms:colguard', () => new THREE.MeshStandardMaterial({ color: YELLOW, roughness: 0.45, metalness: 0.3 }))} items={parts.guard} />
+      <Instances geometry={KBOX()} material={km.paint('#161616', 0.5)} items={parts.bands} castShadow={false} />
     </group>
   );
 }
+
+const LIGHTS: [number, number][] = [
+  [-1.6, 0.2],
+  [1.2, 0.2],
+  [-1.6, 2.6],
+  [1.2, 2.6],
+];
 
 function RoofAndLights() {
   const purlins = useMemo(() => [-1.6, 0.2, 2.0, 3.8].map((z) => ({ p: [(BAY.leftX + BAY.rightX) / 2, BAY.height - 0.15, z] as Vec3, s: [BAY.rightX - BAY.leftX, 0.3, 0.12] as Vec3 })), []);
@@ -170,18 +186,9 @@ function RoofAndLights() {
     <group>
       <Instances geometry={KBOX()} material={km.paint('#5a6570', 0.6, 0.4)} items={purlins} castShadow={false} />
       <mesh geometry={KPLANE()} material={km.paint('#3e464e', 0.9)} rotation={[Math.PI / 2, 0, 0]} position={[(BAY.leftX + BAY.rightX) / 2, BAY.height, (BAY.wallZ + BAY.frontZ) / 2]} scale={[BAY.rightX - BAY.leftX, BAY.frontZ - BAY.wallZ, 1]} />
-      {[
-        [-1.6, 0.2],
-        [1.2, 0.2],
-        [-1.6, 2.6],
-        [1.2, 2.6],
-      ].map(([x, z]) => (
-        <group key={`${x}:${z}`} position={[x!, BAY.height - 1.0, z!]}>
-          <mesh geometry={KCYL()} material={km.metal('#9aa0a6', 0.4)} scale={[0.01, 0.7, 0.01]} position={[0, 0.5, 0]} />
-          <mesh geometry={KCYL()} material={km.paint('#2b2f33', 0.5, 0.6)} scale={[0.42, 0.08, 0.42]} castShadow={false} />
-          <mesh geometry={KCYL()} material={km.emissive('#f6f8ff', 2.2)} scale={[0.36, 0.01, 0.36]} position={[0, -0.042, 0]} />
-        </group>
-      ))}
+      <Instances geometry={KCYL()} material={km.metal('#9aa0a6', 0.4)} items={LIGHTS.map(([x, z]) => ({ p: [x, BAY.height - 0.5, z] as Vec3, s: [0.01, 0.7, 0.01] as Vec3 }))} castShadow={false} />
+      <Instances geometry={KCYL()} material={km.paint('#2b2f33', 0.5, 0.6)} items={LIGHTS.map(([x, z]) => ({ p: [x, BAY.height - 1.0, z] as Vec3, s: [0.42, 0.08, 0.42] as Vec3 }))} castShadow={false} />
+      <Instances geometry={KCYL()} material={km.emissive('#f6f8ff', 2.2)} items={LIGHTS.map(([x, z]) => ({ p: [x, BAY.height - 1.042, z] as Vec3, s: [0.36, 0.01, 0.36] as Vec3 }))} castShadow={false} receiveShadow={false} />
     </group>
   );
 }
@@ -213,9 +220,9 @@ function CableTrays() {
 
 /** Selective pallet rack along the right side (context). */
 function PalletRack() {
-  const x0 = 3.35;
-  const x1 = 4.45;
-  const zs = [-2.6, -0.4, 1.8];
+  const x0 = 3.6;
+  const x1 = 4.7;
+  const zs = [-2.7, -0.5];
   const levels = [0.12, 1.45, 2.8];
   const uprights = useMemo(() => {
     const out: { p: Vec3; s: Vec3 }[] = [];
@@ -329,8 +336,7 @@ export function MotorBay() {
     <group>
       <Walls />
       <FloorMarkings />
-      <IColumn x={-3.45} />
-      <IColumn x={2.75} />
+      <IColumns xs={[-3.45, 2.75]} />
       <RoofAndLights />
       <CableTrays />
       <PalletRack />
@@ -355,7 +361,7 @@ export function MotorBay() {
         ctx.fillStyle = '#1f4f9c';
         ctx.fillRect(0, 0, w, h);
         ctx.fillStyle = '#fff';
-        ctx.font = `800 ${h * 0.46}px ${FONT}`;
+        fitFont(ctx, 'LINE 2  →  CONVEYOR CV-101', w * 0.92, h * 0.46);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('LINE 2  →  CONVEYOR CV-101', w / 2, h / 2 + 2);

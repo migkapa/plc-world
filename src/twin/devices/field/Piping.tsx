@@ -11,10 +11,10 @@
  * `finish`: 'stainless' (polished), 'painted' (with `color`), 'pvc' (gray Sch.80).
  */
 import { useFrame } from '@react-three/fiber';
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Placement, Vec3 } from '../../contracts';
-import { cylY, fm, geo, hexGeo, TAU } from './shared';
+import { cylY, fm, geo, hexGeo, Merge, TAU } from './shared';
 
 export type PipeFinish = 'stainless' | 'painted' | 'pvc';
 
@@ -98,6 +98,7 @@ export function Flange({ position, dir = [0, 1, 0], diameter = 0.0603, bolts, fi
   const m = pipeMat(finish, color);
   return (
     <group position={position} quaternion={quat}>
+      <Merge>
       <mesh geometry={cylY(R, t, 40)} material={m} position={[0, t / 2 + 0.0015, 0]} castShadow />
       <mesh geometry={cylY(R, t, 40)} material={m} position={[0, -t / 2 - 0.0015, 0]} castShadow />
       <mesh geometry={cylY(R * 0.8, 0.003, 32)} material={fm.plastic('#2b2b2b', 0.8)} />
@@ -117,6 +118,7 @@ export function Flange({ position, dir = [0, 1, 0], diameter = 0.0603, bolts, fi
           </group>
         );
       })}
+      </Merge>
     </group>
   );
 }
@@ -173,15 +175,30 @@ export function PipeRun({ points, diameter = 0.0603, finish = 'stainless', color
   );
 }
 
-/** Tubular sight-glass level gauge between two isolation valves. Origin: lower connection on the vessel. */
-export function SightGlass({ height = 1.0, getLevel, standoff = 0.12, position, rotation, scale, liquidColor = '#3d8fd0' }: Placement & { height?: number; getLevel: () => number; standoff?: number; liquidColor?: string }) {
+/**
+ * Tubular sight-glass level gauge between two isolation valves. Origin: lower connection on the vessel.
+ * `liquidColor` defaults to the Tank's default product color; pass `getColor` to follow a live color.
+ */
+export function SightGlass({
+  height = 1.0,
+  getLevel,
+  standoff = 0.12,
+  position,
+  rotation,
+  scale,
+  liquidColor = '#2f86c4',
+  getColor,
+}: Placement & { height?: number; getLevel: () => number; standoff?: number; liquidColor?: string; getColor?: () => THREE.ColorRepresentation }) {
   const col = useRef<THREE.Mesh>(null);
+  const liqMat = useMemo(() => new THREE.MeshStandardMaterial({ color: liquidColor, roughness: 0.15, transparent: true, opacity: 0.85 }), [liquidColor]);
+  useEffect(() => () => liqMat.dispose(), [liqMat]);
   useFrame(() => {
     const c = col.current;
     if (!c) return;
     const f = THREE.MathUtils.clamp(getLevel() / 100, 0, 1);
     c.scale.y = Math.max(0.001, f * (height - 0.1));
     c.position.y = 0.05 + (f * (height - 0.1)) / 2;
+    if (getColor) liqMat.color.set(getColor());
   });
   const ss = fm.polished();
   return (
@@ -196,9 +213,7 @@ export function SightGlass({ height = 1.0, getLevel, standoff = 0.12, position, 
       <mesh position={[0, height / 2, standoff]} geometry={cylY(0.011, height - 0.05, 20, 0.011, true)}>
         <meshStandardMaterial color="#e8f6ff" roughness={0.05} transparent opacity={0.25} depthWrite={false} />
       </mesh>
-      <mesh ref={col} position={[0, 0.05, standoff]} geometry={cylY(0.008, 1, 16)}>
-        <meshStandardMaterial color={liquidColor} roughness={0.2} />
-      </mesh>
+      <mesh ref={col} position={[0, 0.05, standoff]} geometry={cylY(0.008, 1, 16)} material={liqMat} />
       {[0.06, height - 0.06].map((y, i) => (
         <mesh key={i} position={[0.016, y, standoff]} geometry={cylY(0.004, 0.02, 8)} material={ss} />
       ))}

@@ -65,7 +65,6 @@ import {
   Pusher,
   pusherCables,
   RejectChute,
-  RUNOUT,
   sensorCable,
   TOTE,
   TotePile,
@@ -407,13 +406,3 @@ export const ConveyorSortView = memo(function ConveyorSortView({ state, runtime 
 
 export default ConveyorSortView;
 
-/** World-space anchors other modules (definition cameras) use. */
-export const CONVEYOR_SCENE = {
-  X0,
-  WALL_Z,
-  CAB,
-  STATION,
-  pusherWorldX: wx(G.pusherX),
-  feederWorldX: wx(G.feederX),
-  runoutEnd: wx(RUNOUT.x1),
-} as const;

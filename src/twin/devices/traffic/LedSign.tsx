@@ -5,7 +5,9 @@
  * LED lines — the classic garage entrance sign.
  *
  * Origins: `mount="wall"` → back-bottom-center of the cabinet; `"ceiling"` → the ceiling point above
- * the sign (sign hangs below on two rods); `"post"` → ground at the post. Faces +Z.
+ * the sign (sign hangs below on two rods); `"post"` → ground at the post axis (or midway between two
+ * posts); the post runs up behind the cabinet to ~80 % of its height with two U-bolt clamp brackets.
+ * Faces +Z.
  */
 import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
@@ -13,7 +15,29 @@ import * as THREE from 'three';
 import type { LedColor, LedMode } from '../../common';
 import type { Placement } from '../../contracts';
 import { dotMatrixTextures } from './ledTextures';
-import { boxGeo, canvasTex, cylY, ledOn, makeCanvas, planeGeo, roundedBox, sharedMat, sharedTex, tmats, useDisposable } from './shared';
+import {
+  FINISH,
+  boxGeo,
+  canvasTex,
+  cylY,
+  cylZ,
+  galvPrep,
+  ledOn,
+  makeCanvas,
+  mergeGalv,
+  mergeVc,
+  planeGeo,
+  roundedBox,
+  sharedGeo,
+  sharedMat,
+  sharedTex,
+  tmats,
+  useDisposable,
+  vc,
+  vcMaterial,
+  xf,
+  type VcFinish,
+} from './shared';
 
 const SIGN_RGB: Record<LedColor, string> = {
   red: '#ff1a0f',
@@ -33,8 +57,10 @@ export interface LedSignProps extends Placement {
   /** Minimum matrix columns (to size several signs identically). */
   minCols?: number;
   mount?: 'wall' | 'ceiling' | 'post' | 'none';
-  /** Ceiling rod length / post height (m). */
+  /** Ceiling rod length / height of the cabinet bottom on a post (m). */
   mountLength?: number;
+  /** Number of posts for `mount="post"` (default: 2 when the cabinet is wider than 1 m). */
+  posts?: 1 | 2;
   intensity?: number;
 }
 
@@ -105,6 +131,60 @@ function Cabinet({ w, h, depth = 0.09 }: { w: number; h: number; depth?: number 
   );
 }
 
+const POST_R = 0.045;
+/** Gap between the post surface and the cabinet back (clamp bracket depth). */
+const BRACKET = 0.03;
+
+/** Galvanized post(s) running up behind the cabinet to ~80 % of its height. */
+function postGeometry(length: number, bh: number, xs: number[]): THREE.BufferGeometry {
+  return sharedGeo(`sign:posts:${length}:${bh}:${xs.join(',')}`, () => {
+    const parts: THREE.BufferGeometry[] = [];
+    const top = length + bh * 0.8;
+    for (const x of xs) {
+      const shaft = new THREE.CylinderGeometry(POST_R, POST_R, top, 20, 1, false);
+      shaft.translate(x, top / 2, 0);
+      parts.push(galvPrep(shaft, { cyl: { axis: 'y', radius: POST_R } }));
+    }
+    return mergeGalv(parts);
+  });
+}
+
+/** U-bolt clamp brackets (2 per post) + base plates with anchor nuts. */
+function postHardware(length: number, bh: number, xs: number[]): THREE.BufferGeometry {
+  return sharedGeo(`sign:postHw:${length}:${bh}:${xs.join(',')}`, () => {
+    const parts: THREE.BufferGeometry[] = [];
+    const steel: VcFinish = { color: '#6f7478', roughness: 0.45, metalness: 0.85 };
+    for (const x of xs) {
+      for (const f of [0.2, 0.72]) {
+        const y = length + bh * f;
+        // channel bracket bolted to the cabinet back, U-bolt around the post, nuts
+        // channel bracket on the cabinet back, U-bolt around the post (half ring behind the post +
+        // straight legs through the bracket), nuts on the post side
+        parts.push(vc(xf(boxGeo(0.16, 0.05, BRACKET - 0.012), [x, y, POST_R + 0.012 + (BRACKET - 0.012) / 2]), steel));
+        const ru = POST_R + 0.006;
+        const u = new THREE.TorusGeometry(ru, 0.005, 6, 24, Math.PI);
+        u.rotateX(Math.PI / 2);
+        u.rotateY(Math.PI);
+        parts.push(vc(xf(u, [x, y, 0]), FINISH.stainless));
+        for (const s of [-1, 1]) {
+          parts.push(vc(xf(cylZ(0.005, 0.005, POST_R + BRACKET, 6), [x + s * ru, y, (POST_R + BRACKET) / 2]), FINISH.stainless));
+          parts.push(vc(xf(cylZ(0.009, 0.009, 0.008, 6), [x + s * ru, y, POST_R + 0.008]), FINISH.stainless));
+        }
+      }
+      parts.push(vc(xf(roundedBox(0.22, 0.02, 0.22, 0.004, 1), [x, 0.01, 0]), steel));
+      for (const [dx, dz] of [
+        [0.08, 0.08],
+        [-0.08, 0.08],
+        [0.08, -0.08],
+        [-0.08, -0.08],
+      ] as const)
+        parts.push(vc(xf(cylY(0.012, 0.012, 0.016, 6), [x + dx, 0.028, dz]), FINISH.hardware));
+    }
+    return mergeVc(parts);
+  });
+}
+
+/** Mount hardware. Frame: cabinet back-bottom-center at the origin (post: see `PostMount`). */
 function Mount({ kind, w, h, depth, length }: { kind: 'wall' | 'ceiling' | 'post' | 'none'; w: number; h: number; depth: number; length: number }) {
   const m = tmats.metal('#6f7478', 0.4);
   if (kind === 'ceiling') {
@@ -116,15 +196,6 @@ function Mount({ kind, w, h, depth, length }: { kind: 'wall' | 'ceiling' | 'post
             <mesh geometry={cylY(0.04, 0.04, 0.01, 16)} material={m} position={[x, h + 0.06 + length, depth / 2]} />
           </group>
         ))}
-      </>
-    );
-  }
-  if (kind === 'post') {
-    return (
-      <>
-        <mesh geometry={cylY(0.045, 0.045, length, 20)} material={tmats.galvanized()} position={[0, -length / 2, -0.05]} castShadow />
-        <mesh geometry={boxGeo(0.12, 0.1, 0.06)} material={m} position={[0, h / 2, -0.02]} />
-        <mesh geometry={roundedBox(0.25, 0.02, 0.25, 0.004, 1)} material={m} position={[0, -length + 0.01, -0.05]} />
       </>
     );
   }
@@ -140,15 +211,31 @@ function Mount({ kind, w, h, depth, length }: { kind: 'wall' | 'ceiling' | 'post
   return null;
 }
 
-export function LedSign({ text, color = 'red', getLit, pitch = 0.02, minCols = 0, mount = 'wall', mountLength, intensity = 3.2, position, rotation, scale }: LedSignProps) {
+/** Post mount in the ground frame (origin = ground at the post axis / between two posts). */
+function PostMount({ bw, bh, length, posts }: { bw: number; bh: number; length: number; posts: 1 | 2 }) {
+  const xs = posts === 2 ? [-bw / 3, bw / 3] : [0];
+  return (
+    <>
+      <mesh geometry={postGeometry(length, bh, xs)} material={tmats.galvanized()} castShadow receiveShadow />
+      <mesh geometry={postHardware(length, bh, xs)} material={vcMaterial()} castShadow />
+    </>
+  );
+}
+
+/** Cabinet z offset for a post mount (cabinet back sits on the clamp brackets in front of the post). */
+const POST_Z = POST_R + BRACKET;
+
+export function LedSign({ text, color = 'red', getLit, pitch = 0.02, minCols = 0, mount = 'wall', mountLength, posts, intensity = 3.2, position, rotation, scale }: LedSignProps) {
   const [w, h] = ledFaceSize(text, pitch, minCols);
   const depth = 0.09;
   const len = mountLength ?? (mount === 'post' ? 2.2 : 0.4);
   // Normalize the origin per mount type.
   const yOff = mount === 'ceiling' ? -(len + h + 0.06) : mount === 'post' ? len : 0;
+  const bw = w + 0.06;
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      <group position={[0, yOff, mount === 'post' ? 0.05 : 0]}>
+      {mount === 'post' && <PostMount bw={bw} bh={h + 0.06} length={len} posts={posts ?? (bw > 1 ? 2 : 1)} />}
+      <group position={[0, yOff, mount === 'post' ? POST_Z : 0]}>
         <Cabinet w={w} h={h} depth={depth} />
         <group position={[0, (h + 0.06) / 2, depth + 0.001]}>
           <LedFace text={text} color={color} getLit={getLit} pitch={pitch} minCols={minCols} intensity={intensity} />
@@ -199,6 +286,8 @@ export interface ParkingStatusSignProps extends Placement {
   fullText?: string;
   mount?: 'wall' | 'ceiling' | 'post';
   mountLength?: number;
+  /** Number of posts for `mount="post"` (default: 2 when the cabinet is wider than 1 m). */
+  posts?: 1 | 2;
 }
 
 /** Blue "P PARKING" header + SPACES (green) and FULL (red) LED lines in one cabinet. */
@@ -210,6 +299,7 @@ export function ParkingStatusSign({
   fullText = 'FULL',
   mount = 'post',
   mountLength,
+  posts,
   position,
   rotation,
   scale,
@@ -224,9 +314,11 @@ export function ParkingStatusSign({
   const yOff = mount === 'ceiling' ? -(len + h + 0.06) : mount === 'post' ? len : 0;
   const header = sharedMat(`sign:headerMat:${title}`, () => new THREE.MeshStandardMaterial({ map: headerTexture(title), roughness: 0.4, emissive: '#ffffff', emissiveMap: headerTexture(title), emissiveIntensity: 0.25 }));
   const top = h + 0.03;
+  const bw = w + 0.06;
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      <group position={[0, yOff, mount === 'post' ? 0.05 : 0]}>
+      {mount === 'post' && <PostMount bw={bw} bh={h + 0.06} length={len} posts={posts ?? (bw > 1 ? 2 : 1)} />}
+      <group position={[0, yOff, mount === 'post' ? POST_Z : 0]}>
         <Cabinet w={w} h={h} depth={depth} />
         <mesh geometry={planeGeo(w, headerH)} material={header} position={[0, top - headerH / 2, depth + 0.002]} />
         <group position={[0, top - headerH - 0.01 - lh / 2, depth + 0.001]}>

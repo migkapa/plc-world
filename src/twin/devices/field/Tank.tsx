@@ -4,8 +4,8 @@
  * top-mounted agitator (motor + inline gearbox + lantern + shaft + 4-blade 45° pitched-blade turbine).
  *
  * The liquid is visible through a front quarter CUT-AWAY (default) or a full-height sight WINDOW
- * (`cutaway={false}`). Its free surface sits at getLevel() with ripples, a vortex/swirl when agitated and a
- * color that shifts with temperature.
+ * (`cutaway={false}`). Its free surface sits at getLevel() with ripples and a vortex/swirl when agitated; the
+ * product keeps its hue (thickness-based absorption + fresnel), temperature shows as steam over the surface.
  *
  * Origin: floor, on the vessel axis. `diameter` = shell diameter, `height` = straight-shell height
  * (tangent line to tangent line). Level 0 % = lowest point inside the bottom head, 100 % = top tangent line.
@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import * as THREE from 'three';
 import type { TankProps, Vec3 } from '../../contracts';
 import { MOTOR_BLUE, MotorBody } from './Motor';
-import { box, canvasTex, clickable, cylY, fm, geo, hexGeo, latheY, rbox, sphere, TAU, torus } from './shared';
+import { box, canvasTex, type CableRoute, clickable, ConduitStub, DEVICE_ROOT, cylY, fm, geo, HexBolt, hexGeo, latheY, mat, Merge, rbox, RoutedCable, sphere, TAU, tex, torus } from './shared';
 
 // ---------------------------------------------------------------------------
 // Layout
@@ -29,6 +29,10 @@ export interface TankNozzle {
   direction: Vec3;
   /** Nominal bore (m). */
   size: number;
+  /** Distance from the vessel's outer surface to the flange / socket face along the axis (m). */
+  projection?: number;
+  /** Threaded weld-in socket (no flange), e.g. for vibrating-fork level switches. */
+  socket?: boolean;
 }
 
 export type TankNozzleId = 'agitator' | 'inlet' | 'lt' | 'manway' | 'vent' | 'tt' | 'lsl' | 'lsh' | 'lshh' | 'outlet' | 'heater';
@@ -46,11 +50,15 @@ export interface TankLayout {
   wall: number;
   /** y of the liquid surface for a level in %. */
   levelY: (pct: number) => number;
+  /** Outer vessel radius at height y (0 above/below the heads). */
+  radiusAt: (y: number) => number;
   nozzles: Record<TankNozzleId, TankNozzle>;
 }
 
 const LEG_CLEAR = 0.55;
 const WALL = 0.005;
+/** Projection of the G1 weld-in sockets for the level switches (socket face to shell). */
+const FORK_SOCKET = 0.032;
 
 function headParams(D: number) {
   const a = D / 2;
@@ -97,18 +105,28 @@ export function tankLayout(diameter = 1.3, height = 1.25): TankLayout {
   const yTop = yT2 + hd;
   const yIn0 = yBottom + WALL;
   const levelY = (pct: number) => yIn0 + (yT2 - yIn0) * THREE.MathUtils.clamp(pct, 0, 100) / 100;
+  const hp = headProfile(diameter, 0, 24);
+  /** Outer radius at height y: straight shell, or the torispherical head profile (interpolated). */
+  const radiusAt = (y: number) => {
+    if (y >= yT1 && y <= yT2) return a;
+    const dy = y < yT1 ? yT1 - y : y - yT2;
+    if (dy >= hd) return 0;
+    for (let i = 0; i < hp.length - 1; i++) {
+      const [r0, y0] = hp[i]!;
+      const [r1, y1] = hp[i + 1]!;
+      if (dy >= y0 && dy <= y1) return r0 + ((dy - y0) / (y1 - y0 || 1)) * (r1 - r0);
+    }
+    return 0;
+  };
   const top = (r: number, phiDeg: number, size: number, proj = 0.1): TankNozzle => {
     const phi = (phiDeg * Math.PI) / 180;
     const y = yT2 + headHeightAt(diameter, r) + proj;
-    return { position: [r * Math.sin(phi), y, r * Math.cos(phi)], direction: [0, 1, 0], size };
+    return { position: [r * Math.sin(phi), y, r * Math.cos(phi)], direction: [0, 1, 0], size, projection: proj };
   };
-  const side = (y: number, phiDeg: number, size: number, proj = 0.12): TankNozzle => {
+  const side = (y: number, phiDeg: number, size: number, proj = 0.12, socket = false): TankNozzle => {
     const phi = (phiDeg * Math.PI) / 180;
-    // radius of the vessel at height y (knuckle region approximated by an ellipse)
-    let r = a;
-    if (y < yT1) r = a * Math.sqrt(Math.max(0, 1 - ((yT1 - y) / hd) ** 2));
-    const R = r + proj;
-    return { position: [R * Math.sin(phi), y, R * Math.cos(phi)], direction: [Math.sin(phi), 0, Math.cos(phi)], size };
+    const R = radiusAt(y) + proj;
+    return { position: [R * Math.sin(phi), y, R * Math.cos(phi)], direction: [Math.sin(phi), 0, Math.cos(phi)], size, projection: proj, socket };
   };
   return {
     radius: a,
@@ -119,6 +137,7 @@ export function tankLayout(diameter = 1.3, height = 1.25): TankLayout {
     yTop,
     wall: WALL,
     levelY,
+    radiusAt,
     nozzles: {
       agitator: { position: [0, yTop + 0.06, 0], direction: [0, 1, 0], size: 0.15 },
       inlet: top(a * 0.64, 250, 0.05),
@@ -126,33 +145,43 @@ export function tankLayout(diameter = 1.3, height = 1.25): TankLayout {
       manway: top(a * 0.48, 180, 0.45, 0.12),
       vent: top(a * 0.64, 300, 0.05),
       tt: side(yT1 + 0.18, 55, 0.025, 0.1),
-      lsl: side(levelY(10), 85, 0.025, 0.1),
-      lsh: side(levelY(90), 80, 0.025, 0.1),
-      lshh: side(levelY(97), 100, 0.025, 0.1),
+      // vibrating forks sit in short weld-in sockets so the tines reach ~40 mm into the product
+      lsl: side(levelY(10), 85, 0.025, FORK_SOCKET, true),
+      lsh: side(levelY(90), 80, 0.025, FORK_SOCKET, true),
+      lshh: side(levelY(97), 100, 0.025, FORK_SOCKET, true),
       outlet: { position: [0, yBottom - 0.12, 0], direction: [0, -1, 0], size: 0.05 },
       heater: side(yT1 + 0.12, 140, 0.1, 0.1),
     },
   };
 }
 
-const _up = new THREE.Vector3(0, 1, 0);
+function nozzleQuat(nozzle: TankNozzle) {
+  const d = new THREE.Vector3(...nozzle.direction).normalize();
+  const pref = Math.abs(d.z) > 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+  const z = pref.clone().sub(d.clone().multiplyScalar(pref.dot(d))).normalize();
+  const x = new THREE.Vector3().crossVectors(d, z).normalize();
+  const m = new THREE.Matrix4().makeBasis(x, d, z);
+  return new THREE.Quaternion().setFromRotationMatrix(m);
+}
 
 /** Places children at a nozzle flange: local +Y = nozzle outward direction, local +Z faces the front as well as possible. */
 export function OnNozzle({ nozzle, children }: { nozzle: TankNozzle; children: ReactNode }) {
-  const quat = useMemo(() => {
-    const d = new THREE.Vector3(...nozzle.direction).normalize();
-    const pref = Math.abs(d.z) > 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
-    const z = pref.clone().sub(d.clone().multiplyScalar(pref.dot(d))).normalize();
-    const x = new THREE.Vector3().crossVectors(d, z).normalize();
-    const m = new THREE.Matrix4().makeBasis(x, d, z);
-    void _up;
-    return new THREE.Quaternion().setFromRotationMatrix(m);
-  }, [nozzle.direction]);
+  const quat = useMemo(() => nozzleQuat(nozzle), [nozzle.direction]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <group position={nozzle.position} quaternion={quat}>
       {children}
     </group>
   );
+}
+
+/**
+ * Converts a point from TANK coordinates into the frame of `<OnNozzle nozzle>` — e.g. to give an instrument
+ * mounted on a nozzle a `cableTo` end point defined in tank coordinates.
+ */
+export function nozzleLocal(nozzle: TankNozzle, p: Vec3): Vec3 {
+  const q = nozzleQuat(nozzle).invert();
+  const v = new THREE.Vector3(p[0] - nozzle.position[0], p[1] - nozzle.position[1], p[2] - nozzle.position[2]).applyQuaternion(q);
+  return [v.x, v.y, v.z];
 }
 
 // ---------------------------------------------------------------------------
@@ -314,17 +343,23 @@ function makeLiquidMaterial(L: TankLayout) {
     uRin: { value: L.radius - WALL },
     uT1: { value: L.yT1 },
     uHd: { value: L.headDepth },
+    /** Camera position in tank (object) coordinates, for the analytic thickness through the liquid. */
+    uCamObj: { value: new THREE.Vector3(0, 2, 5) },
+    uYBot: { value: L.yBottom + WALL },
+    uDeep: { value: new THREE.Color('#06121c') },
+    /** Absorption per meter of liquid path. */
+    uAbs: { value: 3.2 },
   };
   const m = new THREE.MeshStandardMaterial({
     color: '#2f86c4',
-    roughness: 0.14,
-    metalness: 0.05,
+    roughness: 0.12,
+    metalness: 0.0,
     transparent: true,
-    opacity: 0.82,
+    opacity: 0.55,
     side: THREE.FrontSide,
     depthWrite: false,
   });
-  m.onBeforeCompile = (shader) => {
+  const compile = (shader: THREE.WebGLProgramParametersWithUniforms, back: boolean) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -332,6 +367,7 @@ function makeLiquidMaterial(L: TankLayout) {
         `#include <common>
 uniform float uLevel; uniform float uTime; uniform float uSwirl; uniform float uRin; uniform float uT1; uniform float uHd;
 attribute float aTop;
+varying vec3 vObj;
 float liqH(vec2 p) {
   float r = clamp(length(p) / uRin, 0.0, 1.0);
   float a = atan(p.y, p.x);
@@ -358,16 +394,63 @@ if (lpos.y >= uLevel) {
     float hz = liqH(lpos.xz + vec2(0.0, e)) - h;
     objectNormal = normalize(vec3(-hx / e, 1.0, -hz / e));
   }
-}`,
+}
+vObj = lpos;`,
       )
       .replace('#include <begin_vertex>', 'vec3 transformed = lpos;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+varying vec3 vObj;
+uniform vec3 uCamObj; uniform float uRin; uniform float uYBot; uniform float uLevel; uniform vec3 uDeep; uniform float uAbs;
+float liquidPath() {
+  // ray from the camera through this fragment: length inside the liquid (vertical cylinder + surface + bottom)
+  vec3 rd = normalize(vObj - uCamObj);
+  vec3 ro = vObj;
+  float a = dot(rd.xz, rd.xz);
+  float t = 4.0;
+  if (a > 1e-6) {
+    float b = dot(ro.xz, rd.xz);
+    float c = dot(ro.xz, ro.xz) - uRin * uRin;
+    float disc = b * b - a * c;
+    if (disc > 0.0) t = max(0.0, (-b + sqrt(disc)) / a);
+  }
+  if (rd.y < -1e-4) t = min(t, max(0.0, (uYBot - ro.y) / rd.y));
+  if (rd.y > 1e-4) t = min(t, max(0.0, (uLevel - ro.y) / rd.y));
+  return t;
+}`,
+      )
+      .replace(
+        '#include <color_fragment>',
+        back
+          ? `#include <color_fragment>
+diffuseColor.rgb = mix(uDeep, diffuseColor.rgb, 0.35);`
+          : `#include <color_fragment>
+float liqT = liquidPath();
+float liqK = exp(-uAbs * liqT);
+diffuseColor.rgb = mix(uDeep, diffuseColor.rgb, 0.25 + 0.75 * liqK);`,
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        back
+          ? `diffuseColor.a = 0.92;
+#include <opaque_fragment>`
+          : `{
+  float nv = abs(dot(normalize(normal), normalize(vViewPosition)));
+  float fres = pow(1.0 - nv, 4.0);
+  diffuseColor.a = clamp(mix(opacity, 0.97, 1.0 - liqK) + fres * 0.35, 0.0, 1.0);
+}
+#include <opaque_fragment>`,
+      );
   };
-  m.customProgramCacheKey = () => 'plcworld-liquid-v1';
-  // back faces drawn first (inside of the liquid body), darker
+  m.onBeforeCompile = (sh) => compile(sh, false);
+  m.customProgramCacheKey = () => 'plcworld-liquid-v2';
+  // back faces drawn first (inside of the liquid body), dark and nearly opaque
   const back = m.clone();
   back.side = THREE.BackSide;
-  back.onBeforeCompile = m.onBeforeCompile;
-  back.customProgramCacheKey = () => 'plcworld-liquid-v1b';
+  back.onBeforeCompile = (sh) => compile(sh, true);
+  back.customProgramCacheKey = () => 'plcworld-liquid-v2b';
   return { material: m, back, uniforms };
 }
 
@@ -375,13 +458,36 @@ if (lpos.y >= uLevel) {
 // Parts
 // ---------------------------------------------------------------------------
 
+/** Stainless visible from both sides (open nozzle necks seen through the cut-away). */
+function stainless2() {
+  return mat('f:ss2', () => {
+    const m = fm.stainless().clone();
+    m.side = THREE.DoubleSide;
+    return m;
+  });
+}
+
+/** Neck pipe from the flange face back to the vessel's inner surface (open ended), plus the flange. */
 function NozzleNeck({ n, flangeR, neckR }: { n: TankNozzle; flangeR: number; neckR: number }) {
-  // neck pipe from the vessel surface to the flange along -direction
-  const len = 0.14;
+  const proj = n.projection ?? 0.1;
+  const len = proj + WALL * 0.8 - 0.012 + neckR * neckR * 0.8;
   return (
     <OnNozzle nozzle={n}>
-      <mesh geometry={cylY(neckR, len, 24)} material={fm.stainless()} position={[0, -len / 2 - 0.012, 0]} castShadow />
+      <mesh geometry={cylY(neckR, len, 24, neckR, true)} material={stainless2()} position={[0, -0.012 - len / 2, 0]} castShadow />
       <mesh geometry={cylY(flangeR, 0.016, 32)} material={fm.stainless()} position={[0, -0.008, 0]} castShadow />
+    </OnNozzle>
+  );
+}
+
+/** Threaded weld-in socket (G1) flush with the socket face: round boss with a weld bead at the shell. */
+function WeldSocket({ n }: { n: TankNozzle }) {
+  const proj = n.projection ?? FORK_SOCKET;
+  const len = proj + WALL * 0.8;
+  return (
+    <OnNozzle nozzle={n}>
+      <mesh geometry={cylY(0.024, len, 28, 0.024, true)} material={stainless2()} position={[0, -len / 2, 0]} castShadow />
+      <mesh geometry={torus(0.0235, 0.0015, TAU, 28)} material={fm.stainless(0.6)} position={[0, 0, 0]} rotation={[Math.PI / 2, 0, 0]} />
+      <mesh geometry={torus(0.026, 0.003, TAU, 28)} material={fm.stainless(0.7)} position={[0, -proj + 0.002, 0]} rotation={[Math.PI / 2, 0, 0]} />
     </OnNozzle>
   );
 }
@@ -404,7 +510,109 @@ function tankPlateTex(tag: string, volume: string) {
     ctx.font = '600 28px "JetBrains Mono", monospace';
     ctx.fillText(`CAP ${volume}  MAWP ATM`, w / 2, 140);
     ctx.fillText('SS316L  2B/BRUSHED  2024', w / 2, 188);
+    ctx.fillStyle = '#8a9095';
+    for (const [x, y] of [
+      [26, 26],
+      [w - 26, 26],
+      [26, h - 26],
+      [w - 26, h - 26],
+    ] as const) {
+      ctx.beginPath();
+      ctx.arc(x, y, 7, 0, TAU);
+      ctx.fill();
+    }
   });
+}
+
+function dangerTex() {
+  return canvasTex('heaterDanger', 256, 128, (ctx, w, h) => {
+    ctx.fillStyle = '#f4f4ef';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#d0141c';
+    ctx.fillRect(0, 0, w, 44);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '900 34px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('DANGER', w / 2, 24);
+    ctx.fillStyle = '#111';
+    ctx.font = '800 36px Arial, sans-serif';
+    ctx.fillText('480 V', w / 2, 72);
+    ctx.font = '600 16px Arial, sans-serif';
+    ctx.fillText('ISOLATE BEFORE OPENING', w / 2, 106);
+  });
+}
+
+function steamTex() {
+  return tex('f:steamPuff', () => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d')!;
+    const g = ctx.createRadialGradient(32, 32, 1, 32, 32, 31);
+    g.addColorStop(0, 'rgba(255,255,255,0.8)');
+    g.addColorStop(0.5, 'rgba(255,255,255,0.25)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 64);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  });
+}
+
+const STEAM_N = 12;
+
+/** Steam wisps rising from the free surface; density follows the liquid temperature (none below ~45 °C). */
+function Steam({ L, getLevel, getTemperature, phiStart, phiLength }: { L: TankLayout; getLevel: () => number; getTemperature?: () => number; phiStart: number; phiLength: number }) {
+  const refs = useRef<(THREE.Sprite | null)[]>([]);
+  const mats = useMemo(
+    () => Array.from({ length: STEAM_N }, () => new THREE.SpriteMaterial({ map: steamTex(), color: '#e9eef2', transparent: true, depthWrite: false, opacity: 0 })),
+    [],
+  );
+  useEffect(() => () => mats.forEach((m) => m.dispose()), [mats]);
+  const seeds = useMemo(
+    () =>
+      Array.from({ length: STEAM_N }, (_, i) => {
+        const r = (0.25 + 0.65 * ((i * 0.618) % 1)) * (L.radius - 0.05);
+        const phi = phiStart + (((i * 0.382 + 0.1) % 1) * 0.9 + 0.05) * phiLength;
+        return { x: r * Math.sin(phi), z: r * Math.cos(phi), off: (i * 0.73) % 1 };
+      }),
+    [L.radius, phiStart, phiLength],
+  );
+  useFrame(({ clock }) => {
+    const T = getTemperature ? getTemperature() : 20;
+    const k = THREE.MathUtils.smoothstep(T, 42, 85);
+    const y0 = L.levelY(getLevel());
+    const t = clock.elapsedTime;
+    for (let i = 0; i < STEAM_N; i++) {
+      const sp = refs.current[i];
+      if (!sp) continue;
+      sp.visible = k > 0.01;
+      if (!sp.visible) continue;
+      const sd = seeds[i]!;
+      const age = (t / 3.2 + sd.off) % 1;
+      sp.position.set(sd.x + Math.sin(t * 0.7 + i) * 0.03 * age, y0 + 0.02 + age * 0.4, sd.z + Math.cos(t * 0.6 + i) * 0.03 * age);
+      const sz = 0.06 + age * 0.22;
+      sp.scale.set(sz, sz * 1.2, 1);
+      mats[i]!.opacity = k * 0.22 * Math.sin(Math.PI * age);
+    }
+  });
+  return (
+    <group userData={{ noMerge: true }}>
+      {mats.map((m, i) => (
+        <sprite
+          key={i}
+          ref={(el) => {
+            refs.current[i] = el;
+          }}
+          material={m}
+          visible={false}
+          renderOrder={3}
+          raycast={() => {}}
+        />
+      ))}
+    </group>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -418,12 +626,19 @@ export interface TankExtraProps {
   tag?: string;
   /** Show the agitator drive & impeller (default true). */
   agitator?: boolean;
+  /**
+   * Power cables of the agitator motor and the immersion heater (routes in the tank's PARENT coordinates, or
+   * false to stop at the gland). Defaults: agitator cable cleated over the top head and down the back of the
+   * shell into a floor conduit stub; heater cable straight down into a floor stub.
+   */
+  cables?: { agitator?: CableRoute; heater?: CableRoute };
   onClick?: () => void;
 }
 
-const WARM = new THREE.Color('#d8782c');
-const MID = new THREE.Color('#a7b3b1');
-const _col = new THREE.Color();
+/** Default product color (also the SightGlass default). */
+export const TANK_LIQUID_COLOR = '#2f86c4';
+
+const _cam = new THREE.Vector3();
 
 export function Tank({
   getLevel,
@@ -432,10 +647,11 @@ export function Tank({
   diameter = 1.3,
   height = 1.25,
   cutaway = true,
-  liquidColor = '#2f86c4',
+  liquidColor = TANK_LIQUID_COLOR,
   getHeaterOn,
   tag = 'T-101',
   agitator = true,
+  cables,
   onClick,
   position,
   rotation,
@@ -455,7 +671,14 @@ export function Tank({
     },
     [liquid],
   );
-  const baseColor = useMemo(() => new THREE.Color(liquidColor), [liquidColor]);
+  useEffect(() => {
+    // the product keeps its hue; temperature shows as steam above the surface
+    liquid.material.color.set(liquidColor);
+    liquid.back.color.set(liquidColor);
+    liquid.uniforms.uDeep.value.set(liquidColor).multiplyScalar(0.12);
+  }, [liquid, liquidColor]);
+  const root = useRef<THREE.Group>(null);
+  const liquidMesh = useRef<THREE.Mesh>(null);
   const impeller = useRef<THREE.Group>(null);
   const motorAngle = useRef(0);
   const shaftAngle = useRef(0);
@@ -465,11 +688,13 @@ export function Tank({
   const getMotorAngle = useMemo(() => () => motorAngle.current, []);
   const ratio = 14.6;
 
-  useFrame(({ clock }, dt) => {
+  useFrame(({ clock, camera }, dt) => {
     const u = liquid.uniforms;
     const lvl = getLevel();
     u.uLevel.value = L.levelY(lvl);
     u.uTime.value = clock.elapsedTime;
+    const lm = liquidMesh.current;
+    if (lm) u.uCamObj.value.copy(lm.worldToLocal(_cam.copy(camera.position)));
     const rpm = getAgitatorRpm ? getAgitatorRpm() : 0;
     const d = Math.min(dt, 0.1);
     shaftAngle.current += (rpm / 60) * TAU * d;
@@ -479,13 +704,6 @@ export function Tank({
     const target = THREE.MathUtils.clamp(rpm / 90, 0, 1) * (lvl > 25 ? 1 : lvl / 25);
     swirl.current += (target - swirl.current) * Math.min(1, d * 1.5);
     u.uSwirl.value = swirl.current;
-    const T = getTemperature ? getTemperature() : 20;
-    // thermal tint (cool-warm diverging map): liquidColor at <= 25 °C, milky mid tone ~55 °C, amber at >= 90 °C
-    const tt = THREE.MathUtils.smoothstep(T, 25, 90);
-    if (tt < 0.5) _col.copy(baseColor).lerp(MID, tt * 2);
-    else _col.copy(MID).lerp(WARM, tt * 2 - 1);
-    liquid.material.color.copy(_col);
-    liquid.back.color.copy(_col).multiplyScalar(0.6);
     const heat = getHeaterOn?.() ?? false;
     heaterMat.emissiveIntensity += ((heat ? 0.9 : 0) - heaterMat.emissiveIntensity) * Math.min(1, d * 0.8);
   });
@@ -497,155 +715,243 @@ export function Tank({
   const n = L.nozzles;
   const impY = L.yBottom + 0.3 * diameter;
   const shaftTop = L.yTop + 0.18;
+  const baffleW = diameter / 12;
+  const baffleGap = diameter / 72;
+  const baffleR = a - WALL - baffleGap - baffleW / 2;
+  const baffleH = height * 0.92;
+  // baffles at 0/90/180/270°; the one at 0° lies inside the removed quarter of the cut-away
+  const bafflePhis = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2].filter((p) => !cut || Math.abs(Math.atan2(Math.sin(p), Math.cos(p))) > Math.PI / 4 + 0.05);
+  // nameplate outside the cut, clear of legs and nozzles
+  const plateCandidates = cut ? [-1.2, 1.25, 2.9] : [-0.75, -1.2];
+  const platePhi = plateCandidates[0]!;
+  const plateY = L.yT1 + 0.45;
+  const plateR = a + 0.005;
+  const plateW = 0.2;
+  const plateArc = plateW / plateR;
+  // heater gland toward world-down inside the OnNozzle frame
+  const heaterQ = useMemo(() => nozzleQuat(n.heater).invert(), [n.heater]);
+  const heaterDown = useMemo(() => new THREE.Vector3(0, -1, 0).applyQuaternion(heaterQ), [heaterQ]);
+  const heaterRot = Math.atan2(-heaterDown.z, heaterDown.x);
+  // agitator cable default: over the top head, cleated down the back of the shell into a floor stub
+  const cablePhi = (200 * Math.PI) / 180;
+  const cs = Math.sin(cablePhi);
+  const cc = Math.cos(cablePhi);
+  const hh = (r: number) => L.yT2 + headHeightAt(diameter, r) + 0.03;
+  const agitatorRoute: CableRoute = useMemo(() => {
+    if (cables?.agitator !== undefined) return cables.agitator;
+    // default route is designed in tank coordinates; routes are read in the tank's PARENT coordinates
+    const sc = typeof scale === 'number' ? [scale, scale, scale] : (scale ?? [1, 1, 1]);
+    const toParent = new THREE.Matrix4().compose(
+      new THREE.Vector3(...(position ?? [0, 0, 0])),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(...(rotation ?? [0, 0, 0]))),
+      new THREE.Vector3(sc[0], sc[1], sc[2]),
+    );
+    const P = (r: number, y: number): Vec3 => [r * cs, y, r * cc];
+    const T = (v: Vec3): Vec3 => new THREE.Vector3(...v).applyMatrix4(toParent).toArray() as Vec3;
+    const via: Vec3[] = [
+      [0.16, n.agitator.position[1] + 0.62, -0.06],
+      [0.1 * cs + 0.12, hh(0.2) + 0.05, 0.2 * cc],
+      P(a * 0.45, hh(a * 0.45)),
+      P(a * 0.8, hh(a * 0.8)),
+      P(a + 0.035, L.yT2 - 0.05),
+      P(a + 0.03, L.yT1 + 0.3),
+      P(a + 0.03, L.yT1),
+      P(a + 0.12, 0.45),
+    ];
+    return { via: via.map(T), to: T(P(a + 0.22, 0.14)) };
+  }, [cables?.agitator, cs, cc, a, L, n.agitator.position, position, rotation, scale]); // eslint-disable-line react-hooks/exhaustive-deps
+  const agitatorStubPos: Vec3 = [(a + 0.22) * cs, 0.14, (a + 0.22) * cc];
+  const agitatorStub = cables?.agitator === undefined;
 
   return (
-    <group
-      position={position}
-      rotation={rotation}
-      scale={scale}
-      {...clickable(onClick)}
-    >
-      {/* vessel shell (outer + inner surfaces, section caps at the cut) */}
-      {shell.pieces.map((g, i) => (
-        <mesh key={i} geometry={g} material={shellMat} castShadow receiveShadow />
-      ))}
-      {shell.innerPieces.map((g, i) => (
-        <mesh key={i} geometry={g} material={fm.stainless(0.4)} receiveShadow />
-      ))}
-      {cut &&
-        [phiStart, phiStart + phiLength].map((phi, i) => (
-          <mesh key={i} geometry={shell.capG} material={fm.plastic('#8e959b', 0.6)} rotation={[0, phi - Math.PI / 2, 0]} />
+    <group ref={root} position={position} rotation={rotation} scale={scale} userData={DEVICE_ROOT} {...clickable(onClick)}>
+      <Merge>
+        {/* vessel shell (outer + inner surfaces, section caps at the cut) */}
+        {shell.pieces.map((g, i) => (
+          <mesh key={i} geometry={g} material={shellMat} castShadow receiveShadow />
         ))}
-      {/* weld seams at the tangent lines + longitudinal seam */}
-      {[L.yT1, L.yT2].map((y, i) => (
-        <mesh key={i} geometry={torus(a + 0.0005, 0.0025, cut ? phiLength : TAU, 96)} material={fm.stainless(0.6)} position={[0, y, 0]} rotation={[Math.PI / 2, 0, cut ? -phiStart - phiLength + Math.PI / 2 : 0]} />
-      ))}
-      <mesh geometry={box(0.005, height, 0.003)} material={fm.stainless(0.6)} position={[Math.sin(-2.2) * (a + 0.001), (L.yT1 + L.yT2) / 2, Math.cos(-2.2) * (a + 0.001)]} rotation={[0, -2.2, 0]} />
+        {shell.innerPieces.map((g, i) => (
+          <mesh key={i} geometry={g} material={fm.stainless(0.4)} receiveShadow />
+        ))}
+        {cut &&
+          [phiStart, phiStart + phiLength].map((phi, i) => (
+            <mesh key={i} geometry={shell.capG} material={fm.plastic('#8e959b', 0.6)} rotation={[0, phi - Math.PI / 2, 0]} />
+          ))}
+        {/* weld seams at the tangent lines + longitudinal seam */}
+        {[L.yT1, L.yT2].map((y, i) => (
+          <mesh key={i} geometry={torus(a + 0.0005, 0.0025, cut ? phiLength : TAU, 96)} material={fm.stainless(0.6)} position={[0, y, 0]} rotation={[Math.PI / 2, 0, cut ? -phiStart - phiLength + Math.PI / 2 : 0]} />
+        ))}
+        <mesh geometry={box(0.005, height, 0.003)} material={fm.stainless(0.6)} position={[Math.sin(-2.2) * (a + 0.001), (L.yT1 + L.yT2) / 2, Math.cos(-2.2) * (a + 0.001)]} rotation={[0, -2.2, 0]} />
+
+        {/* radial baffles (T/12 wide, T/72 off the wall) on welded clips */}
+        {bafflePhis.map((phi, i) => (
+          <group key={i} rotation={[0, phi, 0]}>
+            <mesh geometry={box(0.006, baffleH, baffleW)} material={fm.stainless(0.4)} position={[0, (L.yT1 + L.yT2) / 2, baffleR]} castShadow />
+            {[-0.38, 0, 0.38].map((f) => (
+              <mesh key={f} geometry={box(0.03, 0.04, baffleGap + 0.012)} material={fm.stainless(0.45)} position={[0, (L.yT1 + L.yT2) / 2 + f * baffleH, a - WALL - (baffleGap + 0.012) / 2 + 0.002]} />
+            ))}
+          </group>
+        ))}
+
+        {/* legs with gusset pads and ball feet */}
+        {legPhis.map((phi, i) => {
+          const x = Math.sin(phi) * legR;
+          const z = Math.cos(phi) * legR;
+          return (
+            <group key={i}>
+              <mesh geometry={cylY(0.03, legTop - 0.06, 20)} material={fm.stainless(0.35)} position={[x, 0.06 + (legTop - 0.06) / 2, z]} castShadow />
+              <mesh geometry={box(0.09, 0.28, 0.006)} material={fm.stainless(0.4)} position={[Math.sin(phi) * (a + 0.006), legTop - 0.12, Math.cos(phi) * (a + 0.006)]} rotation={[0, phi, 0]} />
+              <mesh geometry={sphere(0.032, 16)} material={fm.stainless(0.3)} position={[x, legTop, z]} />
+              <mesh geometry={cylY(0.012, 0.05, 12)} material={fm.stainless(0.3)} position={[x, 0.045, z]} />
+              <mesh geometry={latheY('ballFoot', [[0, 0], [0.045, 0], [0.045, 0.008], [0.03, 0.022], [0, 0.028]], 24)} material={fm.stainless(0.35)} position={[x, 0, z]} castShadow />
+            </group>
+          );
+        })}
+
+        {/* nozzles: flanged necks ending at the vessel wall, weld-in sockets for the fork switches */}
+        <NozzleNeck n={n.inlet} flangeR={0.08} neckR={0.03} />
+        <NozzleNeck n={n.lt} flangeR={0.1} neckR={0.045} />
+        <NozzleNeck n={n.vent} flangeR={0.07} neckR={0.028} />
+        <NozzleNeck n={n.tt} flangeR={0.045} neckR={0.02} />
+        <WeldSocket n={n.lsl} />
+        <WeldSocket n={n.lsh} />
+        <WeldSocket n={n.lshh} />
+        <NozzleNeck n={n.heater} flangeR={0.11} neckR={0.07} />
+        {/* vent gooseneck */}
+        <OnNozzle nozzle={n.vent}>
+          <mesh geometry={cylY(0.028, 0.08, 20)} material={fm.stainless()} position={[0, 0.04, 0]} />
+          <mesh geometry={torus(0.06, 0.028, Math.PI, 20)} material={fm.stainless()} position={[0.06, 0.08, 0]} />
+          <mesh geometry={cylY(0.028, 0.04, 20)} material={fm.stainless()} position={[0.12, 0.06, 0]} />
+          <mesh geometry={cylY(0.034, 0.012, 20)} material={fm.stainless()} position={[0.12, 0.04, 0]} />
+        </OnNozzle>
+        {/* bottom outlet */}
+        <OnNozzle nozzle={n.outlet}>
+          <mesh geometry={cylY(0.03, 0.12, 24)} material={fm.stainless()} position={[0, -0.06, 0]} castShadow />
+          <mesh geometry={cylY(0.08, 0.016, 32)} material={fm.stainless()} position={[0, -0.008, 0]} />
+        </OnNozzle>
+        {/* immersion heater: flange, terminal enclosure with domed cap, gland pointing down, warning label */}
+        <OnNozzle nozzle={n.heater}>
+          <group rotation={[0, heaterRot, 0]}>
+            <mesh geometry={cylY(0.11, 0.02, 32)} material={fm.stainless()} position={[0, 0.01, 0]} />
+            <mesh geometry={cylY(0.06, 0.03, 28)} material={fm.stainless()} position={[0, 0.035, 0]} />
+            <mesh geometry={cylY(0.088, 0.13, 32)} material={fm.sheet('#7d858b', 0.45)} position={[0, 0.115, 0]} castShadow />
+            <mesh geometry={torus(0.088, 0.004, TAU, 32)} material={fm.sheet('#6c7278', 0.5)} position={[0, 0.18, 0]} rotation={[Math.PI / 2, 0, 0]} />
+            <mesh
+              geometry={latheY('heaterCap', [[0.09, 0], [0.09, 0.012], [0.084, 0.03], [0.066, 0.05], [0.036, 0.062], [0, 0.066]], 32)}
+              material={fm.sheet('#7d858b', 0.45)}
+              position={[0, 0.18, 0]}
+              castShadow
+            />
+            {[0, 1, 2, 3].map((i) => {
+              const ang = (i / 4) * TAU + TAU / 8;
+              return <HexBolt key={i} d={0.006} position={[Math.cos(ang) * 0.095, 0.183, Math.sin(ang) * 0.095]} rotation={[-Math.PI / 2, 0, 0]} />;
+            })}
+            {/* cable gland (local +X = world down) */}
+            <group position={[0.088, 0.1, 0]} rotation={[0, 0, -Math.PI / 2]}>
+              <mesh geometry={hexGeo(0.03, 0.008)} material={fm.nickel()} position={[0, 0.004, 0]} rotation={[Math.PI / 2, 0, 0]} />
+              <mesh geometry={cylY(0.012, 0.018, 18, 0.009)} material={fm.plastic('#1d1e21', 0.5)} position={[0, 0.017, 0]} />
+              <RoutedCable rootRef={root} route={cables?.heater} from={[0, 0.026, 0]} dir={[0, 1, 0]} radius={0.009} color="#1b1c1e" lead={0.05} />
+            </group>
+            {/* DANGER label on the enclosure (faces the front) */}
+            <mesh position={[0, 0.115, 0.0885]} material={fm.plate(dangerTex())}>
+              <planeGeometry args={[0.07, 0.035]} />
+            </mesh>
+          </group>
+          {[-0.03, 0, 0.03].map((x, i) => (
+            <mesh key={i} geometry={cylY(0.007, 0.5, 10)} material={heaterMat} position={[x, -0.1 - 0.25 - 0.12, (i - 1) * 0.02]} />
+          ))}
+        </OnNozzle>
+        {/* manway with hinged lid & swing bolts */}
+        <OnNozzle nozzle={n.manway}>
+          <mesh geometry={cylY(0.225, 0.16, 48, 0.225, true)} material={stainless2()} position={[0, -0.08, 0]} castShadow />
+          <mesh geometry={cylY(0.245, 0.018, 48)} material={fm.stainless()} position={[0, -0.009, 0]} />
+          <mesh geometry={latheY('manwayLid', [[0.245, 0], [0.245, 0.012], [0.2, 0.03], [0.0, 0.035]], 48)} material={fm.stainless()} position={[0, 0.001, 0]} castShadow />
+          <mesh geometry={torus(0.05, 0.008, Math.PI, 16)} material={fm.stainless()} position={[0, 0.036, 0]} />
+          {[0, 1, 2, 3, 4].map((i) => {
+            const ang = (i / 5) * TAU + 0.6;
+            return (
+              <group key={i} position={[Math.cos(ang) * 0.262, 0, Math.sin(ang) * 0.262]}>
+                <mesh geometry={cylY(0.007, 0.06, 10)} material={fm.stainless()} position={[0, 0, 0]} />
+                <mesh geometry={latheY('starKnob', [[0.0, 0], [0.024, 0], [0.026, 0.012], [0.016, 0.022], [0, 0.024]], 8)} material={fm.plastic('#1c1d20', 0.5)} position={[0, 0.03, 0]} />
+              </group>
+            );
+          })}
+          <mesh geometry={box(0.08, 0.03, 0.03)} material={fm.stainless()} position={[0, 0.0, -0.26]} />
+        </OnNozzle>
+
+        {/* agitator drive: nozzle flange, lantern, inline gearbox (the vertical motor has its own batch) */}
+        {agitator && (
+          <group>
+            <mesh geometry={cylY(0.09, L.nozzles.agitator.position[1] - L.yTop + 0.02, 32)} material={fm.stainless()} position={[0, (L.nozzles.agitator.position[1] + L.yTop) / 2 - 0.01, 0]} />
+            <mesh geometry={cylY(0.16, 0.02, 40)} material={fm.stainless()} position={[0, n.agitator.position[1] - 0.01, 0]} castShadow />
+            <group position={[0, n.agitator.position[1], 0]}>
+              {/* lantern with two windows */}
+              {[0, 1].map((i) => (
+                <mesh key={i} geometry={box(0.03, 0.14, 0.2)} material={fm.cast(MOTOR_BLUE)} position={[i === 0 ? 0.085 : -0.085, 0.07, 0]} castShadow />
+              ))}
+              <mesh geometry={cylY(0.12, 0.018, 40)} material={fm.cast(MOTOR_BLUE)} position={[0, 0.149, 0]} castShadow />
+              <mesh geometry={cylY(0.12, 0.018, 40)} material={fm.cast(MOTOR_BLUE)} position={[0, 0.009, 0]} />
+              {/* inline helical gearbox */}
+              <mesh geometry={rbox(0.2, 0.2, 0.2, 0.035, 3)} material={fm.cast(MOTOR_BLUE)} position={[0, 0.26, 0]} castShadow />
+              <mesh geometry={cylY(0.09, 0.03, 32)} material={fm.cast(MOTOR_BLUE)} position={[0, 0.375, 0]} />
+              <mesh geometry={sphere(0.008, 10)} material={fm.brass()} position={[0.06, 0.365, 0.06]} />
+            </group>
+            {/* cable cleats down the back of the shell (default route) */}
+            {agitatorStub &&
+              [L.yT2 - 0.1, (L.yT1 + L.yT2) / 2, L.yT1 + 0.25].map((y) => (
+                <group key={y} position={[(a + 0.004) * cs, y, (a + 0.004) * cc]} rotation={[0, cablePhi, 0]}>
+                  <mesh geometry={box(0.05, 0.03, 0.008)} material={fm.stainless(0.45)} position={[0, 0, 0.004]} />
+                  <mesh geometry={torus(0.014, 0.003, Math.PI, 12)} material={fm.stainless(0.45)} position={[0, 0, 0.026]} rotation={[Math.PI / 2, 0, 0]} />
+                </group>
+              ))}
+            {agitatorStub && <ConduitStub visible position={agitatorStubPos} />}
+          </group>
+        )}
+
+        {/* nameplate: bent to the shell radius, on two standoff blocks, outside the cut-away */}
+        <group rotation={[0, platePhi, 0]}>
+          {[-1, 1].map((sx) => (
+            <mesh key={sx} geometry={box(0.018, 0.05, 0.0095)} material={fm.stainless(0.4)} position={[sx * 0.075, plateY, a - 0.0013]} />
+          ))}
+          <mesh position={[0, plateY, 0]} material={fm.plate(tankPlateTex(tag, '2000 L'))}>
+            <cylinderGeometry args={[plateR + 0.004, plateR + 0.004, 0.1, 12, 1, true, -plateArc / 2, plateArc]} />
+          </mesh>
+          <mesh position={[0, plateY, 0]} material={fm.stainless(0.4)}>
+            <cylinderGeometry args={[plateR + 0.0035, plateR + 0.0035, 0.104, 12, 1, true, -plateArc / 2 - 0.004, plateArc + 0.008]} />
+          </mesh>
+        </group>
+      </Merge>
+
+      {/* agitator motor (own batch; spins via getAngle) */}
+      {agitator && (
+        <group position={[0, n.agitator.position[1] + 0.39, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <MotorBody frame="small" color={MOTOR_BLUE} getAngle={getMotorAngle} flange shaft={false} conduit="gland" cableTo={agitatorRoute} rootRef={root} liftingEye={false} nameplateAngle={Math.PI / 2} />
+        </group>
+      )}
 
       {/* sight window when not cut away */}
       {!cut && <SightWindow L={L} />}
 
       {/* liquid */}
-      <mesh geometry={liquidGeo(diameter, height, phiStart, phiLength, cut)} material={liquid.back} frustumCulled={false} renderOrder={1} />
+      <mesh ref={liquidMesh} geometry={liquidGeo(diameter, height, phiStart, phiLength, cut)} material={liquid.back} frustumCulled={false} renderOrder={1} />
       <mesh geometry={liquidGeo(diameter, height, phiStart, phiLength, cut)} material={liquid.material} frustumCulled={false} renderOrder={2} />
+      <Steam L={L} getLevel={getLevel} getTemperature={getTemperature} phiStart={phiStart} phiLength={phiLength} />
 
-      {/* baffles */}
-      {[Math.PI / 2, Math.PI, (3 * Math.PI) / 2].map((phi, i) => (
-        <mesh
-          key={i}
-          geometry={box(0.006, height * 0.92, diameter / 12)}
-          material={fm.stainless(0.4)}
-          position={[Math.sin(phi) * (a - 0.02 - diameter / 24), (L.yT1 + L.yT2) / 2, Math.cos(phi) * (a - 0.02 - diameter / 24)]}
-          rotation={[0, phi + Math.PI / 2, 0]}
-        />
-      ))}
-
-      {/* legs with gusset pads and ball feet */}
-      {legPhis.map((phi, i) => {
-        const x = Math.sin(phi) * legR;
-        const z = Math.cos(phi) * legR;
-        return (
-          <group key={i}>
-            <mesh geometry={cylY(0.03, legTop - 0.06, 20)} material={fm.stainless(0.35)} position={[x, 0.06 + (legTop - 0.06) / 2, z]} castShadow />
-            <mesh geometry={box(0.09, 0.28, 0.006)} material={fm.stainless(0.4)} position={[Math.sin(phi) * (a + 0.006), legTop - 0.12, Math.cos(phi) * (a + 0.006)]} rotation={[0, phi, 0]} />
-            <mesh geometry={sphere(0.032, 16)} material={fm.stainless(0.3)} position={[x, legTop, z]} />
-            <mesh geometry={cylY(0.012, 0.05, 12)} material={fm.stainless(0.3)} position={[x, 0.045, z]} />
-            <mesh geometry={latheY('ballFoot', [[0, 0], [0.045, 0], [0.045, 0.008], [0.03, 0.022], [0, 0.028]], 24)} material={fm.stainless(0.35)} position={[x, 0, z]} castShadow />
-          </group>
-        );
-      })}
-
-      {/* nozzles */}
-      <NozzleNeck n={n.inlet} flangeR={0.08} neckR={0.03} />
-      <NozzleNeck n={n.lt} flangeR={0.1} neckR={0.045} />
-      <NozzleNeck n={n.vent} flangeR={0.07} neckR={0.028} />
-      <NozzleNeck n={n.tt} flangeR={0.045} neckR={0.02} />
-      <NozzleNeck n={n.lsl} flangeR={0.045} neckR={0.02} />
-      <NozzleNeck n={n.lsh} flangeR={0.045} neckR={0.02} />
-      <NozzleNeck n={n.lshh} flangeR={0.045} neckR={0.02} />
-      <NozzleNeck n={n.heater} flangeR={0.11} neckR={0.07} />
-      {/* vent gooseneck */}
-      <OnNozzle nozzle={n.vent}>
-        <mesh geometry={cylY(0.028, 0.08, 20)} material={fm.stainless()} position={[0, 0.04, 0]} />
-        <mesh geometry={torus(0.06, 0.028, Math.PI, 20)} material={fm.stainless()} position={[0.06, 0.08, 0]} />
-        <mesh geometry={cylY(0.028, 0.04, 20)} material={fm.stainless()} position={[0.12, 0.06, 0]} />
-        <mesh geometry={cylY(0.034, 0.012, 20)} material={fm.stainless()} position={[0.12, 0.04, 0]} />
-      </OnNozzle>
-      {/* bottom outlet */}
-      <OnNozzle nozzle={n.outlet}>
-        <mesh geometry={cylY(0.03, 0.12, 24)} material={fm.stainless()} position={[0, -0.06, 0]} castShadow />
-        <mesh geometry={cylY(0.08, 0.016, 32)} material={fm.stainless()} position={[0, -0.008, 0]} />
-      </OnNozzle>
-      {/* immersion heater terminal housing (outside) + elements (inside) */}
-      <OnNozzle nozzle={n.heater}>
-        <mesh geometry={cylY(0.11, 0.02, 32)} material={fm.stainless()} position={[0, 0.01, 0]} />
-        <mesh geometry={cylY(0.085, 0.16, 32)} material={fm.sheet('#7c8288', 0.5)} position={[0, 0.1, 0]} castShadow />
-        <mesh geometry={cylY(0.088, 0.02, 32)} material={fm.sheet('#6c7278', 0.5)} position={[0, 0.19, 0]} />
-        <mesh geometry={hexGeo(0.03, 0.012)} material={fm.plastic('#222', 0.5)} position={[0.086, 0.1, 0]} rotation={[0, Math.PI / 2, 0]} />
-        {[-0.03, 0, 0.03].map((x, i) => (
-          <mesh key={i} geometry={cylY(0.007, 0.5, 10)} material={heaterMat} position={[x, -0.1 - 0.25 - 0.12, (i - 1) * 0.02]} />
-        ))}
-      </OnNozzle>
-      {/* manway with hinged lid & swing bolts */}
-      <OnNozzle nozzle={n.manway}>
-        <mesh geometry={cylY(0.225, 0.16, 48, 0.225, true)} material={fm.stainless()} position={[0, -0.08, 0]} castShadow />
-        <mesh geometry={cylY(0.245, 0.018, 48)} material={fm.stainless()} position={[0, -0.009, 0]} />
-        <mesh geometry={latheY('manwayLid', [[0.245, 0], [0.245, 0.012], [0.2, 0.03], [0.0, 0.035]], 48)} material={fm.stainless()} position={[0, 0.001, 0]} castShadow />
-        <mesh geometry={torus(0.05, 0.008, Math.PI, 16)} material={fm.stainless()} position={[0, 0.036, 0]} />
-        {[0, 1, 2, 3, 4].map((i) => {
-          const ang = (i / 5) * TAU + 0.6;
-          return (
-            <group key={i} position={[Math.cos(ang) * 0.262, 0, Math.sin(ang) * 0.262]}>
-              <mesh geometry={cylY(0.007, 0.06, 10)} material={fm.stainless()} position={[0, 0, 0]} />
-              <mesh geometry={latheY('starKnob', [[0.0, 0], [0.024, 0], [0.026, 0.012], [0.016, 0.022], [0, 0.024]], 8)} material={fm.plastic('#1c1d20', 0.5)} position={[0, 0.03, 0]} />
-            </group>
-          );
-        })}
-        <mesh geometry={box(0.08, 0.03, 0.03)} material={fm.stainless()} position={[0, 0.0, -0.26]} />
-      </OnNozzle>
-
-      {/* agitator drive: nozzle flange, lantern, inline gearbox, vertical motor */}
-      {agitator && (
-        <group>
-          <mesh geometry={cylY(0.09, L.nozzles.agitator.position[1] - L.yTop + 0.02, 32)} material={fm.stainless()} position={[0, (L.nozzles.agitator.position[1] + L.yTop) / 2 - 0.01, 0]} />
-          <mesh geometry={cylY(0.16, 0.02, 40)} material={fm.stainless()} position={[0, n.agitator.position[1] - 0.01, 0]} castShadow />
-          <group position={[0, n.agitator.position[1], 0]}>
-            {/* lantern with two windows */}
-            {[0, 1].map((i) => (
-              <mesh key={i} geometry={box(0.03, 0.14, 0.2)} material={fm.cast(MOTOR_BLUE)} position={[i === 0 ? 0.085 : -0.085, 0.07, 0]} castShadow />
-            ))}
-            <mesh geometry={cylY(0.12, 0.018, 40)} material={fm.cast(MOTOR_BLUE)} position={[0, 0.149, 0]} castShadow />
-            <mesh geometry={cylY(0.12, 0.018, 40)} material={fm.cast(MOTOR_BLUE)} position={[0, 0.009, 0]} />
-            {/* inline helical gearbox */}
-            <mesh geometry={rbox(0.2, 0.2, 0.2, 0.035, 3)} material={fm.cast(MOTOR_BLUE)} position={[0, 0.26, 0]} castShadow />
-            <mesh geometry={cylY(0.09, 0.03, 32)} material={fm.cast(MOTOR_BLUE)} position={[0, 0.375, 0]} />
-            <mesh geometry={sphere(0.008, 10)} material={fm.brass()} position={[0.06, 0.365, 0.06]} />
-            {/* vertical motor (fan up) */}
-            <group position={[0, 0.39, 0]} rotation={[Math.PI / 2, 0, 0]}>
-              <MotorBody frame="small" color={MOTOR_BLUE} getAngle={getMotorAngle} flange shaft={false} conduit="gland" conduitDrop={0.2} liftingEye={false} nameplateAngle={Math.PI / 2} />
-            </group>
-          </group>
-        </group>
-      )}
       {/* agitator shaft + pitched-blade turbine */}
       {agitator && (
-        <group ref={impeller}>
-          <mesh geometry={cylY(0.02, shaftTop - impY, 20)} material={fm.polished()} position={[0, (shaftTop + impY) / 2, 0]} castShadow />
-          <mesh geometry={cylY(0.034, 0.08, 20)} material={fm.polished()} position={[0, impY, 0]} />
-          <mesh geometry={cylY(0.03, 0.06, 20)} material={fm.cast('#3c4046', 0.4)} position={[0, n.agitator.position[1] + 0.07, 0]} />
-          {[0, 1, 2, 3].map((i) => (
-            <group key={i} rotation={[0, (i * Math.PI) / 2, 0]}>
-              <mesh geometry={box(0.2, 0.07, 0.007)} material={fm.polished()} position={[0.13, impY, 0]} rotation={[Math.PI / 4, 0, 0]} castShadow />
-            </group>
-          ))}
+        <group ref={impeller} userData={{ noMerge: true }}>
+          <Merge>
+            <mesh geometry={cylY(0.02, shaftTop - impY, 20)} material={fm.polished()} position={[0, (shaftTop + impY) / 2, 0]} castShadow />
+            <mesh geometry={cylY(0.034, 0.08, 20)} material={fm.polished()} position={[0, impY, 0]} />
+            <mesh geometry={cylY(0.03, 0.06, 20)} material={fm.cast('#3c4046', 0.4)} position={[0, n.agitator.position[1] + 0.07, 0]} />
+            {[0, 1, 2, 3].map((i) => (
+              <group key={i} rotation={[0, (i * Math.PI) / 2, 0]}>
+                <mesh geometry={box(0.2, 0.07, 0.007)} material={fm.polished()} position={[0.13, impY, 0]} rotation={[Math.PI / 4, 0, 0]} castShadow />
+              </group>
+            ))}
+          </Merge>
         </group>
       )}
-
-      {/* nameplate */}
-      <mesh position={[Math.sin(-0.75) * (a + 0.004), L.yT1 + 0.35, Math.cos(-0.75) * (a + 0.004)]} rotation={[0, -0.75, 0]}>
-        <planeGeometry args={[0.2, 0.1]} />
-        <meshStandardMaterial map={tankPlateTex(tag, '2000 L')} metalness={0.6} roughness={0.35} />
-      </mesh>
     </group>
   );
 }

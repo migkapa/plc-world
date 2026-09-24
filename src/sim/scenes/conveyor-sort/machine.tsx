@@ -282,6 +282,7 @@ export function Feeder({ state, runtime }: { state: ConveyorSortState; runtime: 
               material={boxMaterial('short')}
               castShadow
               receiveShadow
+              userData={{ noMerge: true }}
             />
           ))}
         </group>
@@ -586,6 +587,7 @@ function rejectLabel() {
 /** Rejected boxes lying in the tote (count = tall boxes diverted that already landed). */
 export function TotePile({ state }: { state: ConveyorSortState }) {
   const ref = useRef<THREE.InstancedMesh>(null);
+  const shown = useRef(-1);
   const slots = useMemo(() => {
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
@@ -614,7 +616,8 @@ export function TotePile({ state }: { state: ConveyorSortState }) {
     for (const b of state.boxes) if (b.tall && (b.state === 'diverted' || b.state === 'chute')) inFlight++;
     const landed = Math.max(0, state.boxesRejected - inFlight);
     const n = landed === 0 ? 0 : Math.min(slots.length, landed);
-    if (im.count !== n) {
+    if (shown.current !== n) {
+      shown.current = n;
       for (let i = 0; i < n; i++) im.setMatrixAt(i, slots[i]!);
       im.count = n;
       im.instanceMatrix.needsUpdate = true;
@@ -685,6 +688,7 @@ export function GoodLane({ state }: { state: ConveyorSortState }) {
 /** Finished-goods pallet: short boxes delivered to the good lane stack up (a new pallet every 36). */
 export function GoodPallet({ state }: { state: ConveyorSortState }) {
   const ref = useRef<THREE.InstancedMesh>(null);
+  const shown = useRef(-1);
   const CAP = 36;
   const slots = useMemo(() => {
     const out: THREE.Matrix4[] = [];
@@ -709,7 +713,8 @@ export function GoodPallet({ state }: { state: ConveyorSortState }) {
     for (const b of state.boxes) if (!b.tall && b.state === 'good') inFlight++;
     const done = Math.max(0, state.boxesGood - inFlight);
     const n = done === 0 ? 0 : ((done - 1) % CAP) + 1;
-    if (im.count !== n) {
+    if (shown.current !== n) {
+      shown.current = n;
       for (let i = 0; i < n; i++) im.setMatrixAt(i, slots[i]!);
       im.count = n;
       im.instanceMatrix.needsUpdate = true;
@@ -749,4 +754,3 @@ export function sensorCable(from: Vec3, to: Vec3, frameSide = -1): CableSpec {
   };
 }
 
-export { mapBoxes as mapConveyorBoxes };

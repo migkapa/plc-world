@@ -1,0 +1,86 @@
+/* Showroom / reference micro-animations (disabled under reduced motion by not applying the classes). */
+@keyframes sr-pulse {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.9;
+  }
+  70% {
+    transform: scale(1.45);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.45);
+    opacity: 0;
+  }
+}
+.sr-pulse {
+  animation: sr-pulse 2.2s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+
+@keyframes sr-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.sr-rise {
+  animation: sr-rise 0.22s ease-out both;
+}
+
+@keyframes sr-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.sr-fade {
+  animation: sr-fade 0.35s ease-out both;
+}
+
+/* LED-like I/O point toggles */
+.sr-point[data-on='true'] {
+  background: radial-gradient(circle at 50% 40%, #fff7c2 0%, #facc15 38%, #b45309 100%);
+  color: #1c1400;
+  border-color: #fde047;
+  box-shadow:
+    0 0 10px rgba(250, 204, 21, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* Range inputs */
+.sr-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #e0252b var(--p, 50%), #2a3441 var(--p, 50%));
+  outline: none;
+}
+.sr-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #f8fafc;
+  border: 2px solid #e0252b;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+.sr-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #f8fafc;
+  border: 2px solid #e0252b;
+  cursor: pointer;
+}
+.sr-range:focus-visible {
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.45);
+}

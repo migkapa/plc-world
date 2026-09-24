@@ -108,142 +108,153 @@ export function lensEmissiveTexture(): THREE.CanvasTexture {
 
 type Draw = (ctx: CanvasRenderingContext2D, w: number, h: number) => void;
 
-/** Upraised hand (palm facing viewer, fingers together, thumb out to the left). */
+/** Symbols are designed in a 60 × 100 unit box (y down) and scaled to fill the target height. */
+function fitBox(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  ctx.translate(w / 2, h / 2);
+  const s = Math.min(w / 60, h / 100);
+  ctx.scale(s, s);
+}
+
+/**
+ * MUTCD upraised hand (Portland orange): solid palm, four fingers together (hairline gaps), thumb
+ * out to the left, short wrist.
+ */
 const drawHand: Draw = (ctx, w, h) => {
   ctx.save();
-  ctx.translate(w / 2, h / 2);
-  const s = Math.min(w, h) / 100;
-  ctx.scale(s, s);
+  fitBox(ctx, w, h);
   ctx.fillStyle = '#fff';
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  // palm
+  // palm + wrist
   ctx.beginPath();
-  ctx.moveTo(-20, -8);
-  ctx.lineTo(22, -8);
-  ctx.lineTo(22, 22);
-  ctx.quadraticCurveTo(20, 40, 4, 44);
-  ctx.lineTo(-10, 44);
-  ctx.quadraticCurveTo(-22, 38, -22, 20);
+  ctx.moveTo(-21, -8);
+  ctx.lineTo(21, -8);
+  ctx.lineTo(21, 24);
+  ctx.quadraticCurveTo(20, 34, 12, 38);
+  ctx.lineTo(12, 49);
+  ctx.lineTo(-14, 49);
+  ctx.lineTo(-14, 38);
+  ctx.quadraticCurveTo(-21, 33, -21, 22);
   ctx.closePath();
   ctx.fill();
-  // fingers
+  // fingers (index..little), rounded tips, tiny gaps
   const fingers: [number, number][] = [
-    [-15, -38],
-    [-4.5, -44],
-    [6, -42],
-    [16.5, -33],
+    [-15.6, -42],
+    [-5.2, -48],
+    [5.2, -46],
+    [15.6, -38],
   ];
   for (const [x, top] of fingers) {
     ctx.beginPath();
-    ctx.roundRect(x - 5, top, 10, -top - 2, 5);
+    ctx.roundRect(x - 4.9, top, 9.8, -top + 2, 4.9);
     ctx.fill();
   }
-  // thumb
+  // thumb: angled up-left from the lower palm
   ctx.save();
-  ctx.translate(-20, 14);
-  ctx.rotate(-0.75);
+  ctx.translate(-19, 20);
+  ctx.rotate(-0.62);
   ctx.beginPath();
-  ctx.roundRect(-5.5, -30, 11, 32, 5.5);
+  ctx.roundRect(-5.2, -31, 10.4, 36, 5.2);
   ctx.fill();
   ctx.restore();
   ctx.restore();
 };
 
-/** Walking person in profile, striding to the right. */
+/** MUTCD walking person (lunar white) in profile, striding to the right: solid head, torso & limbs. */
 const drawPerson: Draw = (ctx, w, h) => {
   ctx.save();
-  ctx.translate(w / 2, h / 2);
-  const s = Math.min(w, h) / 100;
-  ctx.scale(s, s);
+  fitBox(ctx, w, h);
   ctx.fillStyle = '#fff';
   ctx.strokeStyle = '#fff';
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  // head
+  // head (overlaps the neck: no gap)
   ctx.beginPath();
-  ctx.arc(3, -38, 7.5, 0, Math.PI * 2);
+  ctx.arc(6, -40, 8.6, 0, Math.PI * 2);
   ctx.fill();
-  // torso
-  ctx.lineWidth = 12;
+  // torso: thick tapered body leaning forward
   ctx.beginPath();
-  ctx.moveTo(1, -24);
-  ctx.lineTo(-2, 4);
-  ctx.stroke();
+  ctx.moveTo(-2, -32);
+  ctx.quadraticCurveTo(8, -35, 13, -29);
+  ctx.lineTo(8, 2);
+  ctx.lineTo(-6, 2);
+  ctx.closePath();
+  ctx.fill();
   // arms
-  ctx.lineWidth = 7;
+  ctx.lineWidth = 8.5;
   ctx.beginPath();
-  ctx.moveTo(1, -22);
-  ctx.lineTo(-10, -6);
-  ctx.lineTo(-16, 8);
-  ctx.moveTo(2, -22);
-  ctx.lineTo(12, -8);
-  ctx.lineTo(20, 2);
+  ctx.moveTo(8, -26);
+  ctx.lineTo(16, -12);
+  ctx.lineTo(23, -2);
+  ctx.moveTo(1, -26);
+  ctx.lineTo(-9, -12);
+  ctx.lineTo(-17, -1);
   ctx.stroke();
-  // legs
-  ctx.lineWidth = 9;
+  // legs in stride
+  ctx.lineWidth = 11.5;
   ctx.beginPath();
-  ctx.moveTo(-2, 4);
-  ctx.lineTo(-12, 24);
-  ctx.lineTo(-22, 42);
-  ctx.moveTo(-2, 4);
-  ctx.lineTo(10, 22);
-  ctx.lineTo(14, 43);
+  ctx.moveTo(4, 0);
+  ctx.lineTo(13, 21);
+  ctx.lineTo(16, 42);
+  ctx.moveTo(-2, 0);
+  ctx.lineTo(-10, 20);
+  ctx.lineTo(-21, 38);
   ctx.stroke();
   // feet
-  ctx.lineWidth = 6;
+  ctx.lineWidth = 7;
   ctx.beginPath();
-  ctx.moveTo(-22, 42);
-  ctx.lineTo(-28, 40);
-  ctx.moveTo(14, 43);
-  ctx.lineTo(22, 43);
+  ctx.moveTo(14, 45);
+  ctx.lineTo(25, 45);
+  ctx.moveTo(-21, 40);
+  ctx.lineTo(-28, 36);
   ctx.stroke();
   ctx.restore();
 };
 
-/** Rasterize a symbol into a mask, then re-draw it as a grid of LED dots. */
-function dotify(draw: Draw, w: number, h: number, pitch: number, dotR: number, mode: 'lit' | 'unlit'): HTMLCanvasElement {
-  const [mask, mctx] = makeCanvas(w, h);
+/** Rasterize a symbol (fitted into w × h px) and return the LED dot centers that fall inside it. */
+function symbolDots(draw: Draw, w: number, h: number, pitch: number): [number, number][] {
+  const [, mctx] = makeCanvas(w, h);
   draw(mctx, w, h);
   const data = mctx.getImageData(0, 0, w, h).data;
-  const [c, ctx] = makeCanvas(w, h);
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, w, h);
-  for (let y = pitch / 2; y < h; y += pitch) {
-    for (let x = pitch / 2; x < w; x += pitch) {
+  const out: [number, number][] = [];
+  const nx = Math.floor(w / pitch);
+  const ny = Math.floor(h / pitch);
+  const ox = (w - (nx - 1) * pitch) / 2;
+  const oy = (h - (ny - 1) * pitch) / 2;
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const x = ox + i * pitch;
+      const y = oy + j * pitch;
       const a = data[(Math.floor(y) * w + Math.floor(x)) * 4 + 3]!;
-      if (a < 100) continue;
-      if (mode === 'lit') {
-        const g = ctx.createRadialGradient(x, y, 0, x, y, dotR * 1.7);
-        g.addColorStop(0, 'rgba(255,255,255,1)');
-        g.addColorStop(0.55, 'rgba(255,255,255,0.9)');
-        g.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(x, y, dotR * 1.7, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.fillStyle = '#4a4a4a';
-        ctx.beginPath();
-        ctx.arc(x, y, dotR, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#8a8a8a';
-        ctx.beginPath();
-        ctx.arc(x - dotR * 0.3, y - dotR * 0.3, dotR * 0.35, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      if (a >= 110) out.push([x, y]);
     }
   }
-  void mask;
-  return c;
+  return out;
+}
+
+/** One LED: lit = colored core with a soft halo; unlit = dark cup with a tiny specular dot. */
+function drawLed(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string | null): void {
+  if (color) {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r * 1.75);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.3, color);
+    g.addColorStop(0.6, color);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r * 1.75, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = '#343434';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#7a7a7a';
+    ctx.beginPath();
+    ctx.arc(x - r * 0.3, y - r * 0.3, r * 0.32, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 export type PedSymbol = 'hand' | 'person';
-
-/** LED dot pattern of a pedestrian symbol ('lit' = emissive map, 'unlit' = faint dark dots for the base map). */
-export function pedSymbolTexture(sym: PedSymbol, mode: 'lit' | 'unlit'): THREE.CanvasTexture {
-  return sharedTex(`led:ped:${sym}:${mode}`, () => canvasTex(dotify(sym === 'hand' ? drawHand : drawPerson, 256, 320, 9, 3.4, mode)));
-}
 
 /** Symbol drawn solid (for printed signs, e.g. the push-button sign). */
 export function drawPedSymbol(ctx: CanvasRenderingContext2D, sym: PedSymbol, x: number, y: number, w: number, h: number, color: string): void {
@@ -256,7 +267,7 @@ export function drawPedSymbol(ctx: CanvasRenderingContext2D, sym: PedSymbol, x: 
 }
 
 // ---------------------------------------------------------------------------
-// Countdown digits (7-segment layout drawn with LED dots)
+// Countdown digits (7-segment layout drawn with a double row of LED dots)
 // ---------------------------------------------------------------------------
 
 const SEGMENTS: Record<string, string> = {
@@ -273,14 +284,13 @@ const SEGMENTS: Record<string, string> = {
   ' ': '',
 };
 
-function drawSegments(ctx: CanvasRenderingContext2D, w: number, h: number, segs: string, mode: 'lit' | 'unlit'): void {
-  // segment endpoints in a 0..1 box
-  const m = 0.14;
-  const L = m;
-  const R = 1 - m;
-  const T = 0.08;
+/** LED centers of one segment set in a w × h box (segments span 4 %…96 % of the height). */
+function segmentDots(w: number, h: number, segs: string, pitch: number): [number, number][] {
+  const L = 0.16;
+  const R = 0.84;
+  const T = 0.04;
   const M = 0.5;
-  const B = 0.92;
+  const B = 0.96;
   const lines: Record<string, [number, number, number, number]> = {
     a: [L, T, R, T],
     b: [R, T, R, M],
@@ -290,57 +300,109 @@ function drawSegments(ctx: CanvasRenderingContext2D, w: number, h: number, segs:
     f: [L, T, L, M],
     g: [L, M, R, M],
   };
-  const pitch = 10;
-  const dotR = 3.6;
-  for (const s of 'abcdefg') {
-    const on = segs.includes(s);
-    if (mode === 'lit' && !on) continue;
+  const out: [number, number][] = [];
+  const off = pitch * 0.42; // double row
+  for (const s of segs) {
     const [x0, y0, x1, y1] = lines[s]!;
-    const len = Math.hypot((x1 - x0) * w, (y1 - y0) * h);
+    const dx = (x1 - x0) * w;
+    const dy = (y1 - y0) * h;
+    const len = Math.hypot(dx, dy);
+    const nx = -dy / len;
+    const ny = dx / len;
     const n = Math.max(2, Math.round(len / pitch));
     for (let i = 1; i < n; i++) {
-      const x = (x0 + ((x1 - x0) * i) / n) * w;
-      const y = (y0 + ((y1 - y0) * i) / n) * h;
-      if (mode === 'lit') {
-        const g = ctx.createRadialGradient(x, y, 0, x, y, dotR * 1.7);
-        g.addColorStop(0, 'rgba(255,255,255,1)');
-        g.addColorStop(0.55, 'rgba(255,255,255,0.9)');
-        g.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(x, y, dotR * 1.7, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.fillStyle = '#474747';
-        ctx.beginPath();
-        ctx.arc(x, y, dotR, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      const x = x0 * w + (dx * i) / n;
+      const y = y0 * h + (dy * i) / n;
+      out.push([x + nx * off, y + ny * off], [x - nx * off, y - ny * off]);
     }
   }
+  return out;
 }
 
-/** Lit dot pattern of one countdown digit ('0'..'9'). */
-export function digitTexture(d: string): THREE.CanvasTexture {
-  return sharedTex(`led:digit:${d}`, () => {
-    const [c, ctx] = makeCanvas(128, 224);
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, 128, 224);
-    drawSegments(ctx, 128, 224, SEGMENTS[d] ?? '', 'lit');
-    return canvasTex(c);
-  });
+// ---------------------------------------------------------------------------
+// Countdown pedestrian module face (16" × 18" class): symbol half + two countdown digits
+// ---------------------------------------------------------------------------
+
+export interface PedFaceLayout {
+  /** Canvas size (px) and meters per px along x / y. */
+  W: number;
+  H: number;
+  /** Rectangles in canvas px: [x, y, w, h]. */
+  symbol: [number, number, number, number];
+  digits: [number, number, number, number][];
 }
 
-/** Unlit "8" (all segments as dark dots) for the base map of a countdown digit. */
-export function digitBaseTexture(): THREE.CanvasTexture {
-  return sharedTex('led:digit:base', () => {
-    const [c, ctx] = makeCanvas(128, 224);
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, 128, 224);
-    drawSegments(ctx, 128, 224, 'abcdefg', 'unlit');
-    return canvasTex(c);
-  });
+export interface PedFaceLayers {
+  layout: PedFaceLayout;
+  /** Unlit face (every LED as a dark cup on a black face). Shared. */
+  base: THREE.CanvasTexture;
+  hand: HTMLCanvasElement;
+  person: HTMLCanvasElement;
+  /** Lit digit '0'..'9' (Portland orange) sized to one digit rectangle. */
+  digits: HTMLCanvasElement[];
 }
+
+const PED_ORANGE = '#ff6a00';
+const PED_WHITE = '#e8f2ff';
+
+/**
+ * Layers of a countdown ped-signal face. `face` = [width, height] m, `symbol` = [cx, w, h] m (centered
+ * vertically), `digitCx` = digit centers (m), `digit` = [w, h] m. Canvas ≈ 1300 px/m, LED pitch ≈ 7 mm.
+ */
+export function pedFaceLayers(face: [number, number], symbol: [number, number, number], digitCx: number[], digit: [number, number]): PedFaceLayers {
+  const key = `led:pedface:${face.join(',')}:${symbol.join(',')}:${digitCx.join(',')}:${digit.join(',')}`;
+  const hit = pedFaceCache.get(key);
+  if (hit) return hit;
+  const ppm = 1300;
+  const W = Math.round(face[0] * ppm);
+  const H = Math.round(face[1] * ppm);
+  const rect = (cx: number, w: number, h: number): [number, number, number, number] => [
+    Math.round((face[0] / 2 + cx - w / 2) * ppm),
+    Math.round((face[1] / 2 - h / 2) * ppm),
+    Math.round(w * ppm),
+    Math.round(h * ppm),
+  ];
+  const layout: PedFaceLayout = { W, H, symbol: rect(symbol[0], symbol[1], symbol[2]), digits: digitCx.map((x) => rect(x, digit[0], digit[1])) };
+  const pitch = 9;
+  const r = 3.3;
+  const [sx, sy, sw, sh] = layout.symbol;
+  const handDots = symbolDots(drawHand, sw, sh, pitch);
+  const personDots = symbolDots(drawPerson, sw, sh, pitch);
+  const layer = (w: number, h: number, dots: [number, number][], color: string) => {
+    const [c, ctx] = makeCanvas(w, h);
+    for (const [x, y] of dots) drawLed(ctx, x, y, r, color);
+    return c;
+  };
+  const hand = layer(sw, sh, handDots, PED_ORANGE);
+  const person = layer(sw, sh, personDots, PED_WHITE);
+  const [, , dw, dh] = layout.digits[0] ?? [0, 0, 1, 1];
+  const digits = '0123456789'.split('').map((d) => layer(dw, dh, segmentDots(dw, dh, SEGMENTS[d]!, 10), PED_ORANGE));
+  const base = sharedTex(`${key}:base`, () => {
+    const [c, ctx] = makeCanvas(W, H);
+    ctx.fillStyle = '#060606';
+    ctx.fillRect(0, 0, W, H);
+    // union of both symbols' LEDs (overlaid module)
+    const seen = new Set<string>();
+    for (const [x, y] of [...handDots, ...personDots]) {
+      const k = `${x}:${y}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      drawLed(ctx, sx + x, sy + y, r, null);
+    }
+    for (const [x0, y0, w, h] of layout.digits) for (const [x, y] of segmentDots(w, h, 'abcdefg', 10)) drawLed(ctx, x0 + x, y0 + y, r, null);
+    // divider between the halves
+    if (layout.digits.length) {
+      const xd = Math.round((sx + sw + layout.digits[0]![0]) / 2);
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(xd - 2, H * 0.08, 4, H * 0.84);
+    }
+    return canvasTex(c, { aniso: 8 });
+  });
+  const res = { layout, base, hand, person, digits };
+  pedFaceCache.set(key, res);
+  return res;
+}
+const pedFaceCache = new Map<string, PedFaceLayers>();
 
 // ---------------------------------------------------------------------------
 // 5×7 dot-matrix font (classic LED message sign font)
@@ -469,17 +531,4 @@ export function dotMatrixTextures(text: string, minCols = 0, px = 20): { base: T
     return canvasTex(c);
   });
   return { base, emissive, cols, rows };
-}
-
-/** Unlit base of an overlaid hand/person module: the union of both symbols' LED dots. */
-export function pedOverlayBaseTexture(): THREE.CanvasTexture {
-  return sharedTex('led:ped:overlayBase', () => {
-    const a = pedSymbolTexture('hand', 'unlit').image as HTMLCanvasElement;
-    const b = pedSymbolTexture('person', 'unlit').image as HTMLCanvasElement;
-    const [c, ctx] = makeCanvas(a.width, a.height);
-    ctx.drawImage(a, 0, 0);
-    ctx.globalCompositeOperation = 'lighten';
-    ctx.drawImage(b, 0, 0);
-    return canvasTex(c);
-  });
 }

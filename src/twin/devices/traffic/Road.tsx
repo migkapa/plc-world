@@ -92,8 +92,8 @@ export const roadMats = {
   sidewalk: () => sharedMat('road:sidewalkMat', () => new THREE.MeshStandardMaterial({ map: sidewalkTexture(), roughness: 0.9 })),
   curb: () => sharedMat('road:curbMat', () => new THREE.MeshStandardMaterial({ map: concreteTexture('#cfcbc2'), roughness: 0.85 })),
   gutter: () => sharedMat('road:gutterMat', () => new THREE.MeshStandardMaterial({ map: concreteTexture('#a9a59c'), roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 })),
-  grass: () => sharedMat('road:grassMat', () => new THREE.MeshStandardMaterial({ map: grassTexture(), roughness: 1 })),
-  domes: () => sharedMat('road:domesMat', () => new THREE.MeshStandardMaterial({ map: domesTexture(), roughness: 0.6 })),
+  grass: () => sharedMat('road:grassMat', () => new THREE.MeshStandardMaterial({ map: grassTexture(), roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })),
+  domes: () => sharedMat('road:domesMat', () => new THREE.MeshStandardMaterial({ map: domesTexture(), roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })),
   white: () => markingMat(TRAFFIC_COLORS.markingWhite),
   yellow: () => markingMat(TRAFFIC_COLORS.markingYellow),
 };
@@ -139,7 +139,7 @@ export interface IntersectionProps extends Placement {
   crosswalkDist?: number;
   crosswalkWidth?: number;
   sidewalkWidth?: number;
-  /** Curb return radius at the corners. Default 1. */
+  /** Curb return radius at the corners. Default 3 m (≈ 10 ft, NACTO urban). */
   cornerRadius?: number;
   curbHeight?: number;
   /** Grass verges beyond the sidewalks (default true). */
@@ -154,8 +154,10 @@ export const INTERSECTION_DEFAULTS = {
   crosswalkDist: 5.5,
   crosswalkWidth: 3,
   sidewalkWidth: 3,
-  cornerRadius: 1,
+  cornerRadius: 3,
   curbHeight: 0.15,
+  /** Lawns sit this much below the walk. */
+  lawnDrop: 0.03,
 } as const;
 
 /** Rectangle of marking paint, possibly rotated about Y. */
@@ -163,16 +165,73 @@ function stripe(cx: number, cz: number, lenX: number, lenZ: number, y = 0.003): 
   return groundRect(cx - lenX / 2, cz - lenZ / 2, cx + lenX / 2, cz + lenZ / 2, y);
 }
 
-/** Corner block (quadrant): rounded corner at (hx, hz), extends to (L, L). Quadrant-local positive coords. */
-function cornerShape(hx: number, hz: number, L: number, R: number): THREE.Shape {
+/**
+ * Sidewalk band of one quadrant (quadrant-local positive coords): from the curb (straight curbs at
+ * x = hx / z = hz joined by a curb return of radius R centred at (hx+R, hz+R)) to the back of walk
+ * at hx+sw / hz+sw, out to the arm ends at L.
+ */
+function walkShape(hx: number, hz: number, L: number, R: number, sw: number): THREE.Shape {
   const s = new THREE.Shape();
   s.moveTo(hx + R, hz);
   s.lineTo(L, hz);
-  s.lineTo(L, L);
+  s.lineTo(L, hz + sw);
+  if (R <= sw) {
+    s.lineTo(hx + sw, hz + sw);
+  } else {
+    // back of walk concentric with the curb return
+    const r2 = R - sw;
+    s.lineTo(hx + R, hz + sw);
+    s.absarc(hx + R, hz + R, r2, Math.PI * 1.5, Math.PI, true);
+  }
+  s.lineTo(hx + sw, L);
   s.lineTo(hx, L);
   s.lineTo(hx, hz + R);
   s.absarc(hx + R, hz + R, R, Math.PI, Math.PI * 1.5, false);
   return s;
+}
+
+/** Lawn behind the walk (quadrant-local). */
+function lawnShape(hx: number, hz: number, L: number, R: number, sw: number): THREE.Shape {
+  const s = new THREE.Shape();
+  if (R <= sw) {
+    s.moveTo(hx + sw, hz + sw);
+  } else {
+    const r2 = R - sw;
+    s.moveTo(hx + sw, hz + R);
+    s.absarc(hx + R, hz + R, r2, Math.PI, Math.PI * 1.5, false);
+  }
+  s.lineTo(L, hz + sw);
+  s.lineTo(L, L);
+  s.lineTo(hx + sw, L);
+  s.closePath();
+  return s;
+}
+
+/** Curb line offset from the road centerline at distance d along the other axis (quadrant-local). */
+function curbAt(h: number, hOther: number, R: number, d: number): number {
+  const c = hOther + R;
+  if (d >= c) return h;
+  const dz = c - d;
+  return h + R - Math.sqrt(Math.max(0, R * R - dz * dz));
+}
+
+/** Extrude a quadrant shape (XY → XZ plane) from y0 to y1 and mirror it into quadrant (sx, sz). */
+function extrudeQuadrant(shape: THREE.Shape, y0: number, y1: number, sx: number, sz: number, tile: number): THREE.BufferGeometry {
+  const g = new THREE.ExtrudeGeometry(shape, { depth: y1 - y0, bevelEnabled: false, curveSegments: 16 });
+  g.rotateX(Math.PI / 2); // shape XY -> XZ (y -> z), extrude -> -Y
+  g.translate(0, y1, 0);
+  g.scale(sx, 1, sz);
+  if (sx * sz < 0) flipWinding(g);
+  worldUv(g, tile);
+  return g;
+}
+
+/** Flat annulus-sector strip on the ground (gutter pan around a curb return). */
+function arcStrip(cx: number, cz: number, r0: number, r1: number, a0: number, a1: number, y: number, tile: number): THREE.BufferGeometry {
+  const g = new THREE.RingGeometry(r0, r1, 24, 1, a0, a1 - a0);
+  g.rotateX(-Math.PI / 2);
+  g.translate(cx, y, cz);
+  return worldUv(g, tile);
 }
 
 export function Intersection({
@@ -204,27 +263,28 @@ export function Intersection({
     const H = curbHeight;
     const asphalt = groundRect(-L, -L, L, L, 0, 4);
 
-    // corner blocks: concrete sidewalk slab (curb face included), grass on top beyond the sidewalk
+    // Sidewalk bands (curb face included) and lawns 3 cm lower behind them: separate solids, so no
+    // coplanar / overlapping surfaces anywhere.
     const blocks: THREE.BufferGeometry[] = [];
     const lawns: THREE.BufferGeometry[] = [];
     const gutters: THREE.BufferGeometry[] = [];
+    const sw = grass ? sidewalkWidth : L;
+    const lawnTop = H - INTERSECTION_DEFAULTS.lawnDrop;
     for (const sx of [1, -1])
       for (const sz of [1, -1]) {
-        const g = new THREE.ExtrudeGeometry(cornerShape(hx, hz, L, R), { depth: H, bevelEnabled: false, curveSegments: 10 });
-        g.rotateX(Math.PI / 2); // shape XY -> XZ (y -> z), extrude -> -Y
-        g.translate(0, H, 0);
-        g.scale(sx, 1, sz);
-        if (sx * sz < 0) flipWinding(g);
-        worldUv(g, 3);
-        blocks.push(g);
-        if (grass) {
-          const gx0 = hx + sidewalkWidth;
-          const gz0 = hz + sidewalkWidth;
-          lawns.push(groundRect(sx * gx0, sz * gz0, sx * L, sz * L, H + 0.004, 3));
-        }
-        // gutter pans along both curbs of this quadrant
+        blocks.push(extrudeQuadrant(walkShape(hx, hz, L, R, Math.min(sw, L - Math.max(hx, hz) - 0.01)), 0, H, sx, sz, 3));
+        if (grass) lawns.push(extrudeQuadrant(lawnShape(hx, hz, L, R, sidewalkWidth), 0, lawnTop, sx, sz, 3));
+        // gutter pans along both straight curbs + around the curb return
         gutters.push(groundRect(sx > 0 ? hx - 0.45 : -hx, sz * (hz + R), sx > 0 ? hx : -hx + 0.45, sz * L, 0.002, 3));
         gutters.push(groundRect(sx * (hx + R), sz > 0 ? hz - 0.45 : -hz, sx * L, sz > 0 ? hz : -hz + 0.45, 0.002, 3));
+        if (R > 0.05) {
+          const cx = sx * (hx + R);
+          const cz = sz * (hz + R);
+          // the curb return faces the origin: centre → (-sx, -sz) direction. RingGeometry angle a lies at
+          // plan direction (cos a, -sin a) after rotateX(-π/2), so a = atan2(sz, -sx).
+          const mid = Math.atan2(sz, -sx);
+          gutters.push(arcStrip(cx, cz, R, R + 0.45, mid - Math.PI / 4, mid + Math.PI / 4, 0.002, 3));
+        }
       }
 
     // markings
@@ -260,11 +320,21 @@ export function Intersection({
         const o = -span / 2 + 0.3 + i * 1.2;
         white.push(ns ? stripe(o, c, 0.6, crosswalkWidth) : stripe(c, o, crosswalkWidth, 0.6));
       }
-      // detectable warning pads at both curb ramps
+      // detectable warning pads (truncated domes, 5 mm proud) at both curb ramps, front edge at the
+      // curb line (which may lie on the curb return)
       for (const e of [1, -1]) {
-        const edge = e * (half + 0.35);
-        const pw = Math.min(1.5, crosswalkWidth - 0.4) / 2; // 2 ft deep × ramp width (≈ 5 ft)
-        domes.push(ns ? groundRect(edge - 0.3, c - pw, edge + 0.3, c + pw, H + 0.006, 0.4) : groundRect(c - pw, edge - 0.3, c + pw, edge + 0.3, H + 0.006, 0.4));
+        const pw = Math.min(1.5, crosswalkWidth - 0.4) / 2; // ramp width ≈ 5 ft
+        const hThis = ns ? hx : hz;
+        const d0 = Math.abs(c) - pw;
+        const curb = Math.max(curbAt(hThis, ns ? hz : hx, R, d0), curbAt(hThis, ns ? hz : hx, R, Math.abs(c) + pw));
+        const near = e * (curb + 0.05);
+        const far = e * (curb + 0.05 + 0.61);
+        const box = (x0: number, z0: number, x1: number, z1: number) => {
+          const g = new THREE.BoxGeometry(Math.abs(x1 - x0), 0.005, Math.abs(z1 - z0));
+          g.translate((x0 + x1) / 2, H + 0.0025, (z0 + z1) / 2);
+          return worldUv(g, 0.4);
+        };
+        domes.push(ns ? box(near, c - pw, far, c + pw) : box(c - pw, near, c + pw, far));
       }
     }
     const res = {
@@ -435,11 +505,11 @@ export interface GroundSlabProps extends Placement {
 
 /** Flat asphalt / concrete / grass area (e.g. the garage deck). Top surface at y = thickness. */
 export function GroundSlab({ size, kind = 'concrete', thickness = 0, position, rotation, scale }: GroundSlabProps) {
-  const geo = sharedGeo(`road:slab:${size[0]}:${size[1]}:${thickness}`, () => {
+  const geo = sharedGeo(`road:slab:${size[0]}:${size[1]}:${thickness}:${kind === 'asphalt' ? 4 : 3}`, () => {
     if (thickness <= 0) return groundRect(-size[0] / 2, -size[1] / 2, size[0] / 2, size[1] / 2, 0, kind === 'asphalt' ? 4 : 3);
     const g = new THREE.BoxGeometry(size[0], thickness, size[1]);
     g.translate(0, thickness / 2, 0);
-    return worldUv(g, 3);
+    return worldUv(g, kind === 'asphalt' ? 4 : 3);
   });
   const mat =
     kind === 'asphalt'

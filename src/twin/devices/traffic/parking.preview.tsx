@@ -45,7 +45,17 @@ function SignsDemo() {
   );
 }
 
+/** Static state for inspection: ticket presented, button lit & held. */
+function KioskTicketOut() {
+  return <TicketDispenser getPressed={() => true} getTicketOut={() => true} getMessage={() => 'PLEASE TAKE\nYOUR TICKET'} />;
+}
+
 export const previews: Record<string, Preview> = {
+  PARK_TicketDispenser_TicketOut: {
+    Component: KioskTicketOut,
+    description: 'Ticket dispenser with the ticket presented in the mouth (static state for inspection)',
+    camera: { position: [0.45, 1.05, 0.75], target: [0, 0.98, 0.15] },
+  },
   PARK_Gate_Raising: {
     Component: GateRaising,
     description: 'Barrier gate cycling up/down (arm lights, rest post) + a second gate half open',

@@ -318,6 +318,16 @@ export function panelTexture(key: string, wM: number, hM: number, pxPerM: number
   return canvasTexture(`panel:${key}`, w, h, (ctx) => draw(ctx, (v) => v * pxPerM, w, h));
 }
 
+/** Set `ctx.font` to the largest size ≤ `px` at which `text` fits in `maxW` pixels; returns the size. */
+export function fitFont(ctx: CanvasRenderingContext2D, text: string, maxW: number, px: number, weight: number | string = 800, family = FONT): number {
+  let size = px;
+  ctx.font = `${weight} ${size}px ${family}`;
+  const w = ctx.measureText(text).width;
+  if (w > maxW) size = Math.floor((px * maxW) / w);
+  ctx.font = `${weight} ${size}px ${family}`;
+  return size;
+}
+
 export function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -444,16 +454,19 @@ export function Tube({
 /** Rigid EMT conduit run (galvanized) with compression couplings at both ends and pipe straps. */
 export function Conduit({ points, radius = 0.0115, bend = 0.12, straps = [] }: { points: Vec3[]; radius?: number; bend?: number; straps?: Vec3[] }) {
   const ends = useMemo(() => {
-    const out: { p: Vec3; q: THREE.Quaternion }[] = [];
+    const out: { p: Vec3; r: Vec3 }[] = [];
     const n = points.length;
     if (n < 2) return out;
     const up = new THREE.Vector3(0, 1, 0);
-    const mk = (a: Vec3, b: Vec3) => {
+    const e = new THREE.Euler();
+    const mk = (a: Vec3, b: Vec3): Vec3 => {
       const d = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]).normalize();
-      return new THREE.Quaternion().setFromUnitVectors(up, d);
+      e.setFromQuaternion(new THREE.Quaternion().setFromUnitVectors(up, d));
+      return [e.x, e.y, e.z];
     };
-    out.push({ p: points[0], q: mk(points[0], points[1]) });
-    out.push({ p: points[n - 1], q: mk(points[n - 2], points[n - 1]) });
+    // fittings point along the run, away from the end (so they sit on the conduit)
+    out.push({ p: points[0], r: mk(points[0], points[1]) });
+    out.push({ p: points[n - 1], r: mk(points[n - 1], points[n - 2]) });
     return out;
   }, [JSON.stringify(points)]); // eslint-disable-line react-hooks/exhaustive-deps
   const fit = kgeo(`k:conduitfit:${radius}`, () => new THREE.CylinderGeometry(radius * 1.35, radius * 1.35, 0.045, 14).translate(0, 0.0225, 0));
@@ -461,12 +474,8 @@ export function Conduit({ points, radius = 0.0115, bend = 0.12, straps = [] }: {
   return (
     <group>
       <Tube points={points} radius={radius} bend={bend} material={km.galv()} />
-      {ends.map((e, i) => (
-        <mesh key={i} geometry={fit} material={km.metal('#a9aeb2', 0.4)} position={e.p} quaternion={e.q} />
-      ))}
-      {straps.map((p, i) => (
-        <mesh key={`s${i}`} geometry={strap} material={km.galv()} position={p} />
-      ))}
+      <Instances geometry={fit} material={km.metal('#a9aeb2', 0.4)} items={ends} castShadow={false} />
+      {straps.length > 0 && <Instances geometry={strap} material={km.galv()} items={straps.map((p) => ({ p }))} castShadow={false} />}
     </group>
   );
 }
@@ -530,35 +539,29 @@ export function LadderTray({
   sideH?: number;
   cables?: string[];
 }) {
-  const rungs = useMemo(() => {
-    const out: { p: Vec3 }[] = [];
+  // rails (web + 2 flanges per side) and rungs: one instanced draw call
+  const steel = useMemo(() => {
+    const out: { p: Vec3; s: Vec3 }[] = [];
+    for (const sd of [-1, 1]) {
+      const z = (sd * width) / 2;
+      out.push({ p: [0, sideH / 2, z], s: [length, sideH, 0.004] });
+      out.push({ p: [0, sideH, z - sd * 0.011], s: [length, 0.004, 0.022] });
+      out.push({ p: [0, 0, z - sd * 0.011], s: [length, 0.004, 0.022] });
+    }
     const n = Math.max(2, Math.floor(length / 0.25));
-    for (let i = 0; i <= n; i++) out.push({ p: [-length / 2 + 0.06 + (i * (length - 0.12)) / n, 0.012, 0] });
+    for (let i = 0; i <= n; i++) out.push({ p: [-length / 2 + 0.06 + (i * (length - 0.12)) / n, 0.012, 0], s: [0.025, 0.018, width] });
     return out;
-  }, [length]);
+  }, [length, width, sideH]);
+  const cableItems = useMemo(
+    () => cables.map((_, i) => ({ p: [0, 0.021 + 0.009 + (i % 2) * 0.012, -width / 2 + 0.04 + i * 0.026] as Vec3, r: [0, 0, Math.PI / 2] as Vec3, s: [0.018, length, 0.018] as Vec3 })),
+    [cables.length, width, length], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const rot: Vec3 = axis === 'x' ? [0, 0, 0] : [0, -Math.PI / 2, 0];
   const center: Vec3 = axis === 'x' ? [start[0] + length / 2, start[1], start[2]] : [start[0], start[1], start[2] + length / 2];
-  const rungGeo = kgeo(`k:trayrung:${width}`, () => new THREE.BoxGeometry(0.025, 0.018, width));
   return (
     <group position={center} rotation={rot}>
-      {[-1, 1].map((s) => (
-        <group key={s} position={[0, sideH / 2, (s * width) / 2]}>
-          <mesh geometry={KBOX()} material={km.galv()} scale={[length, sideH, 0.004]} castShadow receiveShadow />
-          <mesh geometry={KBOX()} material={km.galv()} scale={[length, 0.004, 0.022]} position={[0, sideH / 2, -s * 0.011]} />
-          <mesh geometry={KBOX()} material={km.galv()} scale={[length, 0.004, 0.022]} position={[0, -sideH / 2, -s * 0.011]} />
-        </group>
-      ))}
-      <Instances geometry={rungGeo} material={km.galv()} items={rungs} />
-      {cables.map((c, i) => (
-        <mesh
-          key={i}
-          geometry={KCYL()}
-          material={km.plastic(c, 0.6)}
-          rotation={[0, 0, Math.PI / 2]}
-          position={[0, 0.021 + 0.009 + (i % 2) * 0.012, -width / 2 + 0.04 + i * 0.026]}
-          scale={[0.018, length, 0.018]}
-        />
-      ))}
+      <Instances geometry={KBOX()} material={km.galv()} items={steel} />
+      {cables.length > 0 && <Instances geometry={KCYL()} material={km.plastic(cables[0]!, 0.6)} items={cableItems} castShadow={false} />}
     </group>
   );
 }
@@ -583,10 +586,10 @@ export function SignPlate({
   thickness?: number;
 }) {
   const tex = panelTexture(`sign:${id}`, size[0], size[1], px, (ctx, _m, w, h) => draw(ctx, w, h));
+  // One draw call: the thin plate carries the print on every face (edges just show the border color).
   return (
     <group position={position} rotation={rotation}>
-      <mesh geometry={KBOX()} material={km.paint('#d9d9d6', 0.5)} scale={[size[0], size[1], thickness]} position={[0, 0, thickness / 2]} />
-      <mesh geometry={KPLANE()} material={km.label(tex, 0.55)} scale={[size[0], size[1], 1]} position={[0, 0, thickness + 0.0003]} />
+      <mesh geometry={KBOX()} material={km.label(tex, 0.55)} scale={[size[0], size[1], thickness]} position={[0, 0, thickness / 2]} />
     </group>
   );
 }
@@ -814,6 +817,8 @@ export function infoLine(label: string, get: () => number, units = '', decimals 
 
 interface TagEntry {
   id: string;
+  /** Tag currently applicable (e.g. a fault marker that is only shown while the fault is active). */
+  active?: () => boolean;
   anchor: THREE.Object3D;
   lines: (IoTagLine & { decimals?: number })[];
   el: HTMLDivElement;
@@ -876,6 +881,8 @@ const _hit = new THREE.Vector3();
 const _ray = new THREE.Ray();
 const _inv = new THREE.Matrix4();
 const _tmp = new THREE.Vector3();
+/** Pinned chips (showTags) are shown for devices within this distance of the camera (m). */
+const PIN_RANGE = 6;
 
 function formatValue(l: IoTagLine & { decimals?: number }): string {
   if (l.format) return l.format();
@@ -935,7 +942,13 @@ export function TagLayer({ children, occluders = [] }: { children: ReactNode; oc
     }
     placed.length = 0;
     for (const e of reg.entries.values()) {
-      const want = reg.showTags || reg.hovered === e.id;
+      const hovered = reg.hovered === e.id;
+      let want = (reg.showTags || hovered) && (!e.active || e.active());
+      if (want && !hovered) {
+        // pinned mode: only nearby devices (distant chips would just clutter the view)
+        e.anchor.getWorldPosition(_v);
+        if (_v.distanceToSquared(camera.position) > PIN_RANGE * PIN_RANGE) want = false;
+      }
       if (!want) {
         if (e.shown) {
           e.el.style.display = 'none';
@@ -965,6 +978,7 @@ export function TagLayer({ children, occluders = [] }: { children: ReactNode; oc
         }
         e.anchor.getWorldPosition(_v);
       }
+      if (e.occluded && e.shown) continue; // hidden behind a wall: keep it out of the de-clutter pass
       // projection
       _v.project(camera);
       if (_v.z > 1 || _v.z < -1 || Math.abs(_v.x) > 1.3 || Math.abs(_v.y) > 1.3) {
@@ -1143,7 +1157,7 @@ function buildChip(id: string, title: string, lines: IoTagLine[]): Omit<TagEntry
 let tagSeq = 0;
 
 /** Pointer cursor while hovering a clickable proxy (does not stop propagation). */
-function useCursorOnHover(enabled: boolean) {
+function useCursorOnHover(enabled: boolean, isActive: () => boolean) {
   const gl = useThree((st) => st.gl);
   useEffect(
     () => () => {
@@ -1154,13 +1168,13 @@ function useCursorOnHover(enabled: boolean) {
   return useMemo(
     () => ({
       over: () => {
-        if (enabled) gl.domElement.style.cursor = 'pointer';
+        if (enabled && isActive()) gl.domElement.style.cursor = 'pointer';
       },
       leave: () => {
         if (enabled) gl.domElement.style.cursor = '';
       },
     }),
-    [enabled, gl],
+    [enabled, gl, isActive],
   );
 }
 
@@ -1176,6 +1190,8 @@ export interface IoTagProps {
   anchor?: Vec3;
   /** Make the whole proxy clickable (pointer down), e.g. for small toggle levers. Stops propagation. */
   onPress?: () => void;
+  /** When given and false, the tag neither shows nor reacts (e.g. a fault marker without the fault). */
+  active?: () => boolean;
   /** Device title shown on hover, e.g. '800F green flush PB (N.O.)'. */
   title: string;
   lines: (IoTagLine & { decimals?: number })[];
@@ -1187,15 +1203,18 @@ export interface IoTagProps {
  * Hover zone + floating chip for one physical device. The hover proxy is an invisible box that never stops
  * event propagation, so the device underneath still receives its clicks.
  */
-export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, title, lines, onPress, children }: IoTagProps) {
+export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, title, lines, onPress, active, children }: IoTagProps) {
   const reg = useContext(RegistryContext);
   const anchorRef = useRef<THREE.Group>(null);
   const id = useMemo(() => `tag${++tagSeq}`, []);
   const linesRef = useRef(lines);
   linesRef.current = lines;
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const isActive = useMemo(() => () => (activeRef.current ? activeRef.current() : true), []);
   useLayoutEffect(() => {
     if (!reg || !anchorRef.current) return;
-    const e: TagEntry = { ...buildChip(id, title, linesRef.current), anchor: anchorRef.current };
+    const e: TagEntry = { ...buildChip(id, title, linesRef.current), anchor: anchorRef.current, active: isActive };
     reg.add(e);
     return () => reg.remove(id);
   }, [reg, id, title, lines.map((l) => l.alias + l.address).join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1203,10 +1222,12 @@ export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, ti
   const handlers = useMemo(
     () => ({
       onPointerMove: (ev: ThreeEvent<PointerEvent>) => {
-        if (!reg) return;
+        if (!reg || !isActive()) return;
         for (const hit of ev.intersections) {
           const tid = (hit.object.userData as { ioTag?: string }).ioTag;
           if (tid) {
+            const ent = reg.entries.get(tid);
+            if (ent?.active && !ent.active()) continue;
             if (tid === id) reg.hovered = id;
             return;
           }
@@ -1225,7 +1246,7 @@ export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, ti
       onPress
         ? {
             onPointerDown: (ev: ThreeEvent<PointerEvent>) => {
-              if (ev.button !== 0) return;
+              if (ev.button !== 0 || !isActive()) return;
               ev.stopPropagation();
               pressRef.current?.();
             },
@@ -1233,7 +1254,7 @@ export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, ti
         : {},
     [!!onPress], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  const cursor = useCursorOnHover(!!onPress);
+  const cursor = useCursorOnHover(!!onPress, isActive);
   const a: Vec3 = anchor ?? [center[0], center[1] + size[1] / 2 + 0.004, center[2]];
   return (
     <group position={position} rotation={rotation}>

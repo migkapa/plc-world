@@ -11,6 +11,7 @@
 import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
+import { sfx } from '../../../audio/sfx';
 import type { Vec3 } from '../../../twin/contracts';
 import {
   Boxes,
@@ -43,7 +44,7 @@ import {
 } from '../../../twin/devices';
 import { rackLiveFromController } from '../../../twin/live';
 import type { SceneViewProps } from '../../types';
-import { Conduit, FONT, IoTag, KBOX, KCYL, SignPlate, Slab, TagLayer, infoLine, ioLine, km, kmat, momentaryClick, textLine, useControls, useEdgeSfx, useSfxLoops } from '../trainer/kit';
+import { Conduit, FONT, IoTag, fitFont, KBOX, KCYL, SignPlate, Slab, TagLayer, infoLine, ioLine, km, kmat, momentaryClick, textLine, useControls, useEdgeSfx, useSfxLoops } from '../trainer/kit';
 import { BAY_OCCLUDERS, MotorBay } from './Bay';
 import { CouplingGuard, DeckJunctionBox, DrivePlatform, InlineReducer, MACHINE_BLUE, headAngle } from './Drive';
 import { AXIS_Y, CABINET, CONV, DRIVE, HEAD_Z, PEDESTAL, REMOTE, STANCHION, TRAY } from './layout';
@@ -321,6 +322,7 @@ function RemoteRunStation({ state, runtime }: P) {
   const set = useMemo(
     () => (i: number) => {
       runtime.setControl('remote_run', i === 1);
+      sfx.play('click');
     },
     [runtime],
   );
@@ -330,22 +332,22 @@ function RemoteRunStation({ state, runtime }: P) {
       <IoTag position={holes[0]!} size={[0.036, 0.058, 0.05]} center={[0, 0.008, 0.025]} anchor={[0, 0.045, 0.03]} title="Upstream line run request (relay contact)" lines={[L]}>
         <PilotLight800F color="blue" legend="REMOTE" getLit={() => state.controls.remote_run} rear={false} />
       </IoTag>
-      <IoTag position={holes[1]!} size={[0.036, 0.058, 0.05]} center={[0, 0.008, 0.025]} anchor={[0, 0.045, 0.03]} title="Simulate upstream request · click" lines={[L]}>
+      <IoTag position={holes[1]!} size={[0.036, 0.058, 0.05]} center={[0, 0.008, 0.025]} anchor={[0, 0.045, 0.03]} title="Upstream request test switch · click" lines={[textLine('LINE 2 switch', () => (state.controls.remote_run ? 'RUN' : 'OFF'))]}>
         <SelectorSwitch800F positions={['OFF', 'RUN']} legend="LINE 2" getPosition={() => (state.controls.remote_run ? 1 : 0)} onChange={set} rear={false} />
       </IoTag>
       <SignPlate
         id="remote-sign"
-        size={[0.26, 0.1]}
-        position={[0, 0.2, 0.002]}
+        size={[0.2, 0.09]}
+        position={[-0.16, 0.1, 0.002]}
         draw={(ctx, w, h) => {
           ctx.fillStyle = '#1f4f9c';
           ctx.fillRect(0, 0, w, h);
           ctx.fillStyle = '#fff';
           ctx.textAlign = 'center';
-          ctx.font = `800 ${h * 0.28}px ${FONT}`;
-          ctx.fillText('UPSTREAM LINE 2', w / 2, h * 0.38);
-          ctx.font = `600 ${h * 0.2}px ${FONT}`;
-          ctx.fillText('RUN REQUEST → CV-101', w / 2, h * 0.72);
+          fitFont(ctx, 'UPSTREAM LINE 2', w * 0.9, h * 0.3);
+          ctx.fillText('UPSTREAM LINE 2', w / 2, h * 0.4);
+          fitFont(ctx, 'RUN REQUEST → CV-101', w * 0.9, h * 0.2, 600);
+          ctx.fillText('RUN REQUEST → CV-101', w / 2, h * 0.74);
         }}
       />
     </group>
@@ -448,6 +450,7 @@ export function MotorStationView({ state, runtime }: P) {
     if (jamVisible.current) jamVisible.current.visible = state.controls.jam;
   });
   const clearJam = useMemo(() => () => runtime.setControl('jam', false), [runtime]);
+  const jamActive = useMemo(() => () => state.controls.jam, [state]);
 
   const motorAngle = () => state.shaftAngle;
   const outAngle = () => headAngle(state.beltPosition);
@@ -461,7 +464,7 @@ export function MotorStationView({ state, runtime }: P) {
         <Conveyor length={CONV.length} width={CONV.width} height={CONV.height} getBeltPosition={() => state.beltPosition} driveSide="none" frameStyle="powder" frameColor={MACHINE_BLUE} />
         <Boxes getBoxes={getBoxes} maxCount={8} />
         <group ref={jamVisible} visible={false}>
-          <IoTag position={[CONV.length - 0.5, CONV.height + 0.18, 0.05]} size={[0.36, 0.38, 0.3]} title="Conveyor jam (instructor fault)" lines={lines.jam} onPress={clearJam}>
+          <IoTag position={[CONV.length - 0.5, CONV.height + 0.18, 0.05]} size={[0.36, 0.38, 0.3]} title="Conveyor jam (instructor fault)" lines={lines.jam} onPress={clearJam} active={jamActive}>
             <Boxes getBoxes={() => JAM_BOX} maxCount={1} position={[0, -0.18, -0.05]} />
           </IoTag>
         </group>

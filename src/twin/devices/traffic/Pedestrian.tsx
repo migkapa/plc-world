@@ -6,10 +6,10 @@
  * between the feet. Drive it with `getDistance` (meters walked → stride phase) and `getWalking`.
  */
 import { useFrame } from '@react-three/fiber';
-import { useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Placement } from '../../contracts';
-import { sharedGeo, tmats } from './shared';
+import { mergeVc, sharedGeo, useDisposable, vc, vcMaterial, xf } from './shared';
 
 export interface PedestrianProps extends Placement {
   /** Clothing variant 0..5 (the traffic scene uses 0..5). */
@@ -36,6 +36,21 @@ const OUTFITS = [
 /** Stride length (m per full cycle = two steps). */
 const STRIDE = 1.45;
 
+/** Leg rig (figure units): hip height, hip→knee, knee→shoe centre offset, shoe half length/height. */
+const LEG = { hip: 0.93, thigh: 0.44, shoeX: 0.045, shoeY: 0.42, halfLen: 0.128, halfH: 0.036 } as const;
+
+/** Lowest point of a shoe (figure units, root frame) for the given hip & knee angles (about +Z). */
+function soleY(hip: number, knee: number): number {
+  // knee position
+  const ky = LEG.hip - LEG.thigh * Math.cos(hip);
+  const a = hip + knee;
+  const c = Math.cos(a);
+  const sn = Math.sin(a);
+  // shoe centre = knee + R(a) · (shoeX, −shoeY)
+  const cy = ky + LEG.shoeX * sn - LEG.shoeY * c;
+  return cy - (LEG.halfLen * Math.abs(sn) + LEG.halfH * Math.abs(c));
+}
+
 const cap = (r: number, len: number) => sharedGeo(`ped:cap:${r}:${len}`, () => new THREE.CapsuleGeometry(r, len, 6, 12));
 const sph = (r: number) => sharedGeo(`ped:sph:${r}`, () => new THREE.SphereGeometry(r, 16, 12));
 const hairGeo = () => sharedGeo('ped:hair', () => new THREE.SphereGeometry(0.112, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55));
@@ -48,20 +63,124 @@ const shoeGeo = () =>
   });
 
 interface Joint {
-  hipL: THREE.Group | null;
-  hipR: THREE.Group | null;
-  kneeL: THREE.Group | null;
-  kneeR: THREE.Group | null;
-  shL: THREE.Group | null;
-  shR: THREE.Group | null;
-  elL: THREE.Group | null;
-  elR: THREE.Group | null;
-  torso: THREE.Group | null;
-  root: THREE.Group | null;
+  hipL: THREE.Object3D | null;
+  hipR: THREE.Object3D | null;
+  kneeL: THREE.Object3D | null;
+  kneeR: THREE.Object3D | null;
+  shL: THREE.Object3D | null;
+  shR: THREE.Object3D | null;
+  elL: THREE.Object3D | null;
+  elR: THREE.Object3D | null;
+  torso: THREE.Object3D | null;
+  root: THREE.Object3D | null;
+}
+
+type BoneName = keyof Joint;
+
+/** Rig: bone → [parent, rest position relative to the parent] (figure units, faces +X). */
+const RIG: [BoneName, BoneName | null, [number, number, number]][] = [
+  ['root', null, [0, 0, 0]],
+  ['hipL', 'root', [0, LEG.hip, -0.095]],
+  ['kneeL', 'hipL', [0, -LEG.thigh, 0]],
+  ['hipR', 'root', [0, LEG.hip, 0.095]],
+  ['kneeR', 'hipR', [0, -LEG.thigh, 0]],
+  ['torso', 'root', [0, 0.95, 0]],
+  ['shL', 'torso', [0, 0.46, -0.185]],
+  ['elL', 'shL', [0, -0.28, 0]],
+  ['shR', 'torso', [0, 0.46, 0.185]],
+  ['elR', 'shR', [0, -0.28, 0]],
+];
+const BONE_INDEX = Object.fromEntries(RIG.map(([n], i) => [n, i])) as Record<BoneName, number>;
+
+/** Model-space rest position of a bone. */
+function restPos(name: BoneName): THREE.Vector3 {
+  const v = new THREE.Vector3();
+  let cur: BoneName | null = name;
+  while (cur) {
+    const entry = RIG.find((r) => r[0] === cur)!;
+    v.add(new THREE.Vector3(...entry[2]));
+    cur = entry[1];
+  }
+  return v;
+}
+
+const pedGeoCache = new Map<number, THREE.BufferGeometry>();
+
+/**
+ * All body parts of one outfit in ONE rigidly skinned geometry (per-vertex finishes + skinIndex):
+ * the whole figure is a single draw call (plus shadow passes).
+ */
+function bodyGeometry(v: number): THREE.BufferGeometry {
+  const hit = pedGeoCache.get(v);
+  if (hit) return hit;
+  const o = OUTFITS[v]!;
+  const cloth = (c: string) => ({ color: c, roughness: 0.85, metalness: 0 });
+  const skin = { color: o.skin, roughness: 0.65, metalness: 0 };
+  const parts: THREE.BufferGeometry[] = [];
+  /** Add a part given in its bone's local frame. */
+  const P = (bone: BoneName, g: THREE.BufferGeometry, f: { color: string; roughness: number; metalness: number }, pos: [number, number, number] = [0, 0, 0], rot?: [number, number, number], sc?: [number, number, number]) => {
+    const rp = restPos(bone);
+    const part = vc(xf(g, [pos[0] + rp.x, pos[1] + rp.y, pos[2] + rp.z], rot, sc), f);
+    const n = part.attributes.position!.count;
+    const si = new Uint16Array(n * 4);
+    const sw = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      si[i * 4] = BONE_INDEX[bone];
+      sw[i * 4] = 1;
+    }
+    part.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+    part.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+    parts.push(part);
+  };
+  P('root', cap(0.13, 0.12), cloth(o.pants), [0, 0.95, 0], [Math.PI / 2, 0, 0], [0.8, 1, 1]); // pelvis
+  P('torso', cap(0.15, 0.28), cloth(o.shirt), [0, 0.28, 0], [0, 0, 0], [0.72, 1, 1.18]);
+  P('torso', cap(0.07, 0.22), cloth(o.shirt), [0, 0.455, 0], [Math.PI / 2, 0, 0], [0.85, 1, 1]); // shoulder yoke
+  P('torso', cap(0.045, 0.05), skin, [0, 0.58, 0]);
+  P('torso', sph(0.105), skin, [0, 0.7, 0], [0, 0, 0], [1, 1.12, 0.95]);
+  P('torso', hairGeo(), { color: o.hair, roughness: 0.9, metalness: 0 }, [-0.012, 0.712, 0], [0, 0, 0.35], [1, 1.1, 0.98]);
+  P('torso', sph(0.018), skin, [0.1, 0.695, 0]);
+  for (const [hip, knee] of [
+    ['hipL', 'kneeL'],
+    ['hipR', 'kneeR'],
+  ] as const) {
+    P(hip, cap(0.072, 0.3), cloth(o.pants), [0, -0.22, 0]);
+    P(knee, cap(0.058, 0.32), cloth(o.pants), [0, -0.2, 0]);
+    P(knee, shoeGeo(), { color: o.shoes, roughness: 0.6, metalness: 0 }, [LEG.shoeX, -LEG.shoeY, 0]);
+  }
+  for (const [sh, el] of [
+    ['shL', 'elL'],
+    ['shR', 'elR'],
+  ] as const) {
+    P(sh, sph(0.062), cloth(o.shirt));
+    P(sh, cap(0.05, 0.2), cloth(o.shirt), [0, -0.14, 0]);
+    P(el, cap(0.04, 0.18), skin, [0, -0.12, 0]);
+    P(el, sph(0.045), skin, [0, -0.25, 0]);
+  }
+  const g = mergeVc(parts);
+  pedGeoCache.set(v, g);
+  return g;
+}
+
+/** A skinned figure instance (own bones & skeleton, shared geometry & material). */
+function makeRig(v: number): { mesh: THREE.SkinnedMesh; bones: Record<BoneName, THREE.Bone>; skeleton: THREE.Skeleton } {
+  const bones = {} as Record<BoneName, THREE.Bone>;
+  for (const [name, parent, pos] of RIG) {
+    const b = new THREE.Bone();
+    b.name = name;
+    b.position.set(...pos);
+    bones[name] = b;
+    if (parent) bones[parent].add(b);
+  }
+  const mesh = new THREE.SkinnedMesh(bodyGeometry(v), vcMaterial());
+  mesh.castShadow = true;
+  mesh.add(bones.root);
+  mesh.updateMatrixWorld(true);
+  const skeleton = new THREE.Skeleton(RIG.map(([n]) => bones[n]));
+  mesh.bind(skeleton);
+  return { mesh, bones, skeleton };
 }
 
 export function Pedestrian({ variant = 0, getDistance, getWalking, getReach, height = 1, position, rotation, scale }: PedestrianProps) {
-  const o = OUTFITS[((Math.floor(variant) % OUTFITS.length) + OUTFITS.length) % OUTFITS.length]!;
   const j = useRef<Joint>({ hipL: null, hipR: null, kneeL: null, kneeR: null, shL: null, shR: null, elL: null, elR: null, torso: null, root: null });
   const g = useRef({ getDistance, getWalking, getReach });
   g.current = { getDistance, getWalking, getReach };
@@ -83,10 +202,14 @@ export function Pedestrian({ variant = 0, getDistance, getWalking, getReach, hei
     const cs = Math.cos(phi);
     const t = clock.elapsedTime;
     const breathe = Math.sin(t * 1.6) * 0.01;
-    if (J.hipL) J.hipL.rotation.z = w * 0.46 * sn;
-    if (J.hipR) J.hipR.rotation.z = -w * 0.46 * sn;
-    if (J.kneeL) J.kneeL.rotation.z = -w * (0.08 + 0.85 * Math.max(0, cs) ** 1.5);
-    if (J.kneeR) J.kneeR.rotation.z = -w * (0.08 + 0.85 * Math.max(0, -cs) ** 1.5);
+    const hipL = w * 0.46 * sn;
+    const hipR = -w * 0.46 * sn;
+    const kneeL = -w * (0.08 + 0.85 * Math.max(0, cs) ** 1.5);
+    const kneeR = -w * (0.08 + 0.85 * Math.max(0, -cs) ** 1.5);
+    if (J.hipL) J.hipL.rotation.z = hipL;
+    if (J.hipR) J.hipR.rotation.z = hipR;
+    if (J.kneeL) J.kneeL.rotation.z = kneeL;
+    if (J.kneeR) J.kneeR.rotation.z = kneeR;
     const armL = -w * 0.38 * sn;
     const armR = w * 0.38 * sn;
     if (J.shL) {
@@ -103,55 +226,22 @@ export function Pedestrian({ variant = 0, getDistance, getWalking, getReach, hei
       J.torso.rotation.y = w * 0.1 * sn;
       J.torso.rotation.z = -w * 0.05 + breathe;
     }
-    if (J.root) J.root.position.y = w * 0.028 * Math.abs(cs) - w * 0.02;
+    // Ground contact: put the lowest shoe sole exactly on y = 0 (the planted foot stays on the
+    // ground and the body bobs naturally over the stride).
+    if (J.root) J.root.position.y = -Math.min(soleY(hipL, kneeL), soleY(hipR, kneeR));
   });
 
-  const cloth = (c: string) => tmats.plastic(c, 0.85);
-  const skin = tmats.plastic(o.skin, 0.65);
-  const set = (k: keyof Joint) => (el: THREE.Group | null) => {
-    j.current[k] = el;
-  };
-
-  const leg = (side: 1 | -1) => (
-    <group ref={set(side > 0 ? 'hipR' : 'hipL')} position={[0, 0.93, side * 0.095]}>
-      <mesh geometry={cap(0.072, 0.3)} material={cloth(o.pants)} position={[0, -0.22, 0]} castShadow />
-      <group ref={set(side > 0 ? 'kneeR' : 'kneeL')} position={[0, -0.44, 0]}>
-        <mesh geometry={cap(0.058, 0.32)} material={cloth(o.pants)} position={[0, -0.2, 0]} castShadow />
-        <mesh geometry={shoeGeo()} material={tmats.plastic(o.shoes, 0.6)} position={[0.045, -0.42, 0]} castShadow />
-      </group>
-    </group>
-  );
-
-  const arm = (side: 1 | -1) => (
-    <group ref={set(side > 0 ? 'shR' : 'shL')} position={[0, 0.5, side * 0.205]}>
-      <mesh geometry={cap(0.05, 0.2)} material={cloth(o.shirt)} position={[0, -0.14, 0]} castShadow />
-      <group ref={set(side > 0 ? 'elR' : 'elL')} position={[0, -0.28, 0]}>
-        <mesh geometry={cap(0.04, 0.18)} material={skin} position={[0, -0.12, 0]} castShadow />
-        <mesh geometry={sph(0.045)} material={skin} position={[0, -0.25, 0]} castShadow />
-      </group>
-    </group>
-  );
+  const rig = useMemo(() => makeRig(((Math.floor(variant) % OUTFITS.length) + OUTFITS.length) % OUTFITS.length), [variant]);
+  useDisposable(useMemo(() => [rig.skeleton], [rig]));
+  useLayoutEffect(() => {
+    const J = j.current;
+    for (const k of Object.keys(rig.bones) as BoneName[]) J[k] = rig.bones[k];
+  }, [rig]);
 
   return (
     <group position={position} rotation={rotation} scale={scale}>
       <group scale={height}>
-        <group ref={set('root')}>
-          {leg(-1)}
-          {leg(1)}
-          {/* pelvis */}
-          <mesh geometry={cap(0.13, 0.12)} material={cloth(o.pants)} position={[0, 0.95, 0]} rotation={[Math.PI / 2, 0, 0]} scale={[0.8, 1, 1]} castShadow />
-          <group ref={set('torso')} position={[0, 0.95, 0]}>
-            <mesh geometry={cap(0.15, 0.28)} material={cloth(o.shirt)} position={[0, 0.28, 0]} scale={[0.72, 1, 1.18]} castShadow />
-            {arm(-1)}
-            {arm(1)}
-            <mesh geometry={cap(0.045, 0.05)} material={skin} position={[0, 0.58, 0]} />
-            <group position={[0, 0.7, 0]}>
-              <mesh geometry={sph(0.105)} material={skin} scale={[1, 1.12, 0.95]} castShadow />
-              <mesh geometry={hairGeo()} material={tmats.plastic(o.hair, 0.9)} position={[-0.012, 0.012, 0]} rotation={[0, 0, 0.35]} scale={[1, 1.1, 0.98]} />
-              <mesh geometry={sph(0.018)} material={skin} position={[0.1, -0.005, 0]} />
-            </group>
-          </group>
-        </group>
+        <primitive object={rig.mesh} />
       </group>
     </group>
   );

@@ -214,7 +214,7 @@ export function knurlTex(): THREE.CanvasTexture {
  * Bright metals mirror the studio Lightformers; above luminance 1 the Bloom pass turns a highlight into a neon
  * tube. Small polished parts therefore get roughness >= 0.3 and a reduced environment intensity.
  */
-const SMALL_METAL_ENV = 0.65;
+const SMALL_METAL_ENV = 0.5;
 
 function metal(key: string, color: string, metalness: number, roughness: number, env = SMALL_METAL_ENV) {
   return mat(key, () => {
@@ -241,7 +241,7 @@ export const fm = {
     mat(`f:ss:${roughness}`, () => {
       const m = new THREE.MeshStandardMaterial({ color: '#cdd2d7', metalness: 0.75, roughness: Math.max(roughness, 0.32) });
       m.roughnessMap = brushedTex();
-      m.envMapIntensity = 0.75;
+      m.envMapIntensity = 0.65;
       return m;
     }),
   /** Brushed stainless for large vessel shells (anisotropic highlights). */
@@ -254,14 +254,14 @@ export const fm = {
       return m;
     }),
   /** Polished / electropolished stainless (fittings, pipes). */
-  polished: () => metal('f:polished', '#d8dde1', 0.8, 0.32),
+  polished: () => metal('f:polished', '#d8dde1', 0.8, 0.4),
   aluminum: (roughness = 0.38) => metal(`f:alu:${roughness}`, '#c8ccd0', 0.85, Math.max(0.34, roughness), 0.75),
   anodized: (color = '#b9bec3') =>
     mat(`f:anod:${color}`, () => new THREE.MeshStandardMaterial({ color, metalness: 0.65, roughness: 0.48 })),
   /** Hard-chrome (piston rods, guide rods). */
   chrome: () => metal('f:chrome', '#dfe3e6', 0.8, 0.3, 0.6),
   /** Nickel plated brass (sensor barrels, fittings). */
-  nickel: () => metal('f:nickel', '#d0cdc5', 0.8, 0.32),
+  nickel: () => metal('f:nickel', '#d0cdc5', 0.8, 0.36),
   nickelThread: () =>
     mat('f:nickelThread', () => {
       const m = new THREE.MeshStandardMaterial({ color: '#cbc8c0', metalness: 0.8, roughness: 0.36 });
@@ -278,11 +278,11 @@ export const fm = {
       m.envMapIntensity = SMALL_METAL_ENV;
       return m;
     }),
-  zinc: () => metal('f:zinc', '#b1b8be', 0.7, 0.42),
+  zinc: () => metal('f:zinc', '#b1b8be', 0.7, 0.5),
   brass: () => metal('f:brass', '#c9a55a', 0.9, 0.34),
   /** Black-oxide / dark steel fasteners. */
   blackSteel: () => mat('f:blackSteel', () => new THREE.MeshStandardMaterial({ color: '#2a2b2e', metalness: 0.8, roughness: 0.42 })),
-  steel: () => metal('f:steel', '#b3b8bd', 0.8, 0.32, 0.7),
+  steel: () => metal('f:steel', '#b3b8bd', 0.8, 0.36, 0.6),
   plastic: (color: string, roughness = 0.5) =>
     mat(`f:plastic:${color}:${roughness}`, () => new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.02 })),
   /** Flexible cable jacket (PVC / PUR). */
@@ -910,6 +910,9 @@ export function Merge({ children, position, rotation, scale }: { children: React
  */
 export type CableRoute = false | { to: Vec3; via?: Vec3[] };
 
+/** userData marker for a device's outermost group (defines the parent space of CableRoute points). */
+export const DEVICE_ROOT = { deviceRoot: true } as const;
+
 const _w0 = new THREE.Vector3();
 const _w1 = new THREE.Vector3();
 const _wd = new THREE.Vector3();
@@ -931,7 +934,8 @@ export function ConduitStub({ stubRef, position, visible = false }: { stubRef?: 
 
 /**
  * A cable leaving a device connector at `from` (local coordinates) heading along `dir`, routed per `route`.
- * `rootRef` = the device's outermost group (its parent defines "parent coordinates").
+ * The device's outermost group must carry `userData={DEVICE_ROOT}`: its parent defines "parent coordinates"
+ * (`rootRef` may point at it too, but refs are attached only after child layout effects).
  * Geometry is computed once after mount from the real world transforms (static devices).
  */
 export function RoutedCable({
@@ -943,22 +947,33 @@ export function RoutedCable({
   color = CABLE_YELLOW,
   lead = 0.04,
   sag = 0,
+  path,
+  companions,
 }: {
   from: Vec3;
   dir: Vec3;
   route: CableRoute | undefined;
-  rootRef: RefObject<THREE.Object3D | null>;
+  rootRef?: RefObject<THREE.Object3D | null>;
   radius?: number;
   color?: string;
   /** Straight length leaving the connector before the cable may bend. */
   lead?: number;
   /** Extra droop of the default route (m). */
   sag?: number;
+  /** Device-specific default path (local coordinates, like `from`) used when `route` is undefined. */
+  path?: Vec3[];
+  /**
+   * Thinner cables bundled with this one (e.g. sensor leads cable-tied to a pneumatic tube): each runs through
+   * its own `lead` points (local) and then follows the main curve from `joinAt` (0..1) to the end, offset by
+   * [normal, binormal] meters.
+   */
+  companions?: { lead: Vec3[]; joinAt: number; offset: [number, number]; radius: number; color: string }[];
 }) {
   const wrap = useRef<THREE.Group>(null);
   const mesh = useRef<THREE.Mesh>(null);
   const stub = useRef<THREE.Group>(null);
-  const key = JSON.stringify([from, dir, route, radius, lead, sag]);
+  const key = JSON.stringify([from, dir, route, radius, lead, sag, path, companions]);
+  const comp = useRef<(THREE.Mesh | null)[]>([]);
   useLayoutEffect(() => {
     const w = wrap.current;
     const m = mesh.current;
@@ -970,9 +985,17 @@ export function RoutedCable({
     const d = _wd.set(...dir).transformDirection(toWorld).clone();
     const pts: THREE.Vector3[] = [s, s.clone().addScaledVector(d, lead)];
     if (route) {
-      const r = rootRef.current;
+      // the device root's ref is attached only after this (child) layout effect runs: find it by its marker
+      let r: THREE.Object3D | null = rootRef?.current ?? null;
+      if (!r) {
+        r = w.parent;
+        while (r && !r.userData.deviceRoot) r = r.parent;
+      }
       const parentWorld = r?.parent ? (r.parent.updateWorldMatrix(true, false), r.parent.matrixWorld) : new THREE.Matrix4();
       for (const v of [...(route.via ?? []), route.to]) pts.push(new THREE.Vector3(...v).applyMatrix4(parentWorld));
+      if (stub.current) stub.current.visible = false;
+    } else if (path) {
+      for (const v of path) pts.push(new THREE.Vector3(...v).applyMatrix4(toWorld));
       if (stub.current) stub.current.visible = false;
     } else {
       // default: drop to the floor into a conduit stub-up
@@ -1011,15 +1034,47 @@ export function RoutedCable({
     const old = m.geometry;
     m.geometry = g;
     old.dispose();
+    const extra: THREE.BufferGeometry[] = [];
+    if (companions?.length) {
+      const N = 48;
+      const fr = curve.computeFrenetFrames(N, false);
+      companions.forEach((c, i) => {
+        const cm = comp.current[i];
+        if (!cm) return;
+        const cp = c.lead.map((v) => new THREE.Vector3(...v));
+        for (let k = Math.ceil(c.joinAt * N); k <= N; k++) {
+          const u = k / N;
+          cp.push(curve.getPointAt(u).addScaledVector(fr.normals[k]!, c.offset[0]).addScaledVector(fr.binormals[k]!, c.offset[1]));
+        }
+        const cc = new THREE.CatmullRomCurve3(cp, false, 'centripetal');
+        const cg = new THREE.TubeGeometry(cc, Math.max(16, Math.round(cc.getLength() * 90)), c.radius, 8, false);
+        cm.geometry.dispose();
+        cm.geometry = cg;
+        extra.push(cg);
+      });
+    }
     return () => {
       m.geometry = new THREE.BufferGeometry();
       g.dispose();
+      extra.forEach((x) => x.dispose());
+      comp.current.forEach((cm) => {
+        if (cm) cm.geometry = new THREE.BufferGeometry();
+      });
     };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   if (route === false) return null;
   return (
     <group ref={wrap}>
       <mesh ref={mesh} material={fm.cable(color)} castShadow />
+      {companions?.map((c, i) => (
+        <mesh
+          key={i}
+          ref={(el) => {
+            comp.current[i] = el;
+          }}
+          material={fm.cable(c.color)}
+        />
+      ))}
       <ConduitStub stubRef={stub} />
     </group>
   );

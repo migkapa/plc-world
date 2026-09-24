@@ -402,7 +402,7 @@ export const TankProcessView = memo(function TankProcessView({ state, runtime }:
       {/* ------------------------------ props & signage ------------------------------ */}
       <IbcTote position={[-4.6, 0, 1.9]} rotationY={0.1} />
       <PalletStack position={[4.9, 0, -1.6]} rotationY={Math.PI / 2} kind="tall" cols={4} rows={3} layers={2} wrapped />
-      <Bollards at={[[-1.62, 1.4], [1.85, 1.4], [CAB.x - 0.75, WALL_Z + 1.0], [CAB.x + 0.75, WALL_Z + 1.0]]} />
+      <Bollards at={[[-1.62, 1.4], [CAB.x - 0.75, WALL_Z + 1.0], [CAB.x + 0.75, WALL_Z + 1.0]]} />
       <FloorDrain position={[-0.6, 0, 1.5]} size={0.3} />
       <FloorDrain position={[0.8, 0, 1.5]} size={0.3} />
       <WallSign lines={['MIXING', 'AREA 3']} position={[-0.6, 3.9, WALL_Z + 0.02]} size={[2.0, 0.85]} bg="#1d4f91" color="#ffffff" />
@@ -448,4 +448,3 @@ function EyeWash({ position }: { position: Vec3 }) {
 
 export default TankProcessView;
 
-export const TANK_SCENE = { CAB, WALL_Z, VS, OUTLET, PANEL } as const;

@@ -24,6 +24,7 @@ import {
   planeGeo,
   roundedBox,
   sharedGeo,
+  sharedMat,
   sharedTex,
   tmats,
   usePress,
@@ -54,6 +55,10 @@ export const TICKET_DISPENSER_DIMS = {
 } as const;
 const T = TICKET_DISPENSER_DIMS;
 
+const DEFAULT_MSG = 'PRESS BUTTON\nFOR TICKET';
+const TICKET_IN = -0.075;
+const TICKET_OUT = -0.005;
+
 const FACE_Y0 = 0.8;
 const FACE_Y1 = 1.36;
 const TILT = Math.atan2(0.07, FACE_Y1 - FACE_Y0);
@@ -78,30 +83,71 @@ function bodyGeometry(): THREE.BufferGeometry {
   });
 }
 
+/** Rain hood: canopy + a flat front fascia (0.1 m tall) that carries the header legend. */
+const HOOD = {
+  w: T.width + 0.05,
+  canopyH: 0.035,
+  fasciaH: 0.1,
+  fasciaT: 0.02,
+  /** Fascia front-face z and center y. */
+  zFront: 0.02 + (T.depth + 0.07) / 2,
+  yFascia: FACE_Y1 + 0.03,
+} as const;
+
 function hoodGeometry(): THREE.BufferGeometry {
-  return sharedGeo('tkt:hood', () => {
-    const parts = [xf(roundedBox(T.width + 0.05, 0.06, T.depth + 0.07, 0.02, 3), [0, FACE_Y1 + 0.05, 0.02])];
+  return sharedGeo('tkt:hood2', () => {
+    const parts = [xf(roundedBox(HOOD.w, HOOD.canopyH, T.depth + 0.07, 0.012, 3), [0, FACE_Y1 + 0.08 - HOOD.canopyH / 2, 0.02])];
+    parts.push(xf(roundedBox(HOOD.w, HOOD.fasciaH, HOOD.fasciaT, 0.006, 2), [0, HOOD.yFascia, HOOD.zFront - HOOD.fasciaT / 2]));
     parts.push(xf(roundedBox(T.width + 0.02, 0.05, T.depth, 0.015, 2), [0, FACE_Y1 + 0.005, 0]));
     return mergeAll(parts);
   });
 }
 
-function messageTexture(msg: string): THREE.CanvasTexture {
-  return sharedTex(`tkt:msg:${msg}`, () => {
-    const [c, ctx] = makeCanvas(256, 128);
-    const g = ctx.createLinearGradient(0, 0, 0, 128);
-    g.addColorStop(0, '#0b3a66');
-    g.addColorStop(1, '#062544');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, 256, 128);
-    ctx.fillStyle = '#e8f4ff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const lines = msg.split('\n');
-    const px = lines.length > 2 ? 26 : 32;
-    ctx.font = `bold ${px}px Arial, Helvetica, sans-serif`;
-    lines.forEach((l, i) => ctx.fillText(l, 128, 64 + (i - (lines.length - 1) / 2) * px * 1.2));
-    return canvasTex(c);
+/** Redraw the LCD message into an existing canvas. */
+function drawMessage(ctx: CanvasRenderingContext2D, msg: string): void {
+  const g = ctx.createLinearGradient(0, 0, 0, 128);
+  g.addColorStop(0, '#0b3a66');
+  g.addColorStop(1, '#062544');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 256, 128);
+  ctx.fillStyle = '#e8f4ff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const lines = msg.split('\n');
+  const px = lines.length > 2 ? 26 : 32;
+  ctx.font = `bold ${px}px Arial, Helvetica, sans-serif`;
+  lines.forEach((l, i) => ctx.fillText(l, 128, 64 + (i - (lines.length - 1) / 2) * px * 1.2, 240));
+}
+
+/**
+ * Paper ticket (thin card, 100 × 75 mm) leaving the mouth along +Z, tilted up and with a slight
+ * curl. Its inner edge is at z = 0.
+ */
+function ticketGeometry(): THREE.BufferGeometry {
+  return sharedGeo('tkt:ticket', () => {
+    const L = 0.075;
+    const g = new THREE.BoxGeometry(0.1, 0.0012, L, 1, 1, 10);
+    g.translate(0, 0, L / 2);
+    const pos = g.attributes.position!;
+    const th0 = 0.1; // leaves the mouth angled slightly up…
+    const k = -0.45 / L; // …and droops under its own weight (rad per m)
+    for (let i = 0; i < pos.count; i++) {
+      const s = pos.getZ(i);
+      const off = pos.getY(i);
+      // integrate the centerline of a strip whose angle grows linearly with s
+      const n = 12;
+      let cz = 0;
+      let cy = 0;
+      for (let j = 0; j < n; j++) {
+        const a = th0 + k * ((s * (j + 0.5)) / n);
+        cz += (Math.cos(a) * s) / n;
+        cy += (Math.sin(a) * s) / n;
+      }
+      const a = th0 + k * s;
+      pos.setXYZ(i, pos.getX(i), cy + off * Math.cos(a), cz - off * Math.sin(a));
+    }
+    g.computeVertexNormals();
+    return g;
   });
 }
 
@@ -184,6 +230,14 @@ function ticketTexture(): THREE.CanvasTexture {
   });
 }
 
+function headerMat(): THREE.MeshStandardMaterial {
+  return sharedMat('tkt:headerMat', () => new THREE.MeshStandardMaterial({ map: headerTexture(), emissive: '#ffffff', emissiveMap: headerTexture(), emissiveIntensity: 0.35, roughness: 0.35 }));
+}
+
+function ticketMat(): THREE.MeshStandardMaterial {
+  return sharedMat('tkt:ticketMat', () => new THREE.MeshStandardMaterial({ map: ticketTexture(), roughness: 0.8 }));
+}
+
 function buttonGeometry(): THREE.BufferGeometry {
   const r = 0.03;
   return latheZ(
@@ -228,14 +282,19 @@ export function TicketDispenser({
     () => new THREE.MeshStandardMaterial({ color: '#2a2a2a', emissive: '#ffb020', emissiveIntensity: 0, roughness: 0.3, toneMapped: false }),
     [],
   );
-  const screenMat = useMemo(
-    () => new THREE.MeshStandardMaterial({ map: messageTexture('PRESS BUTTON\nFOR TICKET'), emissive: '#ffffff', emissiveMap: messageTexture('PRESS BUTTON\nFOR TICKET'), emissiveIntensity: 0.9, roughness: 0.25, toneMapped: false }),
-    [],
-  );
-  useDisposable(useMemo(() => [ringMat, capMat, slotMat, screenMat], [ringMat, capMat, slotMat, screenMat]));
+  // one message canvas per kiosk, redrawn when the text changes (no per-message texture cache)
+  const screen = useMemo(() => {
+    const [canvas, ctx] = makeCanvas(256, 128);
+    drawMessage(ctx, DEFAULT_MSG);
+    const tex = canvasTex(canvas);
+    const mat = new THREE.MeshStandardMaterial({ map: tex, emissive: '#ffffff', emissiveMap: tex, emissiveIntensity: 0.9, roughness: 0.25, toneMapped: false });
+    return { ctx, tex, mat };
+  }, []);
+  const screenMat = screen.mat;
+  useDisposable(useMemo(() => [ringMat, capMat, slotMat, screen.mat, screen.tex], [ringMat, capMat, slotMat, screen]));
   const g = useRef({ getPressed, getButtonLit, getTicketOut, getMessage });
   g.current = { getPressed, getButtonLit, getTicketOut, getMessage };
-  const lastMsg = useRef('PRESS BUTTON\nFOR TICKET');
+  const lastMsg = useRef(DEFAULT_MSG);
   useFrame(({ clock }, dt) => {
     const t = clock.elapsedTime;
     const pressed = g.current.getPressed();
@@ -246,16 +305,16 @@ export function TicketDispenser({
     capMat.emissiveIntensity = lit ? (pressed ? 1.6 : 0.5) : 0;
     const out = g.current.getTicketOut?.() ?? false;
     if (ticket.current) {
-      ticket.current.position.z = damp(ticket.current.position.z, out ? 0.06 : -0.02, 6, dt);
-      ticket.current.visible = ticket.current.position.z > -0.015;
+      // fully inside the body at −0.075; presented with ~7 cm protruding at −0.005
+      ticket.current.position.z = damp(ticket.current.position.z, out ? TICKET_OUT : TICKET_IN, 6, dt);
+      ticket.current.visible = ticket.current.position.z > TICKET_IN + 0.004;
     }
     slotMat.emissiveIntensity = out ? (t % 0.5 < 0.25 ? 3 : 0.4) : 0.35;
-    const msg = g.current.getMessage?.() ?? 'PRESS BUTTON\nFOR TICKET';
+    const msg = g.current.getMessage?.() ?? DEFAULT_MSG;
     if (msg !== lastMsg.current) {
       lastMsg.current = msg;
-      const tex = messageTexture(msg);
-      screenMat.map = tex;
-      screenMat.emissiveMap = tex;
+      drawMessage(screen.ctx, msg);
+      screen.tex.needsUpdate = true;
     }
   });
 
@@ -270,10 +329,8 @@ export function TicketDispenser({
       <mesh geometry={roundedBox(T.width + 0.06, 0.1, T.depth + 0.06, 0.01, 2)} material={tmats.paint('#2b2e32', 0.6, 0.3)} position={[0, 0.05, 0]} castShadow receiveShadow />
       <mesh geometry={bodyGeometry()} material={body} castShadow receiveShadow />
       <mesh geometry={hoodGeometry()} material={accent} castShadow receiveShadow />
-      {/* header on the hood front */}
-      <mesh geometry={planeGeo(T.width, 0.075)} position={[0, FACE_Y1 + 0.05, T.depth / 2 + 0.056]}>
-        <meshStandardMaterial map={headerTexture()} emissive="#ffffff" emissiveMap={headerTexture()} emissiveIntensity={0.35} roughness={0.35} />
-      </mesh>
+      {/* header legend on the flat hood fascia (inset 5 mm on every side) */}
+      <mesh geometry={planeGeo(HOOD.w - 0.01, HOOD.fasciaH - 0.01)} position={[0, HOOD.yFascia, HOOD.zFront + 0.0008]} material={headerMat()} />
       {/* lower front: accent service door with lock and vent slots */}
       <mesh geometry={roundedBox(T.width - 0.06, 0.56, 0.006, 0.015, 2)} material={accent} position={[0, 0.45, faceZ + 0.002]} castShadow />
       <mesh geometry={cylZ(0.013, 0.013, 0.012, 16)} material={tmats.metal('#d0d4d7', 0.25)} position={[T.width / 2 - 0.07, 0.62, faceZ + 0.008]} />
@@ -308,10 +365,8 @@ export function TicketDispenser({
         <group position={[0, 0.14, 0.01]}>
           <mesh geometry={roundedBox(0.15, 0.04, 0.014, 0.008, 2)} material={slotMat} />
           <mesh geometry={boxGeo(0.105, 0.006, 0.02)} material={tmats.black()} position={[0, 0, 0.001]} />
-          <group ref={ticket} position={[0, 0, -0.02]}>
-            <mesh geometry={planeGeo(0.1, 0.075)} position={[0, 0, 0.0375]} rotation={[-Math.PI / 2 + 0.25, 0, 0]}>
-              <meshStandardMaterial map={ticketTexture()} roughness={0.8} side={THREE.DoubleSide} />
-            </mesh>
+          <group ref={ticket} position={[0, 0, TICKET_IN]} visible={false}>
+            <mesh geometry={ticketGeometry()} material={ticketMat()} castShadow />
           </group>
         </group>
         {/* intercom: speaker grille + HELP button, contactless reader */}

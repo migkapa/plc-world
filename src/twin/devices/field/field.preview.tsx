@@ -1,0 +1,453 @@
+import { useFrame } from '@react-three/fiber';
+import { useRef } from 'react';
+import * as THREE from 'three';
+import type { Preview } from '../../../dev/gallery';
+import { Boxes, BOX_SIZES, CardboardBox, type BoxState } from './Boxes';
+import { Conveyor, conveyorLayout } from './Conveyor';
+import { PneumaticCylinder } from './Cylinder';
+import { fm } from './shared';
+import { LevelSwitch, LevelTransmitter, TempTransmitter } from './Instruments';
+import { Flange, PipeRun, SightGlass } from './Piping';
+import { OnNozzle, Tank, tankLayout } from './Tank';
+import { SolenoidValve } from './Valves';
+import { GearMotor, Motor } from './Motor';
+import { PhotoEye42EF } from './PhotoEye';
+import { ProxSensor872C } from './Prox';
+
+const now = () => performance.now() / 1000;
+
+function MotorRunning() {
+  return <Motor frame="medium" getRpm={() => 180} />;
+}
+
+function MotorFrames() {
+  return (
+    <group>
+      <Motor frame="small" position={[-0.45, 0, 0]} getRpm={() => 120} />
+      <Motor frame="medium" position={[0, 0, 0]} getRpm={() => 120} />
+      <Motor frame="large" position={[0.55, 0, 0]} getRpm={() => 120} getOverloaded={() => Math.floor(now() / 3) % 2 === 1} />
+    </group>
+  );
+}
+
+function GearMotorDemo() {
+  return <GearMotor position={[0, 0.3, 0]} getRpm={() => 240} />;
+}
+
+/** 0..1 triangle-ish extension cycle with dwell at both ends (period 3 s). */
+function cycle(t: number) {
+  const u = t % 3;
+  if (u < 0.8) return 0;
+  if (u < 1.1) return (u - 0.8) / 0.3;
+  if (u < 2.2) return 1;
+  if (u < 2.5) return 1 - (u - 2.2) / 0.3;
+  return 0;
+}
+
+function PhotoEyeBeam() {
+  // a box passes through the beam every 3 s
+  const blocked = () => {
+    const u = now() % 3;
+    return u > 1.5 && u < 2.4;
+  };
+  return (
+    <group>
+      {/* beams run along +X: sensors at x = 0, reflectors at x = 0.6 */}
+      <PhotoEye42EF position={[0, 0.2, 0]} rotation={[0, Math.PI / 2, 0]} getBlocked={() => false} getOutput={() => false} beamLength={0.6} postLength={0.19} />
+      <PhotoEye42EF position={[0, 0.2, -0.55]} rotation={[0, Math.PI / 2, 0]} getBlocked={blocked} getOutput={blocked} beamLength={0.6} getBlockDistance={() => 0.2} postLength={0.19} />
+      <MovingBox blocked={blocked} />
+    </group>
+  );
+}
+
+function MovingBox({ blocked }: { blocked: () => boolean }) {
+  const ref = useRef<THREE.Group>(null);
+  useFrame(() => {
+    if (!ref.current) return;
+    const u = now() % 3;
+    // travels along Z through the rear beam (z = -0.55) while blocked() is true
+    ref.current.position.z = -0.55 + (u - 1.95) * 0.35;
+    ref.current.visible = u > 1.3 && u < 2.6;
+    void blocked;
+  });
+  return (
+    <group ref={ref} position={[0.3, 0, -0.55]} rotation={[0, Math.PI / 2, 0]}>
+      <CardboardBox />
+    </group>
+  );
+}
+
+function MotorOverload() {
+  return <Motor frame="medium" getRpm={() => 150} getOverloaded={() => true} />;
+}
+
+function ConveyorPowder() {
+  const pos = () => now() * 0.4;
+  return (
+    <group position={[-1, 0, 0]}>
+      <Conveyor length={2} width={0.45} height={0.75} getBeltPosition={pos} frameStyle="powder" frameColor="#2f5f8f" driveSide="front" />
+      <Boxes position={[0, 0.75, 0]} getBoxes={() => [{ x: (pos() % 2.4) - 0.1, tall: false, id: 1 }, { x: ((pos() + 1.2) % 2.4) - 0.1, tall: true, id: 2 }]} />
+    </group>
+  );
+}
+
+function PhotoEyeCloseup() {
+  return <PhotoEye42EF position={[0, 0.2, 0]} getBlocked={() => false} getOutput={() => true} beamLength={0} postLength={0.19} />;
+}
+
+function ProxDemo() {
+  const active = () => Math.floor(now() / 1.5) % 2 === 0;
+  return (
+    <group>
+      <ProxSensor872C position={[0, 0.06, 0]} getActive={active} />
+      <ProxSensor872C position={[0.07, 0.06, 0]} getActive={() => !active()} diameter={0.012} />
+      <ProxSensor872C position={[-0.08, 0.06, 0]} getActive={() => true} diameter={0.03} />
+    </group>
+  );
+}
+
+function CylinderExtending() {
+  const ext = () => cycle(now());
+  return (
+    <group>
+      <PneumaticCylinder position={[0, 0.2, 0.1]} bore={0.05} stroke={0.3} getExtension={ext} getRetractedSensor={() => ext() < 0.02} getExtendedSensor={() => ext() > 0.98} pusher={[0.26, 0.14]} />
+      <PneumaticCylinder position={[0.3, 0.1, 0.05]} bore={0.032} stroke={0.15} getExtension={() => cycle(now() + 1.2)} getRetractedSensor={() => cycle(now() + 1.2) < 0.02} getExtendedSensor={() => cycle(now() + 1.2) > 0.98} />
+    </group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Conveyor demo line (pure function of time — mirrors the conveyor-sort scene geometry)
+// ---------------------------------------------------------------------------
+
+const CV_LEN = 6;
+const CV_W = 0.6;
+const CV_H = 0.85;
+const SPEED = 0.5;
+const SPAWN = 1.6;
+const DIVERT_X = 4.0;
+const PUSH_T = 0.28;
+
+interface DemoState {
+  t: number;
+  boxes: BoxState[];
+  pusher: number;
+}
+const demo: DemoState = { t: -1, boxes: Array.from({ length: 40 }, () => ({ x: 0, tall: false, visible: false })), pusher: 0 };
+const isTall = (i: number) => i % 3 === 1;
+
+function demoAt(t: number): DemoState {
+  if (demo.t === t) return demo;
+  demo.t = t;
+  let n = 0;
+  let pusher = 0;
+  const first = Math.max(0, Math.floor((t - 16) / SPAWN));
+  const last = Math.floor(t / SPAWN);
+  for (let i = first; i <= last && n < demo.boxes.length; i++) {
+    const age = t - i * SPAWN;
+    const tall = isTall(i);
+    const b = demo.boxes[n]!;
+    b.tall = tall;
+    b.id = i;
+    b.visible = true;
+    b.y = 0;
+    b.z = 0;
+    b.rotX = 0;
+    b.rotY = ((i * 37) % 7) * 0.004 - 0.012;
+    let x = 0.3 + age * SPEED;
+    if (tall && x >= DIVERT_X) {
+      const ta = (DIVERT_X - 0.3) / SPEED;
+      const u = age - ta;
+      x = DIVERT_X;
+      // pusher stroke profile: extend 0.28 s, dwell 0.15 s, retract 0.3 s
+      const p = u < PUSH_T ? u / PUSH_T : u < PUSH_T + 0.15 ? 1 : Math.max(0, 1 - (u - PUSH_T - 0.15) / 0.3);
+      pusher = Math.max(pusher, p);
+      const pushZ = Math.min(u / PUSH_T, 1) * 0.36;
+      b.z = pushZ;
+      if (u > PUSH_T) {
+        // slide down the reject chute
+        const v = Math.min((u - PUSH_T) / 0.9, 1);
+        b.z = 0.36 + v * 0.42;
+        b.y = -v * 0.3;
+        b.rotX = v * 0.5;
+      }
+      if (u > PUSH_T + 1.6) b.visible = false;
+    } else if (x > CV_LEN + 0.2) {
+      b.visible = false;
+    }
+    b.x = x;
+    if (b.visible) n++;
+  }
+  for (let k = n; k < demo.boxes.length; k++) demo.boxes[k]!.visible = false;
+  demo.pusher = pusher;
+  return demo;
+}
+
+const lay = conveyorLayout(CV_W, CV_H);
+function eyeBlocked(x: number, tallOnly: boolean) {
+  const d = demoAt(now());
+  for (const b of d.boxes) {
+    if (!b.visible || (tallOnly && !b.tall)) continue;
+    if (Math.abs((b.z ?? 0)) > 0.2 || (b.y ?? 0) < -0.01) continue;
+    if (Math.abs(b.x - x) < BOX_SIZES.short.length / 2) return true;
+  }
+  return false;
+}
+function eyeBlockDist(x: number) {
+  const d = demoAt(now());
+  for (const b of d.boxes) {
+    if (b.visible && Math.abs(b.x - x) < 0.15) return lay.frameZ - 0.03 - BOX_SIZES[b.tall ? 'tall' : 'short'].width / 2;
+  }
+  return 0.2;
+}
+
+function DemoEye({ x, beamY }: { x: number; beamY: number }) {
+  const zEye = lay.frameZ - 0.03;
+  const tallOnly = beamY > 0.25;
+  const get = () => eyeBlocked(x, tallOnly);
+  return (
+    <PhotoEye42EF
+      position={[x, CV_H + beamY, zEye]}
+      rotation={[0, Math.PI, 0]}
+      getBlocked={get}
+      getOutput={get}
+      getBlockDistance={() => eyeBlockDist(x)}
+      beamLength={2 * zEye}
+      postLength={CV_H + beamY - lay.frameTop - 0.006}
+    />
+  );
+}
+
+function ConveyorWithBoxes() {
+  const beltPos = () => now() * SPEED;
+  const pusherExt = () => demoAt(now()).pusher;
+  const cylZ = -(lay.frameOuterZ + 0.045);
+  return (
+    <group position={[-CV_LEN / 2, 0, 0]}>
+      <Conveyor
+        length={CV_LEN}
+        width={CV_W}
+        height={CV_H}
+        getBeltPosition={beltPos}
+        guideGaps={[
+          { from: DIVERT_X - 0.2, to: DIVERT_X + 0.2, side: 'back' },
+          { from: DIVERT_X - 0.26, to: DIVERT_X + 0.26, side: 'front' },
+        ]}
+      />
+      <Boxes position={[0, CV_H, 0]} getBoxes={() => demoAt(now()).boxes} />
+      <DemoEye x={0.9} beamY={0.1} />
+      <DemoEye x={2.5} beamY={0.3} />
+      <DemoEye x={DIVERT_X - 0.36} beamY={0.1} />
+      <DemoEye x={5.8} beamY={0.1} />
+      {/* pusher on the back side */}
+      <PneumaticCylinder
+        position={[DIVERT_X, CV_H + 0.1, cylZ]}
+        bore={0.05}
+        stroke={0.55}
+        getExtension={pusherExt}
+        getRetractedSensor={() => pusherExt() < 0.02}
+        getExtendedSensor={() => pusherExt() > 0.98}
+        pusher={[0.3, 0.15]}
+        tubes={{ rear: [-0.25, -0.35, -0.9], front: [-0.22, -0.35, -0.9] }}
+      />
+      <mesh material={fm.anodized('#c2c7cc')} position={[DIVERT_X, (CV_H + 0.1 - 0.075) / 2, cylZ - 0.06]} castShadow>
+        <boxGeometry args={[0.045, CV_H + 0.1 - 0.075, 0.045]} />
+      </mesh>
+      <mesh material={fm.anodized('#c2c7cc')} position={[DIVERT_X, CV_H + 0.1 - 0.0725 - 0.0025, cylZ - 0.03]} castShadow>
+        <boxGeometry args={[0.2, 0.01, 0.12]} />
+      </mesh>
+      <SolenoidValve variant="pneumatic" position={[DIVERT_X - 0.25, CV_H - 0.62, -1.02]} getEnergized={() => pusherExt() > 0 && pusherExt() < 1} />
+      {/* reject chute on the front side */}
+      <group position={[DIVERT_X, CV_H - 0.01, lay.frameOuterZ]}>
+        <mesh material={fm.stainless(0.3)} position={[0, -0.15, 0.22]} rotation={[0.6, 0, 0]} castShadow receiveShadow>
+          <boxGeometry args={[0.5, 0.004, 0.52]} />
+        </mesh>
+        {[-1, 1].map((sx) => (
+          <mesh key={sx} material={fm.stainless(0.3)} position={[sx * 0.25, -0.1, 0.22]} rotation={[0.6, 0, 0]} castShadow>
+            <boxGeometry args={[0.004, 0.14, 0.52]} />
+          </mesh>
+        ))}
+        {[-1, 1].map((sx) => (
+          <mesh key={sx} material={fm.stainless(0.3)} position={[sx * 0.24, -(CV_H - 0.01) / 2 - 0.1, 0.4]} castShadow>
+            <boxGeometry args={[0.03, CV_H - 0.2, 0.03]} />
+          </mesh>
+        ))}
+      </group>
+    </group>
+  );
+}
+
+function BoxesDemo() {
+  return (
+    <group>
+      <CardboardBox position={[-0.2, 0, 0]} />
+      <CardboardBox tall position={[0.2, 0, 0]} rotation={[0, -0.4, 0]} />
+      <CardboardBox position={[-0.2, 0.2, 0]} rotation={[0, 0.3, 0]} />
+    </group>
+  );
+}
+
+function ValvesDemo() {
+  const on = () => Math.floor(now() / 2.5) % 2 === 0;
+  return (
+    <group>
+      <SolenoidValve variant="process" position={[-0.25, 0.25, 0]} getEnergized={on} tag="XV-101" />
+      <SolenoidValve variant="process" position={[0.25, 0.25, 0]} getEnergized={() => !on()} tag="XV-102" pipeDiameter={0.0483} />
+      <mesh position={[0.62, 0.2, -0.006]} castShadow receiveShadow>
+        <boxGeometry args={[0.24, 0.4, 0.012]} />
+        <meshStandardMaterial color="#e3e5e2" roughness={0.6} />
+      </mesh>
+      <SolenoidValve variant="pneumatic" position={[0.62, 0.13, 0]} getEnergized={on} getStation={(i) => i === 2 && !on()} />
+    </group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tank
+// ---------------------------------------------------------------------------
+
+const tankLevel = () => 65 + 3 * Math.sin(now() / 5);
+const tankTemp = () => 48 + 22 * Math.sin(now() / 9);
+const TL = tankLayout(1.3, 1.25);
+
+function TankMixing({ cutaway = true }: { cutaway?: boolean }) {
+  const n = TL.nozzles;
+  const inlet = n.inlet.position;
+  const out = n.outlet.position;
+  return (
+    <group>
+      <Tank getLevel={tankLevel} getTemperature={tankTemp} getAgitatorRpm={() => 70} getHeaterOn={() => tankTemp() < 60} cutaway={cutaway} />
+      <OnNozzle nozzle={n.lt}>
+        <LevelTransmitter getValue={tankLevel} units="%" tagLabel="LT-101" />
+      </OnNozzle>
+      <OnNozzle nozzle={n.tt}>
+        <TempTransmitter getValue={tankTemp} units="°C" tagLabel="TT-101" />
+      </OnNozzle>
+      <OnNozzle nozzle={n.lsl}>
+        <LevelSwitch getActive={() => tankLevel() >= 10} />
+      </OnNozzle>
+      <OnNozzle nozzle={n.lsh}>
+        <LevelSwitch getActive={() => tankLevel() >= 90} />
+      </OnNozzle>
+      <OnNozzle nozzle={n.lshh}>
+        <LevelSwitch getActive={() => tankLevel() < 97} />
+      </OnNozzle>
+      {/* inlet line with fill valve XV-101 */}
+      <PipeRun
+        points={[
+          inlet,
+          [inlet[0], inlet[1] + 0.22, inlet[2]],
+          [-1.05, inlet[1] + 0.22, inlet[2]],
+          [-1.05, 0.02, inlet[2]],
+        ]}
+        diameter={0.0483}
+        flangesAt={[0]}
+      />
+      <SolenoidValve variant="process" position={[-0.78, inlet[1] + 0.22, inlet[2]]} getEnergized={() => Math.floor(now() / 4) % 2 === 0} tag="XV-101" pipeDiameter={0.0483} pipeStubs={0} />
+      {/* bottom outlet with drain valve XV-102 */}
+      <PipeRun
+        points={[
+          out,
+          [out[0], 0.24, out[2]],
+          [1.05, 0.24, out[2]],
+          [1.05, 0.02, out[2]],
+        ]}
+        diameter={0.0603}
+        flangesAt={[0]}
+      />
+      <SolenoidValve variant="process" position={[0.5, 0.24, 0]} getEnergized={() => false} tag="XV-102" pipeStubs={0} />
+      <Flange position={[1.05, 0.02, 0]} diameter={0.0603} />
+      {!cutaway && <SightGlass position={[Math.sin(-0.5) * 0.66, TL.yT1 + 0.05, Math.cos(-0.5) * 0.66]} rotation={[0, -0.5, 0]} height={1.1} getLevel={tankLevel} />}
+    </group>
+  );
+}
+
+function InstrumentsDemo() {
+  const lvl = () => 50 + 40 * Math.sin(now() / 3);
+  return (
+    <group>
+      <LevelTransmitter position={[-0.25, 0.25, 0]} getValue={lvl} units="%" tagLabel="LT-101" />
+      <LevelTransmitter position={[0.0, 0.25, 0]} getValue={() => 1.234 + 0.2 * Math.sin(now())} units="m" tagLabel="LT-102" antenna="horn" decimals={3} range={[0, 2]} />
+      <TempTransmitter position={[0.22, 0.25, 0]} getValue={() => 72.4 + Math.sin(now() / 2)} units="°C" tagLabel="TT-101" />
+      <LevelSwitch position={[0.4, 0.12, 0]} getActive={() => Math.floor(now() / 2) % 2 === 0} />
+    </group>
+  );
+}
+
+export const previews: Record<string, Preview> = {
+  FIELD_Motor_Running: {
+    Component: MotorRunning,
+    description: '5 HP 184T TEFC motor, shaft & fan turning',
+    camera: { position: [0.55, 0.38, 0.62], target: [0, 0.11, 0] },
+  },
+  FIELD_Motor_Overload: {
+    Component: MotorOverload,
+    description: 'Overloaded motor: hot glow + vibration',
+    camera: { position: [0.55, 0.38, 0.62], target: [0, 0.11, 0] },
+  },
+  FIELD_Conveyor_Powder: {
+    Component: ConveyorPowder,
+    description: '2 m powder-coated conveyor, drive on the front side',
+    camera: { position: [1.4, 1.5, 2.2], target: [0, 0.55, 0] },
+  },
+  FIELD_Motor_Frames: {
+    Component: MotorFrames,
+    description: 'small / medium / large frames (large overload glow every 3 s)',
+    camera: { position: [0.9, 0.7, 1.4], target: [0.05, 0.12, 0] },
+  },
+  FIELD_PhotoEye_Beam: {
+    Component: PhotoEyeBeam,
+    description: '42EF photo-eyes with retro-reflectors; right one blocked every 3 s',
+    camera: { position: [0.75, 0.65, 0.95], target: [0.28, 0.14, -0.28] },
+  },
+  FIELD_PhotoEye_Closeup: {
+    Component: PhotoEyeCloseup,
+    description: '42EF RightSight close-up (output LED on)',
+    camera: { position: [0.07, 0.24, 0.1], target: [0, 0.19, -0.01] },
+  },
+  FIELD_Prox: {
+    Component: ProxDemo,
+    description: '872C M18 / M12 / M30 inductive proximity sensors with LED ring',
+    camera: { position: [0.16, 0.14, 0.2], target: [0, 0.055, -0.03] },
+  },
+  FIELD_Cylinder_Extending: {
+    Component: CylinderExtending,
+    description: 'ISO 15552 cylinders: guided pusher (Ø50 x 300) and plain Ø32',
+    camera: { position: [0.85, 0.6, 0.9], target: [0.1, 0.15, -0.12] },
+  },
+  FIELD_Conveyor_WithBoxes: {
+    Component: ConveyorWithBoxes,
+    description: '6 m belt conveyor: boxes, 42EF photo-eyes, pusher & reject chute, gear motor drive',
+    camera: { position: [1.2, 2.7, 6.2], target: [0.2, 0.55, 0] },
+  },
+  FIELD_Boxes: {
+    Component: BoxesDemo,
+    description: 'Short and tall cardboard boxes',
+    camera: { position: [0.55, 0.5, 0.8], target: [0, 0.15, 0] },
+  },
+  FIELD_Valves: {
+    Component: ValvesDemo,
+    description: 'Actuated ball valves (XV-101 open / XV-102 shut, toggling) + 5/2 valve manifold',
+    camera: { position: [0.55, 0.6, 1.25], target: [0.15, 0.2, 0] },
+  },
+  FIELD_Tank_Mixing: {
+    Component: () => <TankMixing />,
+    description: '2000 L mixing tank, quarter cut-away, level ~65 %, agitator running, instruments on nozzles',
+    camera: { position: [3.2, 3.1, 5.0], target: [0, 1.5, 0] },
+  },
+  FIELD_Tank_Window: {
+    Component: () => <TankMixing cutaway={false} />,
+    description: 'Tank variant with a full-height sight window and tubular sight glass',
+    camera: { position: [2.0, 2.6, 4.4], target: [0, 1.35, 0] },
+  },
+  FIELD_Instruments: {
+    Component: InstrumentsDemo,
+    description: 'Radar LT (lens / horn), RTD temperature transmitter, vibrating fork level switch',
+    camera: { position: [0.3, 0.5, 1.15], target: [0.06, 0.22, 0] },
+  },
+  FIELD_GearMotor: {
+    Component: GearMotorDemo,
+    description: 'Right-angle helical-bevel gear motor',
+    camera: { position: [0.3, 0.55, 0.75], target: [-0.12, 0.3, 0.08] },
+  },
+};

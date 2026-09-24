@@ -187,6 +187,23 @@ export const previews: Record<string, Preview> = {
     camera: { position: [0.13, 0.31, 0.43], target: [0, 0.145, 0.12] },
     description: '1756-OB16E with the door open: 1756-TBNH RTB and wiring',
   },
+  CLX_OB16E_FuseTripped: {
+    Component: () => (
+      <DigitalModule1756
+        catalog="1756-OB16E"
+        getPoint={(i) => i < 8 && demoOutput(i)}
+        getFuse={(g) => g === 1}
+        position={[0, 0.1, 0]}
+      />
+    ),
+    camera: { position: [0.05, 0.25, 0.3], target: [0, 0.22, 0.13] },
+    description: '1756-OB16E with the group 1 (outputs 8-15) electronic fuse tripped',
+  },
+  CLX_OF8_DoorOpen: {
+    Component: () => <AnalogModule1756 catalog="1756-OF8" doorOpen position={[0, 0.11, 0]} />,
+    camera: { position: [0.13, 0.31, 0.43], target: [0, 0.145, 0.12] },
+    description: '1756-OF8 with the door open: VOUT/IOUT per channel, shared RTN, 4-20 mA loops on ch 0-3',
+  },
   CLX_IF8: {
     Component: () => <AnalogModule1756 catalog="1756-IF8" />,
     camera: MOD_CAM,
@@ -221,6 +238,11 @@ export const previews: Record<string, Preview> = {
     Component: () => <PowerSupply1756 catalog="1756-PA72" doorOpen position={[0, 0.08, 0]} />,
     camera: { position: [0.13, 0.24, 0.4], target: [0, 0.12, 0.1] },
     description: '1756-PA72 with the terminal cover open',
+  },
+  CLX_PB72_DoorOpen: {
+    Component: () => <PowerSupply1756 catalog="1756-PB72" doorOpen position={[0, 0.08, 0]} />,
+    camera: { position: [0.13, 0.24, 0.4], target: [0, 0.12, 0.1] },
+    description: '1756-PB72 with the terminal cover open (+ / - / GND)',
   },
   CLX_PB72: {
     Component: () => <PowerSupply1756 catalog="1756-PB72" />,

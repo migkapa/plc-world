@@ -106,8 +106,10 @@ function colorize(g: THREE.BufferGeometry, color: THREE.ColorRepresentation | nu
  * An optional matrix transforms the part first.
  */
 export function mergeColored(parts: Array<[THREE.BufferGeometry, THREE.ColorRepresentation | null, THREE.Matrix4?]>): THREE.BufferGeometry {
+  // keep indices when every part is indexed (tubes, cylinders, boxes) — much smaller buffers
+  const allIndexed = parts.every(([g]) => !!g.index);
   const prepared = parts.map(([g, c, m]) => {
-    const ng = (g.index ? g.toNonIndexed() : g.clone()) as THREE.BufferGeometry;
+    const ng = (allIndexed ? g.clone() : g.index ? g.toNonIndexed() : g.clone()) as THREE.BufferGeometry;
     for (const name of Object.keys(ng.attributes)) if (name !== 'position' && name !== 'normal' && !(c === null && name === 'color')) ng.deleteAttribute(name);
     if (!ng.getAttribute('normal')) ng.computeVertexNormals();
     if (m) ng.applyMatrix4(m);

@@ -5,11 +5,11 @@
  */
 import { useCursor } from '@react-three/drei';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { COLORS, LED_HEX, Led, materials, type LedColor, type LedMode } from '../../../common';
+import { COLORS, LED_HEX, materials } from '../../../common';
 import type { Vec3 } from '../../../contracts';
 import { glyphColumn, glyphColumns } from './font5x7';
 
@@ -181,6 +181,8 @@ export const MAT = {
   guide: () => materials.plastic('#3a3d42', 0.6),
   vertexColored: () =>
     cachedMat('clx:vcol', () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.02 })),
+  vertexColoredMetal: () =>
+    cachedMat('clx:vcolMetal', () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.3, metalness: 0.75 })),
   vertexColoredGloss: () =>
     cachedMat('clx:vcolGloss', () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.32, metalness: 0.05 })),
   hole: () => cachedMat('clx:hole', () => new THREE.MeshBasicMaterial({ color: '#050506' })),
@@ -439,7 +441,7 @@ export type StatusLedState =
   | 'flashing-amber'
   | 'flashing-yellow';
 
-type LitColor = 'green' | 'red' | 'amber' | 'yellow';
+export type LitColor = 'green' | 'red' | 'amber' | 'yellow';
 
 const COLOR_OF: Record<StatusLedState, LitColor> = {
   off: 'green',
@@ -462,7 +464,7 @@ export const LED_LIT: Record<LitColor, THREE.Color> = {
   green: new THREE.Color(0.02, 1.8, 0.05),
   red: new THREE.Color(6.0, 0.05, 0.03),
   amber: new THREE.Color(4.4, 0.33, 0.0),
-  yellow: new THREE.Color(3.0, 0.72, 0.0),
+  yellow: new THREE.Color(2.5, 0.86, 0.0),
 };
 
 /** Unlit lens albedo: near-black light pipe with a trace of the LED tint. */
@@ -590,11 +592,13 @@ export function SmokedLens({ w, h, position }: { w: number; h: number; position:
 // 4-character dot-matrix display
 // ---------------------------------------------------------------------------
 
-/** Red-orange LED dot-matrix color of the 1756 status displays. */
-export const DISPLAY_COLOR = '#ff5a1f';
+/** Red-orange LED dot-matrix color of the 1756 status displays (sRGB, before the HDR gain). */
+export const DISPLAY_COLOR = '#ff3d10';
 
 const DISPLAY_CANVAS_W = 256;
 const DISPLAY_CANVAS_H = 80;
+/** HDR gain applied to the display texture (compensates the 50 % red filter lens in front of it). */
+const DISPLAY_GAIN = 3.2;
 
 export interface DotMatrixDisplayProps {
   /** Text to show; longer than 4 characters scrolls. Empty string = display blank (unpowered). */
@@ -608,9 +612,36 @@ export interface DotMatrixDisplayProps {
   step?: number;
 }
 
-/** A 4-character 5x7 LED dot-matrix display (like the HDSP displays on 1756-L8x / 1756-EN2T). */
+/** Pre-rendered lit-dot sprite: hot core -> LED colour -> soft edge (drawn with drawImage per lit dot). */
+function dotSprite(color: string, r: number): HTMLCanvasElement {
+  const d = Math.ceil(r * 2 + 2);
+  const c = document.createElement('canvas');
+  c.width = d;
+  c.height = d;
+  const ctx = c.getContext('2d')!;
+  const base = new THREE.Color(color);
+  const hot = base.clone().lerp(new THREE.Color('#ffd2a8'), 0.45);
+  const edge = base.clone().multiplyScalar(0.45);
+  const g = ctx.createRadialGradient(d / 2, d / 2, 0, d / 2, d / 2, r);
+  g.addColorStop(0, `#${hot.getHexString()}`);
+  g.addColorStop(0.45, `#${base.getHexString()}`);
+  g.addColorStop(0.85, `#${edge.getHexString()}`);
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(d / 2, d / 2, r, 0, Math.PI * 2);
+  ctx.fill();
+  return c;
+}
+
+/**
+ * A 4-character 5x7 LED dot-matrix display (like the HDSP-style displays on 1756-L8x / 1756-EN2T): lit dots
+ * glow red-orange; unlit dots are near-black (a faint grid is visible only up close) behind a glossy red
+ * filter lens. Mixed case is supported ('Rem Run').
+ */
 export function DotMatrixDisplay({ getText, width, height, position, color = DISPLAY_COLOR, step = 0.26 }: DotMatrixDisplayProps) {
-  const { ctx, tex, mat } = useMemo(() => {
+  const r = 3.9;
+  const { ctx, tex, mat, sprite } = useMemo(() => {
     const canvas = document.createElement('canvas');
     canvas.width = DISPLAY_CANVAS_W;
     canvas.height = DISPLAY_CANVAS_H;
@@ -618,16 +649,11 @@ export function DotMatrixDisplay({ getText, width, height, position, color = DIS
     const t = new THREE.CanvasTexture(canvas);
     t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = 4;
-    const m = new THREE.MeshBasicMaterial({ map: t, toneMapped: false });
-    m.color.setScalar(2.6);
-    return { ctx: c, tex: t, mat: m };
-  }, []);
-  const st = useRef({ text: null as string | null, offset: -1, t0: 0 });
-  const colors = useMemo(() => {
-    const lit = new THREE.Color(color);
-    const dim = lit.clone().multiplyScalar(0.07);
-    return { lit: `#${lit.getHexString()}`, dim: `#${dim.getHexString()}` };
+    const m = new THREE.MeshBasicMaterial({ map: t, toneMapped: false, ...DECAL_OFFSET });
+    m.color.setScalar(DISPLAY_GAIN);
+    return { ctx: c, tex: t, mat: m, sprite: dotSprite(color, r) };
   }, [color]);
+  const st = useRef({ text: null as string | null, offset: -1, t0: 0 });
 
   useLayoutEffect(
     () => () => {
@@ -657,34 +683,41 @@ export function DotMatrixDisplay({ getText, width, height, position, color = DIS
     // draw
     const W = DISPLAY_CANVAS_W;
     const H = DISPLAY_CANVAS_H;
-    ctx.fillStyle = '#080404';
+    ctx.fillStyle = '#020101';
     ctx.fillRect(0, 0, W, H);
     const cellW = 62;
     const pitch = 10;
     const x0 = (W - cellW * 4 + (cellW - 5 * pitch)) / 2;
     const y0 = (H - 7 * pitch) / 2;
-    const r = 3.7;
     const cycle = text.length + 3;
-    for (let pass = 0; pass < 2; pass++) {
-      ctx.fillStyle = pass === 0 ? colors.dim : colors.lit;
-      ctx.beginPath();
-      for (let k = 0; k < 4; k++) {
-        const idx = text.length > 4 ? (offset + k) % cycle : k;
-        const ch = idx < text.length ? text.charAt(idx) : ' ';
-        const go = glyphColumns(ch);
-        for (let c = 0; c < 5; c++) {
-          const bits = glyphColumn(go, c);
-          for (let row = 0; row < 7; row++) {
-            const on = (bits >> row) & 1;
-            if (on !== pass) continue;
-            const cx = x0 + k * cellW + c * pitch + pitch / 2;
-            const cy = y0 + row * pitch + pitch / 2;
-            ctx.moveTo(cx + r, cy);
-            ctx.arc(cx, cy, r, 0, Math.PI * 2);
-          }
+    // unlit dots: a barely-visible grid (black LEDs behind the red filter)
+    ctx.fillStyle = '#0c0302';
+    ctx.beginPath();
+    for (let k = 0; k < 4; k++)
+      for (let c = 0; c < 5; c++)
+        for (let row = 0; row < 7; row++) {
+          const cx = x0 + k * cellW + c * pitch + pitch / 2;
+          const cy = y0 + row * pitch + pitch / 2;
+          ctx.moveTo(cx + r * 0.8, cy);
+          ctx.arc(cx, cy, r * 0.8, 0, Math.PI * 2);
+        }
+    ctx.fill();
+    // lit dots
+    const half = sprite.width / 2;
+    for (let k = 0; k < 4; k++) {
+      const idx = text.length > 4 ? (offset + k) % cycle : k;
+      const ch = idx < text.length ? text.charAt(idx) : ' ';
+      const go = glyphColumns(ch);
+      for (let c = 0; c < 5; c++) {
+        const bits = glyphColumn(go, c);
+        if (!bits) continue;
+        for (let row = 0; row < 7; row++) {
+          if (!((bits >> row) & 1)) continue;
+          const cx = x0 + k * cellW + c * pitch + pitch / 2;
+          const cy = y0 + row * pitch + pitch / 2;
+          ctx.drawImage(sprite, cx - half, cy - half);
         }
       }
-      ctx.fill();
     }
     tex.needsUpdate = true;
   });
@@ -693,9 +726,38 @@ export function DotMatrixDisplay({ getText, width, height, position, color = DIS
   return (
     <group position={position}>
       <mesh geometry={geo} material={mat} />
-      <mesh geometry={geo} material={MAT.displayGlass()} position={[0, 0, 0.0006]} />
+      <mesh geometry={geo} material={MAT.displayGlass()} position={[0, 0, 0.0001]} raycast={() => null} />
     </group>
   );
+}
+
+/**
+ * Raised rectangular rim (molded window frame) for merging into a housing: outer size w x h centered at
+ * (cx, cy), rim width `border`, standing `height` proud of the face at z = zFace.
+ */
+export function frameParts(cx: number, cy: number, w: number, h: number, border: number, height: number, zFace: number): THREE.BufferGeometry[] {
+  const z = zFace + height / 2 - 0.0001;
+  const hh = height + 0.0002;
+  return [
+    rboxAt(w, border, hh, cx, cy + h / 2 - border / 2, z, 0.0003),
+    rboxAt(w, border, hh, cx, cy - h / 2 + border / 2, z, 0.0003),
+    rboxAt(border, h - 2 * border + 0.0004, hh, cx - w / 2 + border / 2, cy, z, 0.0002),
+    rboxAt(border, h - 2 * border + 0.0004, hh, cx + w / 2 - border / 2, cy, z, 0.0002),
+  ];
+}
+
+/**
+ * Spring locking tabs at the top & bottom front of a 1756 module (they clip over the chassis shelf lips;
+ * press them to pull the module). Module-local, for merging into the housing geometry.
+ */
+export function lockingTabParts(modH: number): THREE.BufferGeometry[] {
+  const z = 0.122;
+  return [
+    rboxAt(0.0104, 0.0028, 0.0052, 0, modH + 0.001, z, 0.0009),
+    rboxAt(0.0074, 0.0008, 0.0036, 0, modH + 0.0024, z + 0.0004, 0.0003), // grip ridge
+    rboxAt(0.0104, 0.005, 0.0052, 0, -0.0003, z, 0.0009),
+    rboxAt(0.0074, 0.0009, 0.0036, 0, -0.0031, z + 0.0004, 0.0003),
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -744,35 +806,57 @@ export function Rj45Jack({ position, rotation }: { position?: Vec3; rotation?: V
 }
 
 function drawUsbBFace(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  ctx.fillStyle = '#b9bec3';
+  // cavity floor seen through the shell: dark, with the contact tongue's shadow
+  const g = ctx.createRadialGradient(w / 2, h / 2, 2, w / 2, h / 2, w * 0.7);
+  g.addColorStop(0, '#141416');
+  g.addColorStop(1, '#050506');
+  ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
-  // USB-B outline: square with chamfered top corners
-  const m = w * 0.1;
-  ctx.fillStyle = '#0a0a0b';
-  ctx.beginPath();
-  ctx.moveTo(m + w * 0.16, m);
-  ctx.lineTo(w - m - w * 0.16, m);
-  ctx.lineTo(w - m, m + h * 0.16);
-  ctx.lineTo(w - m, h - m);
-  ctx.lineTo(m, h - m);
-  ctx.lineTo(m, m + h * 0.16);
-  ctx.closePath();
-  ctx.fill();
-  // tongue
-  ctx.fillStyle = '#e8e8e2';
-  ctx.fillRect(w * 0.3, h * 0.3, w * 0.4, h * 0.45);
-  ctx.fillStyle = '#c9a54a';
-  ctx.fillRect(w * 0.32, h * 0.32, w * 0.08, h * 0.1);
-  ctx.fillRect(w * 0.6, h * 0.32, w * 0.08, h * 0.1);
-  ctx.fillRect(w * 0.32, h * 0.62, w * 0.08, h * 0.1);
-  ctx.fillRect(w * 0.6, h * 0.62, w * 0.08, h * 0.1);
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(w * 0.28, h * 0.36, w * 0.46, h * 0.46);
+  // gold contact fingers on the tongue flanks
+  ctx.fillStyle = '#9c7e33';
+  ctx.fillRect(w * 0.27, h * 0.4, w * 0.04, h * 0.3);
+  ctx.fillRect(w * 0.69, h * 0.4, w * 0.04, h * 0.3);
 }
 
-/** USB type-B receptacle, facing +Z. Origin = face center. */
+function usbBShape(w: number, h: number, ch: number): THREE.Shape {
+  const s = new THREE.Shape();
+  s.moveTo(-w / 2, -h / 2);
+  s.lineTo(w / 2, -h / 2);
+  s.lineTo(w / 2, h / 2 - ch);
+  s.lineTo(w / 2 - ch, h / 2);
+  s.lineTo(-w / 2 + ch, h / 2);
+  s.lineTo(-w / 2, h / 2 - ch);
+  s.closePath();
+  return s;
+}
+
+/**
+ * USB type-B receptacle, facing +Z. Origin = face center (on the housing face): a chamfered metal shell standing
+ * 1.1 mm proud around a dark cavity with the white contact tongue.
+ */
 export function UsbBPort({ position, rotation }: { position?: Vec3; rotation?: Vec3 }) {
   const tex = canvasTexture('usbbface', 64, 64, drawUsbBFace);
   const face = cachedGeo('usbbfaceGeo', () => new THREE.PlaneGeometry(0.0085, 0.0078));
-  return <mesh geometry={face} material={texMaterial(tex)} position={position} rotation={rotation} />;
+  // metal shell + white contact tongue in ONE mesh (vertex colours on a semi-metallic material)
+  const shell = cachedGeo('usbbShellTongue', () => {
+    const outer = usbBShape(0.0092, 0.0085, 0.0017);
+    outer.holes.push(usbBShape(0.0084, 0.0077, 0.0014));
+    return merge(
+      [
+        paint(new THREE.ExtrudeGeometry(outer, { depth: 0.0011, bevelEnabled: false, curveSegments: 1 }), '#d4d8dc'),
+        paint(rboxAt(0.0034, 0.0032, 0.0008, 0, -0.0003, 0.0005, 0.0002), '#8e8e88'),
+      ],
+      true,
+    );
+  });
+  return (
+    <group position={position} rotation={rotation}>
+      <mesh geometry={face} material={texMaterial(tex)} position={[0, 0, 0.0001]} />
+      <mesh geometry={shell} material={MAT.vertexColoredMetal()} />
+    </group>
+  );
 }
 
 /** RJ45 patch plug + boot + cable going straight down (-Y). Origin = plug tip inside the jack (jack facing -Y). */
@@ -790,6 +874,77 @@ export function PatchCable({ position, color = '#1f63d6', length = 0.09 }: { pos
       <mesh geometry={plug} material={MAT.clearPlastic()} />
       <mesh geometry={geo} material={materials.plastic(color, 0.5)} />
     </group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Side label (visible on the last module of a rack / stand-alone modules)
+// ---------------------------------------------------------------------------
+
+const SIDE_W = 0.084; // along -Z (front -> back)
+const SIDE_H = 0.056;
+
+function sideLabelTexture(catalog: string, title: string, lines: string[]) {
+  return canvasTexture(`clx:side:${catalog}:${title}:${lines.join('|')}`, 512, Math.round((512 * SIDE_H) / SIDE_W), (ctx, w, h) => {
+    const a = new Art(ctx, 0, SIDE_W, 0, SIDE_H, w, h);
+    const g = ctx.createLinearGradient(0, 0, w, h);
+    g.addColorStop(0, '#d9dcdf');
+    g.addColorStop(1, '#c4c8cc');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+    a.rect(SIDE_W / 2, SIDE_H / 2, SIDE_W - 0.0016, SIDE_H - 0.0016, undefined, '#6d7277', 0.0003, 0.0015);
+    const dark = { align: 'left' as CanvasTextAlign, color: '#15171a', font: FONT } as const;
+    a.text(catalog, 0.004, SIDE_H - 0.0075, 0.0068, { ...dark, weight: 800 });
+    a.text('SER A', SIDE_W - 0.004, SIDE_H - 0.0075, 0.0034, { ...dark, align: 'right', weight: 700 });
+    a.text(title, 0.004, SIDE_H - 0.0145, 0.0033, { ...dark, weight: 700, maxWidth: SIDE_W - 0.008 });
+    lines.forEach((l, i) => a.text(l, 0.004, SIDE_H - 0.0205 - i * 0.0042, 0.0029, { ...dark, weight: 500, font: FONT_COND, maxWidth: SIDE_W - 0.008 }));
+    // serial-number barcode (deterministic pseudo pattern)
+    let x = 0.004;
+    let seed = 0;
+    for (let i = 0; i < catalog.length; i++) seed = (Math.imul(seed, 31) + catalog.charCodeAt(i)) | 0;
+    let bar = true;
+    while (x < 0.05) {
+      seed = (Math.imul(seed, 1103515245) + 12345) | 0;
+      const bw = 0.00022 + ((seed >>> 16) % 4) * 0.00016;
+      if (bar) a.rect(x + bw / 2, 0.0098, bw, 0.0075, '#111');
+      bar = !bar;
+      x += bw;
+    }
+    a.text('S/N  0K2A 7719 3350', 0.004, 0.0038, 0.0025, { ...dark, weight: 600, font: FONT_COND });
+    a.text('PLC World simulation model', SIDE_W - 0.004, 0.0038, 0.0018, {
+      ...dark,
+      align: 'right',
+      weight: 500,
+      font: FONT_COND,
+      color: '#4d5257',
+      maxWidth: 0.03,
+    });
+  });
+}
+
+/**
+ * Printed catalog label on the RIGHT side (+X) of a 1756 module housing. Module-local placement: module width
+ * `width` (default 1756 single slot), label centered at mid-height / mid-depth of the housing.
+ */
+export function SideLabel({
+  catalog,
+  title,
+  lines,
+  height,
+  width = 0.0336,
+  z = 0.062,
+}: {
+  catalog: string;
+  title: string;
+  lines: string[];
+  height: number;
+  width?: number;
+  z?: number;
+}) {
+  const tex = sideLabelTexture(catalog, title, lines);
+  const geo = cachedGeo(`plane:side:${SIDE_W}:${SIDE_H}`, () => new THREE.PlaneGeometry(SIDE_W, SIDE_H));
+  return (
+    <mesh geometry={geo} material={texMaterial(tex)} position={[width / 2 + 0.0001, height * 0.52, z]} rotation-y={Math.PI / 2} />
   );
 }
 

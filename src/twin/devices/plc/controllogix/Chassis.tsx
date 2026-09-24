@@ -4,6 +4,7 @@
  * Origin: back-bottom-LEFT of the chassis body (mounting tabs protrude 5.5 mm above/below).
  * The power-supply bay is on the left; slot 0 starts right of it (see `chassisLayout()`).
  */
+import { useLayoutEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { Placement } from '../../../contracts';
 import {
@@ -127,8 +128,23 @@ function shelfGeometry(l: ChassisLayout): THREE.BufferGeometry {
   return g;
 }
 
+/** Right end-wall louvers (kept below the catalog label, which sits in the upper-back corner). */
+const LOUVER_YS = [0.024, 0.037, 0.05, 0.063, 0.076, 0.089];
+const LOUVER_R = 0.0011;
+const LOUVER_LEN = 0.05;
+const LOUVER_Z = 0.066;
+/** Catalog label on the right end wall (center y, z). */
+const SIDE_LABEL_Y = 0.121;
+const SIDE_LABEL_Z = 0.036;
+
+/** Pressed louver hood: a capsule (straight middle, rounded ends) along Z, `depth` proud (X), `halfH` (Y). */
+function louverGeometry(depth: number, halfH: number, len: number): THREE.BufferGeometry {
+  const r = 0.004;
+  return new THREE.CapsuleGeometry(r, len - 2 * r, 3, 10).rotateX(Math.PI / 2).scale(depth / r, halfH / r, 1);
+}
+
 function steelGeometry(l: ChassisLayout): THREE.BufferGeometry {
-  return cachedGeo(`clx:chassis:steel:${l.catalog}`, () => {
+  return cachedGeo(`clx:chassis:steel:v4:${l.catalog}`, () => {
     const { left, right } = wallXs(l);
     const bottom = shelfGeometry(l).translate(0, SHELF_BOTTOM_Y, 0);
     const top = shelfGeometry(l).translate(0, SHELF_TOP_Y + SHEET, 0);
@@ -148,8 +164,11 @@ function steelGeometry(l: ChassisLayout): THREE.BufferGeometry {
       boxAt(0.006, CHASSIS_H - 0.0006, SHEET, left - 0.003 + SHEET, CHASSIS_H / 2, SHELF_Z - SHEET / 2),
       boxAt(0.006, CHASSIS_H - 0.0006, SHEET, right + 0.003 - SHEET, CHASSIS_H / 2, SHELF_Z - SHEET / 2),
     ];
-    // side-wall louvers (pressed ribs) on the right wall
-    for (let i = 0; i < 6; i++) parts.push(boxAt(0.0012, 0.0022, 0.05, right + SHEET + 0.0005, 0.045 + i * 0.013, 0.06));
+    // pressed louvers on the right end wall: lozenge-shaped hoods that taper into the sheet at both ends
+    // (the dark openings under them are in connectorGeometry)
+    for (const y of LOUVER_YS) {
+      parts.push(louverGeometry(0.0009, LOUVER_R * 1.7, LOUVER_LEN).translate(right + SHEET, y, LOUVER_Z));
+    }
     return merge(parts);
   });
 }
@@ -170,7 +189,7 @@ function guideGeometry(l: ChassisLayout): THREE.BufferGeometry {
 }
 
 function connectorGeometry(l: ChassisLayout): THREE.BufferGeometry {
-  return cachedGeo(`clx:chassis:conn:${l.catalog}`, () => {
+  return cachedGeo(`clx:chassis:conn:v4:${l.catalog}`, () => {
     const parts: THREE.BufferGeometry[] = [];
     for (let i = 0; i < l.slots; i++) {
       const x = l.slotCenterX(i);
@@ -182,6 +201,10 @@ function connectorGeometry(l: ChassisLayout): THREE.BufferGeometry {
     }
     // PS connector
     parts.push(rboxAt(0.016, 0.05, 0.012, l.psX0 + 0.08, 0.079, SHEET + 0.006, 0.0008));
+    // dark openings under the pressed louver hoods (right end wall)
+    const { right } = wallXs(l);
+    for (const y of LOUVER_YS)
+      parts.push(louverGeometry(0.00075, 0.0006, LOUVER_LEN - 0.006).translate(right + SHEET + 0.0001, y - LOUVER_R * 1.15, LOUVER_Z));
     return merge(parts);
   });
 }
@@ -209,9 +232,9 @@ function slotNumberTexture(l: ChassisLayout) {
   const { left, right } = wallXs(l);
   const pxPerM = Math.min(5600, 4096 / (right - left));
   const h = 0.0072;
-  return canvasTexture(`clx:slotnums:${l.catalog}`, (right - left) * pxPerM, h * pxPerM, (ctx, w, hh) => {
+  return canvasTexture(`clx:slotnums:v2:${l.catalog}`, (right - left) * pxPerM, h * pxPerM, (ctx, w, hh) => {
     const a = new Art(ctx, left, right, 0, h, w, hh);
-    for (let i = 0; i < l.slots; i++) a.text(String(i), l.slotCenterX(i), h / 2, 0.0046, { color: '#15171a', weight: 700 });
+    for (let i = 0; i < l.slots; i++) a.text(String(i), l.slotCenterX(i), h / 2, 0.004, { color: '#15171a', weight: 700 });
     a.text('POWER SUPPLY', l.psCenterX, h / 2, 0.0028, { color: '#2a2d31', weight: 700 });
   });
 }
@@ -253,7 +276,29 @@ function groundSymbolTexture() {
 // Component
 // ---------------------------------------------------------------------------
 
+/**
+ * The thin zinc sheets receive shadows (modules onto the back plate and shelves). The app's shadow maps are
+ * coarse (~5 mm texels), so the chassis' own depth render gets a slope-scaled polygon offset — a per-object
+ * shadow bias that prevents self-shadowing acne without touching the scene's lights.
+ */
+function applyShadowBias(mesh: THREE.Mesh) {
+  mesh.onBeforeShadow = (_r, _o, _c, _sc, _g, depthMaterial) => {
+    depthMaterial.polygonOffset = true;
+    depthMaterial.polygonOffsetFactor = 3;
+    depthMaterial.polygonOffsetUnits = 6;
+  };
+  mesh.onAfterShadow = (_r, _o, _c, _sc, _g, depthMaterial) => {
+    depthMaterial.polygonOffset = false;
+    depthMaterial.polygonOffsetFactor = 0;
+    depthMaterial.polygonOffsetUnits = 0;
+  };
+}
+
 export function ControlLogixChassis({ catalog = '1756-A7', position, rotation, scale }: ControlLogixChassisProps) {
+  const steelRef = useRef<THREE.Mesh>(null);
+  useLayoutEffect(() => {
+    if (steelRef.current) applyShadowBias(steelRef.current);
+  }, []);
   const l = chassisLayout(catalog);
   const { left, right } = wallXs(l);
   const numTex = slotNumberTexture(l);
@@ -264,7 +309,7 @@ export function ControlLogixChassis({ catalog = '1756-A7', position, rotation, s
   const gndPlane = cachedGeo('plane:gndsym', () => new THREE.PlaneGeometry(0.009, 0.009));
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      <mesh geometry={steelGeometry(l)} material={MAT.steel()} castShadow />
+      <mesh ref={steelRef} geometry={steelGeometry(l)} material={MAT.steel()} castShadow receiveShadow />
       <mesh geometry={guideGeometry(l)} material={MAT.guide()} />
       <mesh geometry={connectorGeometry(l)} material={MAT.darkPlastic()} />
       <mesh geometry={groundStudGeometry(l)} material={MAT.brass()} />
@@ -272,10 +317,15 @@ export function ControlLogixChassis({ catalog = '1756-A7', position, rotation, s
       <mesh
         geometry={numPlane}
         material={texMaterial(numTex, true)}
-        position={[(left + right) / 2, SHELF_TOP_Y + 0.0036, SHELF_Z + 0.0002]}
+        position={[(left + right) / 2, SHELF_TOP_Y + 0.0047, SHELF_Z + 0.0002]}
       />
       {/* catalog label on the right end wall */}
-      <mesh geometry={sidePlane} material={texMaterial(labelTex)} position={[right + SHEET + 0.0002, 0.075, 0.06]} rotation-y={Math.PI / 2} />
+      <mesh
+        geometry={sidePlane}
+        material={texMaterial(labelTex)}
+        position={[right + SHEET + 0.0002, SIDE_LABEL_Y, SIDE_LABEL_Z]}
+        rotation-y={Math.PI / 2}
+      />
       <mesh geometry={gndPlane} material={texMaterial(gndTex, true)} position={[right + SHEET + 0.0002, 0.114, 0.09]} rotation-y={Math.PI / 2} />
     </group>
   );

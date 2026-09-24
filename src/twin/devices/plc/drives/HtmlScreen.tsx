@@ -5,8 +5,14 @@
  * the previous root is being unmounted asynchronously, which wipes the content. This version creates a
  * fresh container per mount and defers the root unmount, so it is StrictMode-safe.
  *
- * The content box (widthPx × heightPx CSS pixels) is centered on the group origin, in the local XY plane,
- * facing +Z, scaled so that it spans `width` meters.
+ * The physical screen area (`width` × `height` meters) is centered on the group origin in the local XY plane,
+ * facing +Z. The content (`widthPx` × `heightPx` CSS pixels) is scaled uniformly to FIT that area
+ * (scale = min(width / widthPx, height / heightPx)) and centered; any letterbox is filled with `background`.
+ *
+ * Occlusion (`occlude`): ~6×/s a 4×3 grid of rays is cast from the camera to the screen. Only opaque, visible
+ * meshes count as occluders (invisible hit zones, transparent glass / highlight boxes / contact shadows, lines
+ * and points are ignored). Blocked cells are clipped away with a CSS clip-path; when every cell is blocked the
+ * DOM is hidden.
  */
 import { useFrame, useThree } from '@react-three/fiber';
 import { useLayoutEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
@@ -18,18 +24,20 @@ export interface HtmlScreenProps {
   /** Content size in CSS pixels (e.g. the HMI resolution). */
   widthPx: number;
   heightPx: number;
-  /** Physical width of the content in meters. */
+  /** Physical width of the screen area in meters. */
   width: number;
+  /** Physical height of the screen area (default: width × heightPx / widthPx). */
+  height?: number;
+  /** Letterbox color when the content aspect differs from the screen area. */
+  background?: string;
   position?: [number, number, number];
   rotation?: [number, number, number];
   /** Max z-index of the overlay element (keep below app UI). */
   zIndex?: number;
   visible?: boolean;
-  /**
-   * Hide the DOM when other 3D objects are between the camera and the screen center (raycast, ~6 Hz).
-   * Objects under `occludeIgnore` (e.g. the device itself) never occlude.
-   */
+  /** Clip / hide the DOM where other opaque 3D objects are in front of it. */
   occlude?: boolean;
+  /** Objects under this root (e.g. the device itself) never occlude. */
   occludeIgnore?: RefObject<THREE.Object3D | null>;
 }
 
@@ -37,6 +45,9 @@ const v1 = new THREE.Vector3();
 const v2 = new THREE.Vector3();
 const v3 = new THREE.Vector3();
 const v4 = new THREE.Vector3();
+
+const COLS = 4;
+const ROWS = 3;
 
 const eps = (v: number) => (Math.abs(v) < 1e-10 ? 0 : v);
 
@@ -61,11 +72,21 @@ function isUnder(o: THREE.Object3D | null, root: THREE.Object3D | null | undefin
   return false;
 }
 
+function isOccluder(o: THREE.Object3D): o is THREE.Mesh {
+  const mesh = o as THREE.Mesh;
+  if (!mesh.isMesh) return false;
+  const mat = mesh.material;
+  const mats = Array.isArray(mat) ? mat : [mat];
+  return mats.some((m) => m && m.visible && m.colorWrite !== false && (!m.transparent || m.opacity >= 0.9));
+}
+
 export function HtmlScreen({
   children,
   widthPx,
   heightPx,
   width,
+  height,
+  background = '#000',
   position,
   rotation,
   zIndex = 5,
@@ -75,9 +96,24 @@ export function HtmlScreen({
 }: HtmlScreenProps) {
   const group = useRef<THREE.Group>(null);
   const { gl, camera, size, events, scene } = useThree();
-  const occ = useMemo(() => ({ ray: new THREE.Raycaster(), next: 0, hidden: false }), []);
+  const physH = height ?? (width * heightPx) / widthPx;
+  const k = Math.min(width / widthPx, physH / heightPx);
+  const boxW = width / k;
+  const boxH = physH / k;
+  const occ = useMemo(
+    () => ({
+      ray: new THREE.Raycaster(),
+      next: 0,
+      cells: new Uint8Array(COLS * ROWS),
+      clip: '',
+      allHidden: false,
+      candidates: [] as THREE.Mesh[],
+      hits: [] as THREE.Intersection[],
+    }),
+    [],
+  );
   const nodes = useRef<{ outer: HTMLDivElement; inner: HTMLDivElement; host: HTMLDivElement; root: Root } | null>(null);
-  const last = useMemo(() => ({ cam: new THREE.Matrix4(), proj: new THREE.Matrix4(), obj: new THREE.Matrix4(), w: 0, h: 0, shown: true }), []);
+  const last = useMemo(() => ({ cam: new THREE.Matrix4(), proj: new THREE.Matrix4(), obj: new THREE.Matrix4(), w: 0, h: 0, shown: true, k: 0 }), []);
 
   // mount: fresh host + root per mount (StrictMode-safe)
   useLayoutEffect(() => {
@@ -96,25 +132,84 @@ export function HtmlScreen({
     last.w = 0;
     last.shown = true;
     last.cam.elements[0] = NaN; // force the first transform update
+    occ.clip = '';
     return () => {
       nodes.current = null;
       host.remove();
       setTimeout(() => root.unmount(), 0);
     };
-  }, [gl, events.connected, last]);
+  }, [gl, events.connected, last, occ]);
 
   // render children into the DOM root every React render
   useLayoutEffect(() => {
     nodes.current?.root.render(
       <div
-        style={{ width: widthPx, height: heightPx, backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden', overflow: 'hidden', position: 'relative' }}
+        style={{
+          width: boxW,
+          height: boxH,
+          background,
+          backfaceVisibility: 'hidden',
+          WebkitBackfaceVisibility: 'hidden',
+          overflow: 'hidden',
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
         onPointerDown={(e) => e.stopPropagation()}
         onWheel={(e) => e.stopPropagation()}
       >
-        {children}
+        <div style={{ width: widthPx, height: heightPx, flex: 'none', position: 'relative', overflow: 'hidden' }}>{children}</div>
       </div>,
     );
   });
+
+  /** Cast the 4×3 ray grid; returns true when at least one cell is visible. Updates the clip-path. */
+  const testOcclusion = (g: THREE.Group, camPos: THREE.Vector3, n: { inner: HTMLDivElement }) => {
+    const ignore = occludeIgnore?.current ?? g;
+    const cands = occ.candidates;
+    cands.length = 0;
+    scene.traverseVisible((o) => {
+      if (isOccluder(o) && !isUnder(o, ignore)) cands.push(o);
+    });
+    let blocked = 0;
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const i = r * COLS + c;
+        const p = v4.set(((c + 0.5) / COLS - 0.5) * width, (0.5 - (r + 0.5) / ROWS) * physH, 0).applyMatrix4(g.matrixWorld);
+        const dir = v3.copy(p).sub(camPos);
+        const dist = dir.length();
+        occ.ray.set(camPos, dir.normalize());
+        occ.ray.near = 0;
+        occ.ray.far = dist - 0.0015;
+        let hit = 0;
+        for (const m of cands) {
+          occ.hits.length = 0;
+          m.raycast(occ.ray, occ.hits);
+          if (occ.hits.length) {
+            hit = 1;
+            break;
+          }
+        }
+        occ.cells[i] = hit;
+        blocked += hit;
+      }
+    }
+    occ.allHidden = blocked === COLS * ROWS;
+    let clip = '';
+    if (blocked > 0 && !occ.allHidden) {
+      const cw = boxW / COLS;
+      const ch = boxH / ROWS;
+      let d = '';
+      for (let r = 0; r < ROWS; r++)
+        for (let c = 0; c < COLS; c++) if (!occ.cells[r * COLS + c]) d += `M${(c * cw).toFixed(1)} ${(r * ch).toFixed(1)}h${cw.toFixed(1)}v${ch.toFixed(1)}h${(-cw).toFixed(1)}Z`;
+      clip = `path('${d}')`;
+    }
+    if (clip !== occ.clip) {
+      occ.clip = clip;
+      n.inner.style.clipPath = clip;
+    }
+  };
 
   useFrame(() => {
     const n = nodes.current;
@@ -130,18 +225,14 @@ export function HtmlScreen({
     // back side of the screen: hide (CSS backface culling is unreliable across browsers)
     const normal = v3.set(0, 0, 1).transformDirection(g.matrixWorld);
     const backside = normal.dot(toObj) > 0;
-    if (occlude) {
+    if (occlude && visible && !behind && !backside) {
       const now = performance.now();
       if (now >= occ.next) {
         occ.next = now + 160;
-        const dist = toObj.length();
-        occ.ray.set(camPos, v4.copy(toObj).normalize());
-        occ.ray.far = dist - 0.002;
-        const hits = occ.ray.intersectObjects(scene.children, true);
-        occ.hidden = hits.some((h) => (h.object as THREE.Mesh).isMesh && h.object.visible && !isUnder(h.object, occludeIgnore?.current ?? g));
+        testOcclusion(g, camPos, n);
       }
     }
-    const shown = visible && !behind && !backside && !(occlude && occ.hidden);
+    const shown = visible && !behind && !backside && !(occlude && occ.allHidden);
     if (shown !== last.shown) {
       last.shown = shown;
       n.host.style.display = shown ? 'block' : 'none';
@@ -157,7 +248,8 @@ export function HtmlScreen({
       n.outer.style.height = `${size.height}px`;
       last.cam.elements[0] = NaN;
     }
-    if (last.cam.equals(camera.matrixWorldInverse) && last.obj.equals(g.matrixWorld) && last.proj.equals(camera.projectionMatrix)) return;
+    if (last.k === k && last.cam.equals(camera.matrixWorldInverse) && last.obj.equals(g.matrixWorld) && last.proj.equals(camera.projectionMatrix)) return;
+    last.k = k;
     last.cam.copy(camera.matrixWorldInverse);
     last.proj.copy(camera.projectionMatrix);
     last.obj.copy(g.matrixWorld);
@@ -166,7 +258,7 @@ export function HtmlScreen({
     n.host.style.perspective = ortho ? '' : `${fov}px`;
     const camT = ortho ? `scale(${fov})` : `translateZ(${fov}px)`;
     n.outer.style.transform = `${camT}${cameraCss(camera.matrixWorldInverse)}translate(${size.width / 2}px,${size.height / 2}px)`;
-    n.inner.style.transform = objectCss(g.matrixWorld, width / widthPx);
+    n.inner.style.transform = objectCss(g.matrixWorld, k);
     // nearer = higher (but bounded to keep app UI on top)
     const dist = v1.setFromMatrixPosition(g.matrixWorld).distanceTo(camPos);
     n.host.style.zIndex = String(Math.max(1, Math.round(zIndex - Math.min(zIndex - 1, dist))));

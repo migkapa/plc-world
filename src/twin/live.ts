@@ -9,6 +9,9 @@
  *   ControlLogix 1756:  DI Local:s:I.Data.n     DO Local:s:O.Data.n     AI Local:s:I.ChnData    AO Local:s:O.ChnData
  *   CompactLogix 5069:  DI Local:s:I.Ptnn.Data  DO Local:s:O.Ptnn.Data  AI Local:s:I.Chnn.Data  AO Local:s:O.Chnn.Data
  *
+ * Input points/channels show the FIELD value (controller.readInputFromField when the controller provides it),
+ * so a forced input does not light its ST indicator without terminal voltage — like the real modules.
+ *
  * Every getter is defensive: unknown slots, missing tags or a controller that throws return false / 0.
  * Operand strings are built once per project and cached, so per-frame getters do not allocate.
  *
@@ -196,7 +199,11 @@ export function rackLiveFromController(controller: PlcController): RackLive {
       const op = operand(entry, slot, index);
       if (!op) return false;
       try {
-        if (entry.kind === 'DI') return controller.tags.readBool(op);
+        if (entry.kind === 'DI') {
+          // ST indicators of a real input module show the terminal voltage, not a forced tag value.
+          const field = controller.readInputFromField;
+          return field ? Boolean(field.call(controller, op)) : controller.tags.readBool(op);
+        }
         return Boolean(controller.readOutputForField(op));
       } catch {
         return false;
@@ -210,7 +217,13 @@ export function rackLiveFromController(controller: PlcController): RackLive {
       const op = operand(entry, slot, ch);
       if (!op) return 0;
       try {
-        const v = entry.kind === 'AI' ? controller.tags.readNumber(op) : Number(controller.readOutputForField(op));
+        const field = controller.readInputFromField;
+        const v =
+          entry.kind === 'AI'
+            ? field
+              ? Number(field.call(controller, op))
+              : controller.tags.readNumber(op)
+            : Number(controller.readOutputForField(op));
         return Number.isFinite(v) ? v : 0;
       } catch {
         return 0;

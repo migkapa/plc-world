@@ -37,7 +37,7 @@ export function EndCap5069({ position, rotation, scale }: EndCap5069Props) {
   return (
     <group position={position} rotation={rotation} scale={scale}>
       <mesh geometry={profileGeometry('5069-ecr', PROFILE, END_CAP_5069_WIDTH, 0.0006)} material={materials.plastic(COLORS.moduleCharcoal, 0.6)} castShadow receiveShadow />
-      <mesh geometry={plane(0.0045, 0.048)} material={decalMaterial(capLabel(), 0.6)} position={[0, 0.075, 0.0877]} />
+      <mesh geometry={plane(0.0045, 0.048)} material={decalMaterial(capLabel(), 0.6)} position={[0, 0.075, 0.0877]} receiveShadow />
     </group>
   );
 }

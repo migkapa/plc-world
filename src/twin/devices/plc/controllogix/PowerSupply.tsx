@@ -81,10 +81,39 @@ const SPECS: Record<PowerSupplyCatalog, { series: string; input: string[]; outpu
 // Geometry
 // ---------------------------------------------------------------------------
 
+/** Vent grille: 3 rows x 13 rounded slots, kept inside x = ±0.040 so the captive screws sit clear of it. */
+const GRILLE = { x0: -0.0425, x1: 0.0425, y0: 0.1198, y1: 0.137, t: 0.0009, slotW: 0.005, slotH: 0.0026, cols: 13, rows: [0.1336, 0.1284, 0.1232] } as const;
+const GRILLE_XS = Array.from({ length: GRILLE.cols }, (_, k) => -0.040 + GRILLE.slotW / 2 + (k * (0.08 - GRILLE.slotW)) / (GRILLE.cols - 1));
+
+/** Molded grille plate with real rounded-slot cut-outs (the dark art behind shows through the slots). */
+function grilleGeometry(): THREE.BufferGeometry {
+  const s = new THREE.Shape();
+  s.moveTo(GRILLE.x0, GRILLE.y0);
+  s.lineTo(GRILLE.x1, GRILLE.y0);
+  s.lineTo(GRILLE.x1, GRILLE.y1);
+  s.lineTo(GRILLE.x0, GRILLE.y1);
+  s.closePath();
+  const r = GRILLE.slotH / 2;
+  for (const cy of GRILLE.rows)
+    for (const cx of GRILLE_XS) {
+      const p = new THREE.Path();
+      const xa = cx - GRILLE.slotW / 2 + r;
+      const xb = cx + GRILLE.slotW / 2 - r;
+      p.moveTo(xa, cy + r);
+      p.lineTo(xb, cy + r);
+      p.absarc(xb, cy, r, Math.PI / 2, -Math.PI / 2, true);
+      p.lineTo(xa, cy - r);
+      p.absarc(xa, cy, r, -Math.PI / 2, Math.PI / 2, true);
+      s.holes.push(p);
+    }
+  return new THREE.ExtrudeGeometry(s, { depth: GRILLE.t + 0.0001, bevelEnabled: false, curveSegments: 5 }).translate(0, 0, FACE - 0.0001);
+}
+
 function bodyGeometry() {
-  return cachedGeo('clx:ps:body', () => {
+  return cachedGeo('clx:ps:body:v2', () => {
     const lowerD = FACE - RECESS;
     return merge([
+      grilleGeometry(),
       // upper full-depth body
       rboxAt(W, MOD_H - LOWER_Y, FACE, 0, (MOD_H + LOWER_Y) / 2, FACE / 2, 0.0015),
       // lower (recessed) body
@@ -101,10 +130,13 @@ function bodyGeometry() {
   });
 }
 
+const DOOR_RIB_YS = Array.from({ length: 4 }, (_, i) => -DOOR_H + 0.0042 + i * 0.0019);
+
 function doorGeometry() {
-  return cachedGeo('clx:ps:door', () =>
+  return cachedGeo('clx:ps:door:v2', () =>
     merge([
       rboxAt(DOOR_W, DOOR_H, DOOR_T, 0, -DOOR_H / 2, 0, 0.0008),
+      ...DOOR_RIB_YS.map((y) => rboxAt(0.05, 0.0007, 0.0007, 0, y, DOOR_T / 2 + 0.00025, 0.00025)),
       rboxAt(0.022, 0.0022, 0.0018, 0, -DOOR_H + 0.0012, DOOR_T / 2 + 0.0006, 0.0007), // finger lip
       new THREE.CylinderGeometry(0.0013, 0.0013, 0.012, 10).rotateZ(Math.PI / 2).translate(-DOOR_W / 2 + 0.008, 0, -0.0004),
       new THREE.CylinderGeometry(0.0013, 0.0013, 0.012, 10).rotateZ(Math.PI / 2).translate(DOOR_W / 2 - 0.008, 0, -0.0004),
@@ -150,18 +182,15 @@ const LED_POS: [number, number, number] = [0.0405, 0.1036, FACE + 0.0004];
 
 function frontTexture(catalog: PowerSupplyCatalog) {
   const spec = SPECS[catalog];
-  return canvasTexture(`clx:ps:front:${catalog}`, 768, Math.round((768 * (ART_Y1 - ART_Y0)) / (ART_X1 - ART_X0)), (ctx, w, h) => {
+  return canvasTexture(`clx:ps:front:v2:${catalog}`, 768, Math.round((768 * (ART_Y1 - ART_Y0)) / (ART_X1 - ART_X0)), (ctx, w, h) => {
     const a = new Art(ctx, ART_X0, ART_X1, ART_Y0, ART_Y1, w, h);
     a.plastic('#1e1f22', 8);
-    // vent grille (3 rows of slots)
-    for (let r = 0; r < 3; r++) {
-      for (let k = 0; k < 13; k++) {
-        const x = -0.0444 + k * 0.0074;
-        const y = 0.1336 - r * 0.0052;
-        a.rect(x, y - 0.0003, 0.0052, 0.0028, 'rgba(255,255,255,0.07)', undefined, 0, 0.0012);
-        a.rect(x, y, 0.0052, 0.0026, '#060607', undefined, 0, 0.0012);
+    // dark interior seen through the grille cut-outs (the slotted plate itself is geometry)
+    for (const y of GRILLE.rows)
+      for (const x of GRILLE_XS) {
+        a.rect(x, y, GRILLE.slotW + 0.0006, GRILLE.slotH + 0.0006, '#08090a', undefined, 0, 0.0016);
+        a.rect(x, y - 0.0004, GRILLE.slotW - 0.001, GRILLE.slotH * 0.35, 'rgba(70,74,80,0.35)', undefined, 0, 0.0005); // fan/PCB glint
       }
-    }
     // label panel
     a.rect(0, 0.0915, 0.101, 0.0385, '#27282c', 'rgba(255,255,255,0.10)', 0.0003, 0.0014);
     a.text('ControlLogix', -0.0468, 0.1072, 0.0026, { align: 'left', weight: 600, color: '#b5b6b0' });
@@ -190,14 +219,15 @@ function frontTexture(catalog: PowerSupplyCatalog) {
 
 function doorTexture(catalog: PowerSupplyCatalog) {
   const spec = SPECS[catalog];
-  return canvasTexture(`clx:ps:door:${catalog}`, 512, Math.round((512 * DOOR_H) / DOOR_W), (ctx, w, h) => {
+  return canvasTexture(`clx:ps:door:v2:${catalog}`, 512, Math.round((512 * DOOR_H) / DOOR_W), (ctx, w, h) => {
     const a = new Art(ctx, -DOOR_W / 2, DOOR_W / 2, -DOOR_H, 0, w, h);
     a.plastic('#1c1d20', 8);
     a.rect(0, -DOOR_H / 2, DOOR_W - 0.002, DOOR_H - 0.002, undefined, 'rgba(255,255,255,0.07)', 0.0003, 0.0012);
-    // hazard triangle (generic ISO 7010 W012 style)
     const c = a.ctx;
     const tx = -0.034;
     const ty = -0.016;
+    const dc = catalog === '1756-PB72';
+    // warning triangle: electrical hazard (AC mains) or general caution (DC input)
     c.fillStyle = '#f5c400';
     c.beginPath();
     c.moveTo(a.px(tx), a.py(ty + 0.0075));
@@ -206,24 +236,37 @@ function doorTexture(catalog: PowerSupplyCatalog) {
     c.closePath();
     c.fill();
     c.fillStyle = '#111';
-    c.beginPath();
-    c.moveTo(a.px(tx + 0.0012), a.py(ty + 0.004));
-    c.lineTo(a.px(tx - 0.0022), a.py(ty - 0.0012));
-    c.lineTo(a.px(tx + 0.0004), a.py(ty - 0.0012));
-    c.lineTo(a.px(tx - 0.0014), a.py(ty - 0.0058));
-    c.lineTo(a.px(tx + 0.0024), a.py(ty + 0.0002));
-    c.lineTo(a.px(tx - 0.0002), a.py(ty + 0.0002));
-    c.closePath();
-    c.fill();
+    if (dc) {
+      c.fillRect(a.px(tx - 0.0008), a.py(ty + 0.0035), a.m(0.0016), a.m(0.0068));
+      c.beginPath();
+      c.arc(a.px(tx), a.py(ty - 0.0052), a.m(0.001), 0, Math.PI * 2);
+      c.fill();
+    } else {
+      c.beginPath();
+      c.moveTo(a.px(tx + 0.0012), a.py(ty + 0.004));
+      c.lineTo(a.px(tx - 0.0022), a.py(ty - 0.0012));
+      c.lineTo(a.px(tx + 0.0004), a.py(ty - 0.0012));
+      c.lineTo(a.px(tx - 0.0014), a.py(ty - 0.0058));
+      c.lineTo(a.px(tx + 0.0024), a.py(ty + 0.0002));
+      c.lineTo(a.px(tx - 0.0002), a.py(ty + 0.0002));
+      c.closePath();
+      c.fill();
+    }
     const txt = { align: 'left' as CanvasTextAlign, weight: 800, color: '#e6e6e0', font: FONT_COND };
-    a.text('WARNING', -0.023, -0.0115, 0.0036, txt);
-    a.text('HAZARDOUS VOLTAGE', -0.023, -0.0162, 0.0029, { ...txt, weight: 700 });
-    a.text('Disconnect power before opening.', -0.023, -0.0205, 0.0024, { ...txt, weight: 500, color: '#b9bab4' });
+    if (dc) {
+      a.text('CAUTION', -0.023, -0.0115, 0.0036, txt);
+      a.text('18-32V DC INPUT', -0.023, -0.0162, 0.0029, { ...txt, weight: 700 });
+      a.text('Observe polarity. Remove power before wiring.', -0.023, -0.0205, 0.0024, { ...txt, weight: 500, color: '#b9bab4', maxWidth: 0.068 });
+    } else {
+      a.text('WARNING', -0.023, -0.0115, 0.0036, txt);
+      a.text('HAZARDOUS VOLTAGE', -0.023, -0.0162, 0.0029, { ...txt, weight: 700 });
+      a.text('Disconnect power before opening.', -0.023, -0.0205, 0.0024, { ...txt, weight: 500, color: '#b9bab4' });
+    }
     // terminal legend aligned with the terminals below
     TERM_X.forEach((x, i) => a.text(spec.terms[i]!, x, -0.034, 0.0034, { weight: 800, color: '#e6e6e0' }));
     TERM_X.forEach((x) => a.rect(x, -0.0385, 0.0012, 0.003, '#c9c9c3'));
-    // grip ribs
-    for (let i = 0; i < 4; i++) a.rect(0, -DOOR_H + 0.0042 + i * 0.0019, 0.05, 0.0006, 'rgba(0,0,0,0.5)');
+    // shadow lines under the molded grip ribs (the ribs are geometry)
+    for (const y of DOOR_RIB_YS) a.rect(0, y - 0.0005, 0.05, 0.0004, 'rgba(0,0,0,0.4)');
   });
 }
 

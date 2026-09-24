@@ -34,12 +34,12 @@ type WireItem =
  * Terminals to wire for a catalog. `points` = digital points / analog channels in use (default: all).
  * Commons / shield / SA power are added automatically.
  */
-export function wireItems(catalog: Module5069Catalog, points?: number[]): WireItem[] {
+export function wireItems(catalog: Module5069Catalog, points?: number[], signalColor: string = COLORS_W.dc): WireItem[] {
   const st = STYLES[catalog];
   const used = points ?? Array.from({ length: st.points }, (_, i) => i);
   const items: WireItem[] = [];
   if (st.kind === 'DI' || st.kind === 'DO') {
-    for (const p of used) if (p >= 0 && p < 16) items.push({ kind: 'single', term: p, color: COLORS_W.dc, r: WIRE_R });
+    for (const p of used) if (p >= 0 && p < 16) items.push({ kind: 'single', term: p, color: signalColor, r: WIRE_R });
     if (used.length) {
       items.push({ kind: 'single', term: 16, color: COLORS_W.dcCommon, stripe: COLORS_W.stripe, r: WIRE_R });
       if (used.length > 8) items.push({ kind: 'single', term: 17, color: COLORS_W.dcCommon, stripe: COLORS_W.stripe, r: WIRE_R });
@@ -61,7 +61,7 @@ const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
 function tube(points: THREE.Vector3[], r: number, color: string, stripe?: string, segs?: number): [THREE.BufferGeometry, null] {
   const curve = new THREE.CatmullRomCurve3(points, false, 'centripetal');
-  const n = segs ?? Math.max(12, Math.round(curve.getLength() / 0.003));
+  const n = segs ?? Math.max(12, Math.round(curve.getLength() / 0.004));
   const radial = 6;
   const g = new THREE.TubeGeometry(curve, n, r, radial, false);
   const base = new THREE.Color(color);
@@ -105,17 +105,19 @@ function dropRoute(x: number, zRun: number, seed: number, duct: DuctTarget | nul
   if (!duct) {
     return [V(x, yBelow, zRun + 0.001), V(x * 1.2, -0.02, zRun * 0.8), V(x * 1.3, -0.038, panelZ + 0.03), V(x * 1.3, -0.045, panelZ - 0.002)];
   }
-  // spread the bundle over the nearby duct slots
+  // spread the bundle over the nearby duct slots; enter them in the front half of the duct (short, smooth S-bend)
   const target = x * 1.9;
   const k = Math.round((target - duct.phase) / duct.pitch);
   const xs = duct.phase + k * duct.pitch + (((seed * 7) % 3) - 1) * 0.0008;
   const f = ((seed * 5) % 9) / 8;
-  const zSlot = duct.zMin + 0.01 + f * Math.max(0, duct.zMax - duct.zMin - 0.02);
-  const yMid = (yBelow + duct.top) / 2;
+  const span = Math.max(0, duct.zMax - duct.zMin - 0.012);
+  const zSlot = duct.zMin + 0.006 + (0.42 + 0.55 * f) * span;
+  const drop = yBelow - duct.top;
   return [
     V(x, yBelow, zRun + 0.001),
-    V(x + (xs - x) * 0.45, yMid, zRun + (zSlot - zRun) * 0.55),
-    V(xs, duct.top + 0.01, zSlot),
+    V(x + (xs - x) * 0.25, yBelow - drop * 0.38, zRun - (zRun - zSlot) * 0.22),
+    V(x + (xs - x) * 0.8, duct.top + 0.014, zSlot + (zRun - zSlot) * 0.12),
+    V(xs, duct.top + 0.002, zSlot),
     V(xs, duct.top - 0.016, zSlot),
   ];
 }
@@ -128,12 +130,14 @@ export interface WiringOptions {
   duct: DuctTarget | null;
   /** Panel surface z in module-local coordinates (for duct-less routing). */
   panelZ?: number;
+  /** DC signal wire color (default blue). */
+  signalColor?: string;
 }
 
-export function wiringGeometry({ catalog, points, duct, panelZ = -0.0075 }: WiringOptions): THREE.BufferGeometry | null {
-  const items = wireItems(catalog, points);
+export function wiringGeometry({ catalog, points, duct, panelZ = -0.0075, signalColor = COLORS_W.dc }: WiringOptions): THREE.BufferGeometry | null {
+  const items = wireItems(catalog, points, signalColor);
   if (!items.length) return null;
-  const key = `5069-wiring:${catalog}:${points?.join(',') ?? 'all'}:${duct ? [duct.top, duct.zMin, duct.zMax, duct.pitch, duct.phase].map((n) => n.toFixed(5)).join(',') : 'panel'}:${panelZ}`;
+  const key = `5069-wiring:${catalog}:${signalColor}:${points?.join(',') ?? 'all'}:${duct ? [duct.top, duct.zMin, duct.zMax, duct.pitch, duct.phase].map((n) => n.toFixed(5)).join(',') : 'panel'}:${panelZ}`;
   return cachedGeometry(key, () => {
     const parts: Array<[THREE.BufferGeometry, string | null, THREE.Matrix4?]> = [];
     const front = M5069.rtbFront;

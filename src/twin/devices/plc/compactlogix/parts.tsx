@@ -43,8 +43,6 @@ export const glossyBlack = () =>
     'glossy-black',
     () => new THREE.MeshPhysicalMaterial({ color: '#0d0e10', roughness: 0.18, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.12 }),
   );
-export const ledBasicMaterial = () =>
-  cachedMaterial('led-basic', () => new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false }));
 
 // ---------------------------------------------------------------------------
 // LED helpers
@@ -83,6 +81,9 @@ export const ledLensMaterial = () =>
     return m;
   });
 
+/** Lens emission colors: like LED_HEX but with a purer (less cyan) green so lit indicators don't read as mint under bloom. */
+const LENS_HEX: Record<LedColor, string> = { ...LED_HEX, green: '#2cff2a' };
+
 export interface PointLedsProps {
   /** LED centers in the parent's local space. */
   positions: Array<[number, number, number]>;
@@ -109,7 +110,7 @@ export function PointLeds({ positions, size, get, color, intensity = 1.8, dim = 
   const count = positions.length;
   const last = useMemo(() => new Int16Array(count).fill(-1), [count]);
   const tmp = useMemo(() => new THREE.Color(), []);
-  const colorKeys = useMemo(() => Object.keys(LED_HEX) as LedColor[], []);
+  const colorKeys = useMemo(() => Object.keys(LENS_HEX) as LedColor[], []);
 
   useLayoutEffect(() => {
     const mesh = ref.current;
@@ -124,7 +125,7 @@ export function PointLeds({ positions, size, get, color, intensity = 1.8, dim = 
       q.setFromEuler(r ? e.set(...r) : e.set(0, 0, 0));
       m.compose(v.set(p[0], p[1], p[2]), q, one);
       mesh.setMatrixAt(i, m);
-      tmp.set(LED_HEX[typeof color === 'function' ? color(i) : color]).multiplyScalar(dim);
+      tmp.set(LENS_HEX[typeof color === 'function' ? color(i) : color]).multiplyScalar(dim);
       mesh.setColorAt(i, tmp);
     });
     mesh.instanceMatrix.needsUpdate = true;
@@ -144,7 +145,7 @@ export function PointLeds({ positions, size, get, color, intensity = 1.8, dim = 
       const code = (lit ? 1 : 0) + colorKeys.indexOf(c) * 2;
       if (code === last[i]) continue;
       last[i] = code;
-      tmp.set(LED_HEX[c]).multiplyScalar(lit ? intensity : dim);
+      tmp.set(LENS_HEX[c]).multiplyScalar(lit ? intensity : dim);
       mesh.setColorAt(i, tmp);
       dirty = true;
     }
@@ -609,3 +610,4 @@ export function HighlightFrame({
     </group>
   );
 }
+

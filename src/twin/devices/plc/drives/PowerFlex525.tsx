@@ -4,22 +4,42 @@
  * Real outlines (PowerFlex 520-series technical data, W × H × D): A 72 × 152 × 172 mm, B 87 × 180 × 172 mm,
  * C 109 × 220 × 184 mm. The removable CONTROL MODULE (identical on every frame) carries the integral LCD
  * display (5-digit 7-segment value, status annunciators, scrolling text line), the ENET / LINK / FAULT
- * indicators and the integral keypad: Esc, Sel, ▲, ▼, Enter, Reverse, green Start, red Stop and the speed
- * potentiometer. Below it: the hinged control-terminal cover. The POWER MODULE carries the finger-safe power
- * terminal guard (R/L1 S/L2 T/L3 — U/T1 V/T2 W/T3), the embedded EtherNet/IP RJ45, the rear aluminium
- * heat sink and the top cooling fan.
+ * indicators and the integral MEMBRANE keypad (flat printed keys with shallow pillows): Esc, Sel, ▲, ▼,
+ * Enter, Reverse, green Start, red Stop and the speed potentiometer. Below it: the control-terminal cover.
+ * The POWER MODULE carries the finger-safe power terminal guard (R/L1 S/L2 T/L3 — U/T1 V/T2 W/T3 plus
+ * DC− DC+ BR+ BR−), the conduit plate with knockouts and PE ground screws, the embedded EtherNet/IP RJ45
+ * (cable routed off to the left of the power terminals), the rear aluminium heat sink with top/bottom
+ * mounting tabs (keyholes, protruding 5 mm beyond the housing) and the cooling fan centred over the fin
+ * channels, which are capped top and bottom.
+ *
+ * Draw calls: plastic body (merged) + metal (merged) + print (atlas) + keypad pillows (1, morph targets for
+ * key presses) + LCD + glass + LEDs (instanced) + fan grille + fan rotor + cable (2).
  *
  * Origin: center of the back mounting face at the bottom edge. Front faces +Z.
  */
 import { useCursor } from '@react-three/drei';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Led, materials } from '../../../common';
+import type { LedColor, LedMode } from '../../../common';
 import type { PowerFlex525Props } from '../../../contracts';
-import { barcode, canvasTexture, CONDENSED, grain, mmCtx, SANS } from '../compactlogix/canvas';
-import { box, cachedGeometry, cylinderZ, plane, profileGeometry, roundedBox } from '../compactlogix/geometry';
-import { activityFlicker, cachedMaterial, decalMaterial, HighlightFrame, Rj45Jack, StaticInstances, usePick } from '../compactlogix/parts';
+import { buildAtlas, decalGeometry, remapUv, type DecalPlacement } from '../compactlogix/atlas';
+import { barcode, CONDENSED, grain, SANS, type MmCtx } from '../compactlogix/canvas';
+import { box, cachedGeometry, holedPlate, mergeColored, profileGeometry, roundedBox, screwHeadGeometry, xf } from '../compactlogix/geometry';
+import {
+  activityFlicker,
+  cableBootMaterial,
+  cachedMaterial,
+  downCablesGeometry,
+  downPlugsGeometry,
+  drawRj45Face,
+  HighlightFrame,
+  plugClearMaterial,
+  PointLeds,
+  usePick,
+  vertexColorMetal,
+  vertexColorPlastic,
+} from '../compactlogix/parts';
 
 // ---------------------------------------------------------------------------
 // Dimensions
@@ -33,19 +53,23 @@ interface FrameSpec {
   d: number;
   /** Heat sink depth (behind the plastic housing). */
   hs: number;
+  /** Mounting hole spacing (horizontal, m). */
+  holeX: number;
   catalog: string;
   rating: string;
   amps: string;
 }
 
 export const PF525_FRAMES: Record<PowerFlexFrame, FrameSpec> = {
-  A: { w: 0.072, h: 0.152, d: 0.172, hs: 0.042, catalog: '25B-D4P0N104', rating: '1.5 kW / 2.0 HP', amps: '4.0' },
-  B: { w: 0.087, h: 0.18, d: 0.172, hs: 0.042, catalog: '25B-D010N104', rating: '4.0 kW / 5.0 HP', amps: '10.5' },
-  C: { w: 0.109, h: 0.22, d: 0.184, hs: 0.048, catalog: '25B-D017N104', rating: '7.5 kW / 10 HP', amps: '17.0' },
+  A: { w: 0.072, h: 0.152, d: 0.172, hs: 0.042, holeX: 0.0575, catalog: '25B-D4P0N104', rating: '1.5 kW / 2.0 HP', amps: '4.0' },
+  B: { w: 0.087, h: 0.18, d: 0.172, hs: 0.042, holeX: 0.0725, catalog: '25B-D010N104', rating: '4.0 kW / 5.0 HP', amps: '10.5' },
+  C: { w: 0.109, h: 0.22, d: 0.184, hs: 0.048, holeX: 0.0905, catalog: '25B-D017N104', rating: '7.5 kW / 10 HP', amps: '17.0' },
 };
 
 /** Control module (same on all frames). */
 const CM = { w: 0.07, h: 0.105, d: 0.044 } as const;
+/** Mounting tabs protrude this far above / below the housing. */
+const TAB = 0.005;
 
 export type PowerFlexKey = 'esc' | 'sel' | 'up' | 'down' | 'enter' | 'reverse' | 'start' | 'stop';
 
@@ -57,7 +81,6 @@ interface KeyDef {
   h: number;
   color: string;
   legend: string;
-  legendColor?: string;
 }
 
 const KEYS: KeyDef[] = [
@@ -70,10 +93,10 @@ const KEYS: KeyDef[] = [
   { id: 'start', u: -20, v: 47.5, w: 15, h: 8.5, color: '#1c9a3c', legend: 'I' },
   { id: 'stop', u: 20, v: 47.5, w: 15, h: 8.5, color: '#d0232b', legend: 'O' },
 ];
+const KEY_R = 1.6; // mm corner radius (printed + pillow)
 
-/** Height (mm) of the flat front face of the control module that carries the atlas. */
-const FACE_H = 95;
-const FACE_V0 = 3; // bottom chamfer
+/** Control-module front print: width (mm) and height (mm, 0 = module bottom). */
+const FRONT = { w: CM.w * 1000 - 2.4, h: 95, v0: 3 } as const;
 const LCD = { u0: -17.5, u1: 30.5, v0: 76, v1: 92 } as const;
 const PAD = { u0: -33, u1: 33, v0: 41, v1: 94.2 } as const; // keypad membrane
 const POT = { u: 0, v: 47.5, r: 5.4 } as const;
@@ -82,214 +105,476 @@ const PF_LEDS = [
   { id: 'LINK', v: 84.2, color: 'green' as const },
   { id: 'FAULT', v: 79.0, color: 'red' as const },
 ];
+const LED_U = -30.2;
+/** Embedded EtherNet/IP jack on the underside of the control module (CM-local x, z of the face center). */
+const JACK = { x: -0.018, z: CM.d - 0.014 } as const;
 
 // ---------------------------------------------------------------------------
-// Textures
+// Print (atlas)
 // ---------------------------------------------------------------------------
 
-const KS = 14; // px per mm for the control module atlas
-
-/** Control-module front atlas: membrane, key faces & legends, LED labels, lower cover print. */
-function frontAtlas() {
-  const wMm = CM.w * 1000;
-  const hMm = FACE_H;
-  return canvasTexture('pf525-front', Math.round(wMm * KS), Math.round(hMm * KS), (ctx, w, h) => {
-    const m = mmCtx(ctx, KS, hMm);
-    const U = (u: number) => u + wMm / 2;
-    // body
-    ctx.fillStyle = '#1e2023';
-    ctx.fillRect(0, 0, w, h);
-    grain(ctx, w, h, 0.025, 17);
-    // keypad membrane (slightly lighter, satin)
-    m.rect(U(PAD.u0), PAD.v0, PAD.u1 - PAD.u0, PAD.v1 - PAD.v0, '#2a2d31', 2.5);
-    m.strokeRect(U(PAD.u0), PAD.v0, PAD.u1 - PAD.u0, PAD.v1 - PAD.v0, '#3a3e43', 0.3, 2.5);
-    // LCD bezel
-    m.rect(U(LCD.u0) - 1.4, LCD.v0 - 1.4, LCD.u1 - LCD.u0 + 2.8, LCD.v1 - LCD.v0 + 2.8, '#0c0d0f', 1.4);
-    // LED labels
-    for (const l of PF_LEDS) {
-      m.rect(U(-30.2) - 1.3, l.v - 0.9, 2.6, 1.8, '#050505', 0.4);
-      m.text(l.id, U(-28.3), l.v, 1.75, { color: '#e9e9e9', weight: 700, font: CONDENSED });
-    }
-    // keys
-    for (const k of KEYS) {
-      const x = U(k.u - k.w / 2);
-      const y = k.v - k.h / 2;
-      const g = ctx.createLinearGradient(0, m.y(k.v + k.h / 2), 0, m.y(k.v - k.h / 2));
-      const base = new THREE.Color(k.color);
-      const hi = base.clone().lerp(new THREE.Color('#ffffff'), 0.12).getStyle();
-      const lo = base.clone().multiplyScalar(0.78).getStyle();
-      g.addColorStop(0, hi);
-      g.addColorStop(1, lo);
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.roundRect(m.x(x), m.y(y + k.h), k.w * KS, k.h * KS, 1.6 * KS);
-      ctx.fill();
-      const isSym = k.legend.length === 1;
-      m.text(k.legend, U(k.u), k.v - (isSym ? 0.1 : 0), isSym ? 4.2 : 3.0, {
-        color: k.legendColor ?? '#f4f4f4',
-        weight: k.id === 'start' || k.id === 'stop' ? 800 : 700,
-        align: 'center',
-        font: isSym ? 'DejaVu Sans, Arial Unicode MS, Segoe UI Symbol, sans-serif' : SANS,
-      });
-    }
-    // pot legend ring
-    m.circle(U(POT.u), POT.v, POT.r + 1.4, '#16171a');
-    for (let i = 0; i <= 10; i++) {
-      const a = (-225 + (i * 270) / 10) * (Math.PI / 180);
-      const r0 = POT.r + 1.7;
-      const r1 = POT.r + (i % 5 === 0 ? 2.9 : 2.3);
-      m.line(U(POT.u) + Math.cos(a) * r0, POT.v + Math.sin(a) * r0, U(POT.u) + Math.cos(a) * r1, POT.v + Math.sin(a) * r1, '#c9ccd0', 0.25);
-    }
-    // lower (control terminal) cover
-    m.line(1.2, 39.4, wMm - 1.2, 39.4, '#0b0c0d', 0.35);
-    m.text('PowerFlex', 5, 31.5, 5.2, { color: '#f2f2f2', weight: 700, font: SANS });
-    m.text('525', 5 + 28.5, 31.5, 5.2, { color: '#f2f2f2', weight: 300, font: SANS });
-    // vent louvres
-    for (let i = 0; i < 5; i++) m.rect(5, 7 + i * 3.4, 38, 1.5, '#0a0b0c', 0.7);
-    // warning label
-    m.rect(47, 5, 18, 23, '#f2c200', 1.2);
-    ctx.fillStyle = '#111';
+function drawFront(m: MmCtx, ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const wMm = FRONT.w;
+  const U = (u: number) => u + wMm / 2;
+  ctx.fillStyle = '#1e2023';
+  ctx.fillRect(0, 0, w, h);
+  grain(ctx, w, h, 0.025, 17);
+  // keypad membrane (satin overlay)
+  m.rect(U(PAD.u0), PAD.v0, PAD.u1 - PAD.u0, PAD.v1 - PAD.v0, '#2a2d31', 2.5);
+  m.strokeRect(U(PAD.u0), PAD.v0, PAD.u1 - PAD.u0, PAD.v1 - PAD.v0, '#3a3e43', 0.3, 2.5);
+  // LCD bezel
+  m.rect(U(LCD.u0) - 1.4, LCD.v0 - 1.4, LCD.u1 - LCD.u0 + 2.8, LCD.v1 - LCD.v0 + 2.8, '#0c0d0f', 1.4);
+  // LED windows + labels
+  for (const l of PF_LEDS) {
+    m.rect(U(LED_U) - 1.35, l.v - 0.85, 2.7, 1.7, '#020203', 0.5);
+    m.text(l.id, U(-28.3), l.v, 1.75, { color: '#e9e9e9', weight: 700, font: CONDENSED });
+  }
+  // printed keys (the pillows sample exactly these pixels)
+  for (const k of KEYS) {
+    const x = U(k.u - k.w / 2);
+    const y = k.v - k.h / 2;
+    const g = ctx.createLinearGradient(0, m.y(k.v + k.h / 2), 0, m.y(k.v - k.h / 2));
+    const base = new THREE.Color(k.color);
+    g.addColorStop(0, base.clone().lerp(new THREE.Color('#ffffff'), 0.08).getStyle());
+    g.addColorStop(1, base.clone().multiplyScalar(0.86).getStyle());
+    ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.moveTo(m.x(56), m.y(25.5));
-    ctx.lineTo(m.x(62.5), m.y(15));
-    ctx.lineTo(m.x(49.5), m.y(15));
-    ctx.closePath();
+    ctx.roundRect(m.x(x), m.y(y + k.h), k.w * m.s, k.h * m.s, KEY_R * m.s);
     ctx.fill();
-    ctx.fillStyle = '#f2c200';
-    ctx.beginPath();
-    ctx.moveTo(m.x(56), m.y(23.6));
-    ctx.lineTo(m.x(61), m.y(15.9));
-    ctx.lineTo(m.x(51), m.y(15.9));
-    ctx.closePath();
-    ctx.fill();
-    // lightning bolt
-    ctx.fillStyle = '#111';
-    ctx.beginPath();
-    ctx.moveTo(m.x(56.6), m.y(22.6));
-    ctx.lineTo(m.x(54.8), m.y(19));
-    ctx.lineTo(m.x(56.4), m.y(19));
-    ctx.lineTo(m.x(55.2), m.y(16.6));
-    ctx.lineTo(m.x(57.6), m.y(20));
-    ctx.lineTo(m.x(56), m.y(20));
-    ctx.closePath();
-    ctx.fill();
-    m.text('DANGER', 56, 12.6, 2.1, { color: '#111', weight: 900, align: 'center' });
-    m.text('Wait 3 min after', 56, 9.8, 1.25, { color: '#111', weight: 600, align: 'center' });
-    m.text('removing power', 56, 7.8, 1.25, { color: '#111', weight: 600, align: 'center' });
-    // cover screw
-    m.circle(wMm / 2, 5.2, 1.5, '#0d0e10');
-    m.circle(wMm / 2, 5.2, 1.1, '#6d7278');
-    m.line(wMm / 2 - 0.8, 5.2, wMm / 2 + 0.8, 5.2, '#222', 0.25);
-  });
-}
-
-function guardTexture(frame: PowerFlexFrame, wMm: number, hMm: number) {
-  return canvasTexture(`pf525-guard:${frame}`, Math.round(wMm * 12), Math.round(hMm * 12), (ctx, w, h) => {
-    const m = mmCtx(ctx, 12, hMm);
-    ctx.fillStyle = '#1a1b1e';
-    ctx.fillRect(0, 0, w, h);
-    grain(ctx, w, h, 0.03, 23);
-    const labels = ['R/L1', 'S/L2', 'T/L3', 'U/T1', 'V/T2', 'W/T3'];
-    const pitch = (wMm - 8) / 6;
-    labels.forEach((l, i) => {
-      const u = 4 + pitch * (i + 0.5) + (i >= 3 ? 1.2 : -1.2);
-      m.rect(u - pitch * 0.32, 2.2, pitch * 0.64, hMm * 0.34, '#050506', 0.8); // wire entry
-      m.circle(u, hMm * 0.62, Math.min(1.9, pitch * 0.22), '#060607'); // screw access
-      m.circle(u, hMm * 0.62, Math.min(1.35, pitch * 0.16), '#8a9096');
-      m.text(l, u, hMm - 3.4, Math.min(2.1, pitch * 0.26), { color: '#e6e6e6', weight: 700, align: 'center', font: CONDENSED });
+    const isSym = k.legend.length === 1;
+    m.text(k.legend, U(k.u), k.v - (isSym ? 0.1 : 0), isSym ? 4.2 : 3.0, {
+      color: '#f4f4f4',
+      weight: k.id === 'start' || k.id === 'stop' ? 800 : 700,
+      align: 'center',
+      font: isSym ? 'DejaVu Sans, Arial Unicode MS, Segoe UI Symbol, sans-serif' : SANS,
     });
-    m.line(wMm / 2, 3, wMm / 2, hMm - 2, '#303236', 0.3);
-    m.text('LINE', 4 + pitch * 1.5 - 1.2, hMm - 6.6, 1.6, { color: '#9ea2a6', weight: 700, align: 'center' });
-    m.text('MOTOR', 4 + pitch * 4.5 + 1.2, hMm - 6.6, 1.6, { color: '#9ea2a6', weight: 700, align: 'center' });
-  });
+  }
+  // pot scale
+  m.circle(U(POT.u), POT.v, POT.r + 1.4, '#16171a');
+  for (let i = 0; i <= 10; i++) {
+    const a = (-225 + (i * 270) / 10) * (Math.PI / 180);
+    const r0 = POT.r + 1.7;
+    const r1 = POT.r + (i % 5 === 0 ? 2.9 : 2.3);
+    m.line(U(POT.u) + Math.cos(a) * r0, POT.v + Math.sin(a) * r0, U(POT.u) + Math.cos(a) * r1, POT.v + Math.sin(a) * r1, '#c9ccd0', 0.25);
+  }
+  // lower (control terminal) cover
+  m.line(1.2, 39.4, wMm - 1.2, 39.4, '#0b0c0d', 0.35);
+  m.text('PowerFlex', 4, 31.5, 5.1, { color: '#f2f2f2', weight: 700, font: SANS });
+  m.text('525', 4 + 28, 31.5, 5.1, { color: '#f2f2f2', weight: 300, font: SANS });
+  for (let i = 0; i < 5; i++) m.rect(4, 7 + i * 3.4, 37, 1.5, '#0a0b0c', 0.7);
+  // warning label
+  m.rect(45.5, 5, 18, 23, '#f2c200', 1.2);
+  const tri = (cx: number, top: number, s: number, color: string) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(m.x(cx), m.y(top));
+    ctx.lineTo(m.x(cx + s * 0.62), m.y(top - s));
+    ctx.lineTo(m.x(cx - s * 0.62), m.y(top - s));
+    ctx.closePath();
+    ctx.fill();
+  };
+  tri(54.5, 25.5, 10.5, '#111');
+  tri(54.5, 23.6, 7.7, '#f2c200');
+  ctx.fillStyle = '#111';
+  ctx.beginPath();
+  ctx.moveTo(m.x(55.1), m.y(22.6));
+  ctx.lineTo(m.x(53.3), m.y(19));
+  ctx.lineTo(m.x(54.9), m.y(19));
+  ctx.lineTo(m.x(53.7), m.y(16.6));
+  ctx.lineTo(m.x(56.1), m.y(20));
+  ctx.lineTo(m.x(54.5), m.y(20));
+  ctx.closePath();
+  ctx.fill();
+  m.text('DANGER', 54.5, 12.6, 2.1, { color: '#111', weight: 900, align: 'center' });
+  m.text('Wait 3 min after', 54.5, 9.8, 1.25, { color: '#111', weight: 600, align: 'center' });
+  m.text('removing power', 54.5, 7.8, 1.25, { color: '#111', weight: 600, align: 'center' });
+  // cover screw
+  m.circle(wMm / 2, 5.2, 1.5, '#0d0e10');
+  m.circle(wMm / 2, 5.2, 1.1, '#6d7278');
+  m.line(wMm / 2 - 0.8, 5.2, wMm / 2 + 0.8, 5.2, '#222', 0.25);
 }
 
-function nameplateTexture(frame: PowerFlexFrame, catalog?: string) {
-  const f = { ...PF525_FRAMES[frame], ...(catalog ? { catalog } : {}) };
-  return canvasTexture(`pf525-nameplate:${frame}:${f.catalog}`, 700, 520, (ctx, w, h) => {
-    const m = mmCtx(ctx, 10, 52);
-    ctx.fillStyle = '#e4e5e3';
-    ctx.beginPath();
-    ctx.roundRect(0, 0, w, h, 16);
-    ctx.fill();
-    m.text('PowerFlex 525', 3, 47.5, 4.2, { color: '#111', weight: 800 });
-    m.text('AC DRIVE', 67, 47.5, 2.6, { color: '#111', weight: 700, align: 'right' });
-    m.text(`Cat No. ${f.catalog}`, 3, 42, 3.1, { color: '#111', weight: 700 });
-    m.text(`Frame ${frame}   Series A`, 67, 42, 2.4, { color: '#222', weight: 600, align: 'right' });
-    m.line(3, 39.5, 67, 39.5, '#444', 0.25);
-    const rows = [
-      ['Input:', '380-480V AC  3 Ph  47-63 Hz'],
-      ['', `${(Number(f.amps) * 1.25).toFixed(1)} A  Normal Duty`],
-      ['Output:', `0-480V  3 Ph  0-500 Hz  ${f.amps} A`],
-      ['Power:', f.rating],
-      ['SCCR:', '100 kA'],
+/** Satin keypad membrane / glossy LED windows / matte cover (per-pixel roughness). */
+function drawFrontOrm(m: MmCtx, ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const U = (u: number) => u + FRONT.w / 2;
+  ctx.fillStyle = 'rgb(0,150,13)';
+  ctx.fillRect(0, 0, w, h);
+  m.rect(U(PAD.u0), PAD.v0, PAD.u1 - PAD.u0, PAD.v1 - PAD.v0, 'rgb(0,95,10)', 2.5);
+  for (const l of PF_LEDS) m.rect(U(LED_U) - 1.35, l.v - 0.85, 2.7, 1.7, 'rgb(0,40,10)', 0.5);
+  m.rect(45.5, 5, 18, 23, 'rgb(0,110,10)', 1.2);
+}
+
+const GUARD_TERMS = {
+  main: ['R/L1', 'S/L2', 'T/L3', 'U/T1', 'V/T2', 'W/T3'],
+  aux: ['DC-', 'DC+', 'BR+', 'BR-'],
+};
+
+function drawGuard(m: MmCtx, ctx: CanvasRenderingContext2D, w: number, h: number, wMm: number, hMm: number) {
+  ctx.fillStyle = '#1a1b1e';
+  ctx.fillRect(0, 0, w, h);
+  grain(ctx, w, h, 0.03, 23);
+  const pitch = (wMm - 8) / 6;
+  GUARD_TERMS.main.forEach((l, i) => {
+    const u = 4 + pitch * (i + 0.5) + (i >= 3 ? 1.2 : -1.2);
+    m.rect(u - pitch * 0.32, 1.8, pitch * 0.64, hMm * 0.26, '#050506', 0.8);
+    m.circle(u, hMm * 0.41, Math.min(1.9, pitch * 0.22), '#060607');
+    m.circle(u, hMm * 0.41, Math.min(1.35, pitch * 0.16), '#8a9096');
+    m.line(u - 0.8, hMm * 0.41, u + 0.8, hMm * 0.41, '#2a2c2e', 0.25);
+    m.text(l, u, hMm * 0.555, Math.min(2.0, pitch * 0.25), { color: '#e6e6e6', weight: 700, align: 'center', font: CONDENSED });
+  });
+  // DC bus / brake terminals: smaller pitch, upper row
+  const ap = Math.min(pitch * 0.72, 8.5);
+  const a0 = wMm / 2 - ap * 1.5;
+  GUARD_TERMS.aux.forEach((l, i) => {
+    const u = a0 + ap * i;
+    m.circle(u, hMm * 0.76, Math.min(1.5, ap * 0.19), '#060607');
+    m.circle(u, hMm * 0.76, Math.min(1.05, ap * 0.13), '#8a9096');
+    m.rect(u - ap * 0.26, hMm * 0.64, ap * 0.52, hMm * 0.07, '#050506', 0.4);
+    m.text(l, u, hMm * 0.9, Math.min(1.6, ap * 0.2), { color: '#d2d4d6', weight: 700, align: 'center', font: CONDENSED });
+  });
+  m.line(wMm / 2, 1.5, wMm / 2, hMm * 0.58, '#303236', 0.3);
+  m.text('LINE', 4 + pitch * 1.5 - 1.2, hMm * 0.64, 1.45, { color: '#9ea2a6', weight: 700, align: 'center' });
+  m.text('MOTOR', 4 + pitch * 4.5 + 1.2, hMm * 0.64, 1.45, { color: '#9ea2a6', weight: 700, align: 'center' });
+}
+
+function drawNameplate(m: MmCtx, ctx: CanvasRenderingContext2D, w: number, h: number, frame: PowerFlexFrame, catalog: string) {
+  const f = PF525_FRAMES[frame];
+  ctx.fillStyle = '#1b1c1f';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#e4e5e3';
+  ctx.beginPath();
+  ctx.roundRect(1, 1, w - 2, h - 2, 16);
+  ctx.fill();
+  m.text('PowerFlex 525', 3, 47.5, 4.2, { color: '#111', weight: 800 });
+  m.text('AC DRIVE', 67, 47.5, 2.6, { color: '#111', weight: 700, align: 'right' });
+  m.text(`Cat No. ${catalog}`, 3, 42, 3.1, { color: '#111', weight: 700 });
+  m.text(`Frame ${frame}   Series A`, 67, 42, 2.4, { color: '#222', weight: 600, align: 'right' });
+  m.line(3, 39.5, 67, 39.5, '#444', 0.25);
+  const rows = [
+    ['Input:', '380-480V AC  3 Ph  47-63 Hz'],
+    ['', `${(Number(f.amps) * 1.25).toFixed(1)} A  Normal Duty`],
+    ['Output:', `0-480V  3 Ph  0-500 Hz  ${f.amps} A`],
+    ['Power:', f.rating],
+    ['SCCR:', '100 kA'],
+  ];
+  rows.forEach(([a, b], i) => {
+    m.text(a!, 3, 36 - i * 3.6, 2.3, { color: '#222', weight: 700 });
+    m.text(b!, 16, 36 - i * 3.6, 2.3, { color: '#222', weight: 500 });
+  });
+  barcode(m, 3, 6.5, 36, 8, 525 + frame.charCodeAt(0));
+  m.text('S/N 1A2B3C4D', 3, 4.2, 1.9, { color: '#333', weight: 600 });
+  m.strokeRect(44, 6, 23, 11, '#333', 0.3, 1.5);
+  m.text('IND. CONT. EQ.', 55.5, 13.2, 1.8, { color: '#222', weight: 800, align: 'center' });
+  m.text('E-listed · IP20', 55.5, 9.3, 1.7, { color: '#222', weight: 600, align: 'center' });
+  m.text('Made in Singapore', 67, 2.6, 1.6, { color: '#444', weight: 500, align: 'right' });
+}
+
+function drawVentSlots(m: MmCtx, ctx: CanvasRenderingContext2D, w: number, h: number, wMm: number, dMm: number, bg = '#1c1d20') {
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+  const n = Math.floor((wMm - 6) / 3.2);
+  for (let i = 0; i < n; i++) m.rect(3 + i * 3.2 + 0.4, 2.5, 1.6, dMm - 5, '#040405', 0.8);
+}
+
+/** Conduit plate underside: metal with knockouts. */
+function drawKnockouts(m: MmCtx, ctx: CanvasRenderingContext2D, w: number, h: number, frame: PowerFlexFrame, wMm: number, dMm: number) {
+  ctx.fillStyle = '#b9bec3';
+  ctx.fillRect(0, 0, w, h);
+  const n = wMm > 90 ? 3 : 2;
+  const r = frame === 'A' ? 11 : 13.5;
+  for (let i = 0; i < n; i++) {
+    const u = (wMm / n) * (i + 0.5);
+    m.circle(u, dMm * 0.52, r + 0.8, '#8d9398');
+    m.circle(u, dMm * 0.52, r, '#a9aeb3');
+    m.circle(u, dMm * 0.52, r - 1.2, '#b4b9be');
+  }
+}
+
+/** PE ground marks on the conduit plate top. */
+function drawPe(m: MmCtx, ctx: CanvasRenderingContext2D, w: number, h: number, wMm: number) {
+  ctx.fillStyle = '#b9bec3';
+  ctx.fillRect(0, 0, w, h);
+  for (const u of [5.5, wMm - 5.5]) {
+    const x = u + (u < wMm / 2 ? 5.5 : -5.5);
+    m.line(x, 5.5, x, 3.2, '#1e7a34', 0.35);
+    m.line(x - 2, 3.2, x + 2, 3.2, '#1e7a34', 0.35);
+    m.line(x - 1.3, 2.3, x + 1.3, 2.3, '#1e7a34', 0.35);
+    m.line(x - 0.6, 1.4, x + 0.6, 1.4, '#1e7a34', 0.35);
+  }
+}
+
+function pfAtlas(frame: PowerFlexFrame, catalog: string) {
+  const g = frameGeometryInfo(frame);
+  return buildAtlas(`pf525:${frame}:${catalog}`, [
+    { id: 'front', wMm: FRONT.w, hMm: FRONT.h, ppm: 14, roughness: 0.5, bg: '#1e2023', draw: drawFront, drawOrm: drawFrontOrm },
+    { id: 'guard', wMm: g.guardW * 1000 - 2, hMm: g.guardH * 1000 - 2, ppm: 12, roughness: 0.7, bg: '#1a1b1e', draw: (m, c, w, h) => drawGuard(m, c, w, h, g.guardW * 1000 - 2, g.guardH * 1000 - 2) },
+    { id: 'plate', wMm: 70, hMm: 52, ppm: 10, roughness: 0.5, bg: '#1b1c1f', draw: (m, c, w, h) => drawNameplate(m, c, w, h, frame, catalog) },
+    { id: 'ventTop', wMm: g.ventW * 1000, hMm: g.topVentD * 1000, ppm: 8, roughness: 0.7, bg: '#1c1d20', draw: (m, c, w, h) => drawVentSlots(m, c, w, h, g.ventW * 1000, g.topVentD * 1000) },
+    { id: 'ventBot', wMm: g.ventW * 1000, hMm: g.botVentD * 1000, ppm: 8, roughness: 0.7, bg: '#1c1d20', draw: (m, c, w, h) => drawVentSlots(m, c, w, h, g.ventW * 1000, g.botVentD * 1000) },
+    { id: 'capBot', wMm: g.capW * 1000, hMm: g.hs * 1000 - 2, ppm: 8, roughness: 0.6, bg: '#141517', draw: (m, c, w, h) => drawVentSlots(m, c, w, h, g.capW * 1000, g.hs * 1000 - 2, '#141517') },
+    { id: 'knock', wMm: g.plateW * 1000 - 2, hMm: g.plateD * 1000, ppm: 8, roughness: 0.42, metalness: 0.8, bg: '#b9bec3', draw: (m, c, w, h) => drawKnockouts(m, c, w, h, frame, g.plateW * 1000 - 2, g.plateD * 1000) },
+    { id: 'pe', wMm: g.plateW * 1000 - 2, hMm: 7, ppm: 10, roughness: 0.42, metalness: 0.8, bg: '#b9bec3', draw: (m, c, w, h) => drawPe(m, c, w, h, g.plateW * 1000 - 2) },
+    { id: 'rj45', wMm: 15.8, hMm: 13.8, ppm: 10, roughness: 0.5, metalness: 0.2, bg: '#1a1b1d', draw: (_m, c, w, h) => drawRj45Face(c, w, h) },
+  ]);
+}
+
+/** Derived per-frame geometry (m). */
+function frameGeometryInfo(frame: PowerFlexFrame) {
+  const f = PF525_FRAMES[frame];
+  const W = f.w;
+  const H = f.h;
+  const D = f.d;
+  const HS = f.hs;
+  const pmFront = D - CM.d;
+  const cmY0 = H - 0.004 - CM.h;
+  const guardH = Math.min(cmY0 - 0.006, 0.052);
+  const guardW = Math.min(W - 0.008, 0.1);
+  const fanR = Math.min(0.024, (W - 0.02) / 2, HS / 2 - 0.0025);
+  const fanZ = HS / 2;
+  const ventW = W - 0.01;
+  const topVentZ0 = HS + 0.004;
+  const topVentD = pmFront - 0.006 - topVentZ0;
+  const botVentD = pmFront - HS - 0.046;
+  const capW = W - 0.003;
+  const plateW = W - 0.006;
+  const plateZ0 = pmFront - 0.04;
+  const plateD = 0.062;
+  return { W, H, D, hs: HS, pmFront, cmY0, guardH, guardW, fanR, fanZ, ventW, topVentZ0, topVentD, botVentD, capW, plateW, plateZ0, plateD };
+}
+
+function pfDecals(frame: PowerFlexFrame, catalog: string) {
+  const atlas = pfAtlas(frame, catalog);
+  const g = frameGeometryInfo(frame);
+  const up: [number, number, number] = [-Math.PI / 2, 0, 0];
+  const down: [number, number, number] = [Math.PI / 2, 0, 0];
+  const plateScale = Math.min(1, (g.pmFront - g.hs) / 0.08);
+  const faceH = (FRONT.h - FRONT.v0) / 1000;
+  const placements: DecalPlacement[] = [
+    { id: 'front', center: [0, g.cmY0 + FRONT.v0 / 1000 + faceH / 2, g.pmFront + CM.d + 0.0002], size: [FRONT.w / 1000, faceH], sub: [0, FRONT.v0 / FRONT.h, 1, 1] },
+    { id: 'guard', center: [0, 0.003 + g.guardH / 2, g.pmFront + 0.0122], size: [g.guardW - 0.002, g.guardH - 0.002] },
+    { id: 'plate', center: [g.W / 2 + 0.0002, g.H * 0.56, g.hs + (g.pmFront - g.hs) / 2], size: [0.07 * plateScale, 0.052 * plateScale], rotation: [0, Math.PI / 2, 0] },
+    { id: 'ventTop', center: [0, g.H + 0.0002, g.topVentZ0 + g.topVentD / 2], size: [g.ventW, g.topVentD], rotation: up },
+    { id: 'ventBot', center: [0, -0.0002, g.hs + 0.006 + g.botVentD / 2], size: [g.ventW, g.botVentD], rotation: down },
+    { id: 'capBot', center: [0, -0.0002, (g.hs - 0.002) / 2 + 0.001], size: [g.capW, g.hs - 0.002], rotation: down },
+    { id: 'knock', center: [0, -0.0002, g.plateZ0 + g.plateD / 2], size: [g.plateW - 0.002, g.plateD], rotation: down },
+    { id: 'pe', center: [0, 0.0015 + 0.0002, g.plateZ0 + g.plateD - 0.0045], size: [g.plateW - 0.002, 0.007], rotation: up },
+    { id: 'rj45', center: [JACK.x, g.cmY0 - 0.0003, g.pmFront + JACK.z], size: [0.0158, 0.0138], rotation: down },
+  ];
+  return { atlas, geometry: decalGeometry(`${frame}:${catalog}`, atlas, placements) };
+}
+
+// ---------------------------------------------------------------------------
+// Geometry
+// ---------------------------------------------------------------------------
+
+function plasticGeometry(frame: PowerFlexFrame) {
+  return cachedGeometry(`pf525-plastic:${frame}`, () => {
+    const g = frameGeometryInfo(frame);
+    const { W, H, hs: HS, pmFront } = g;
+    const housing = profileGeometry(
+      `pf525-housing:${frame}`,
+      [
+        [HS - 0.002, 0.003],
+        [HS + 0.002, 0],
+        [pmFront - 0.004, 0],
+        [pmFront, 0.004],
+        [pmFront, H - 0.004],
+        [pmFront - 0.004, H],
+        [HS + 0.002, H],
+        [HS - 0.002, H - 0.003],
+      ],
+      W,
+      0.0012,
+    );
+    const cm = profileGeometry(
+      'pf525-control-module',
+      [
+        [0, 0],
+        [CM.d - 0.003, 0],
+        [CM.d, 0.003],
+        [CM.d, CM.h - 0.009],
+        [CM.d - 0.0035, CM.h - 0.001],
+        [CM.d - 0.006, CM.h],
+        [0, CM.h],
+      ],
+      CM.w,
+      0.0012,
+    );
+    const potLathe = new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0, 0),
+        new THREE.Vector2(POT.r / 1000, 0),
+        new THREE.Vector2(POT.r / 1000, 0.0032),
+        new THREE.Vector2(POT.r / 1000 - 0.0006, 0.0038),
+        new THREE.Vector2(0, 0.0038),
+      ],
+      28,
+    );
+    potLathe.rotateX(Math.PI / 2);
+    const r = g.fanR;
+    const parts: Array<[THREE.BufferGeometry, string, THREE.Matrix4?]> = [
+      [housing, '#1b1c1f'],
+      [cm, '#1e2023', xf([0, g.cmY0, pmFront])],
+      [roundedBox(g.guardW, g.guardH, 0.014, 0.0012), '#1b1c1f', xf([0, 0.003 + g.guardH / 2, pmFront + 0.005])],
+      // fin-channel caps (top carries the fan, bottom is the air intake)
+      [box(g.capW, 0.003, HS), '#141517', xf([0, H - 0.0015, HS / 2])],
+      [box(g.capW, 0.003, HS), '#141517', xf([0, 0.0015, HS / 2])],
+      // fan shroud on the top cap
+      [new THREE.CircleGeometry(r, 32), '#060606', xf([0, H + 0.0002, g.fanZ], [-Math.PI / 2, 0, 0])],
+      [new THREE.CylinderGeometry(r + 0.0012, r + 0.0012, 0.003, 40, 1, true), '#141517', xf([0, H + 0.0015, g.fanZ])],
+      [new THREE.RingGeometry(r, r + 0.0028, 40), '#141517', xf([0, H + 0.003, g.fanZ], [-Math.PI / 2, 0, 0])],
+      // USB port (top of the control module)
+      [box(0.0078, 0.0005, 0.0032), '#050506', xf([0.022, g.cmY0 + CM.h + 0.0002, pmFront + CM.d - 0.012])],
+      // speed pot
+      [potLathe, '#121314', xf([POT.u / 1000, g.cmY0 + POT.v / 1000, pmFront + CM.d])],
+      [box(0.0008, 0.0036, 0.0003), '#e8e8e8', xf([POT.u / 1000 + 0.0022 * Math.sin(-0.6), g.cmY0 + POT.v / 1000 + 0.0022 * Math.cos(0.6), pmFront + CM.d + 0.0039], [0, 0, 0.6])],
     ];
-    rows.forEach(([a, b], i) => {
-      m.text(a!, 3, 36 - i * 3.6, 2.3, { color: '#222', weight: 700 });
-      m.text(b!, 16, 36 - i * 3.6, 2.3, { color: '#222', weight: 500 });
-    });
-    barcode(m, 3, 6.5, 36, 8, 525 + frame.charCodeAt(0));
-    m.text('S/N 1A2B3C4D', 3, 4.2, 1.9, { color: '#333', weight: 600 });
-    m.strokeRect(44, 6, 23, 11, '#333', 0.3, 1.5);
-    m.text('IND. CONT. EQ.', 55.5, 13.2, 1.8, { color: '#222', weight: 800, align: 'center' });
-    m.text('E-listed · IP20', 55.5, 9.3, 1.7, { color: '#222', weight: 600, align: 'center' });
-    m.text('Made in Singapore', 67, 2.6, 1.6, { color: '#444', weight: 500, align: 'right' });
+    return mergeColored(parts);
   });
 }
 
-function fanGrilleTexture() {
-  const t = canvasTexture('pf525-fan-grille', 256, 256, (ctx, w, h) => {
+function metalGeometry(frame: PowerFlexFrame) {
+  return cachedGeometry(`pf525-metal:${frame}`, () => {
+    const g = frameGeometryInfo(frame);
+    const f = PF525_FRAMES[frame];
+    const { W, H, hs: HS } = g;
+    const alu = '#8f969d';
+    const parts: Array<[THREE.BufferGeometry, string | null, THREE.Matrix4?]> = [[box(W - 0.003, H - 0.004, 0.006), alu, xf([0, H / 2, HS - 0.003])]];
+    const n = Math.max(6, Math.floor((W - 0.006) / 0.0046));
+    const pitch = (W - 0.006) / (n - 1);
+    const fin = box(0.0012, H - 0.006, HS - 0.006);
+    for (let i = 0; i < n; i++) parts.push([fin, alu, xf([-(W - 0.006) / 2 + i * pitch, H / 2, (HS - 0.006) / 2])]);
+    // mounting tabs with keyholes (top: keyhole slot up; bottom: open slot down)
+    const tabW = f.holeX + 0.014;
+    const tabH = TAB + 0.008;
+    const topTab = holedPlate(tabW, tabH, 0.0025, 0.0015, [
+      { kind: 'keyhole', x: -f.holeX / 2, y: 0.0005, r: 0.0028, slot: 0.0028, up: true },
+      { kind: 'keyhole', x: f.holeX / 2, y: 0.0005, r: 0.0028, slot: 0.0028, up: true },
+    ]);
+    const botTab = holedPlate(tabW, tabH, 0.0025, 0.0015, [
+      { kind: 'keyhole', x: -f.holeX / 2, y: -0.0005, r: 0.0028, slot: 0.0028, up: false },
+      { kind: 'keyhole', x: f.holeX / 2, y: -0.0005, r: 0.0028, slot: 0.0028, up: false },
+    ]);
+    parts.push([topTab, alu, xf([0, H + TAB - tabH / 2, 0])]);
+    parts.push([botTab, alu, xf([0, -TAB + tabH / 2, 0])]);
+    // conduit / EMC plate with ground screws (screw heads facing up)
+    parts.push([box(g.plateW, 0.0015, g.plateD), '#b9bec3', xf([0, 0.00075, g.plateZ0 + g.plateD / 2])]);
+    for (const sx of [-1, 1]) parts.push([screwHeadGeometry(0.0022, 0.0015, 'combo'), null, xf([sx * (g.plateW / 2 - 0.0055), 0.0015 + 0.0015, g.plateZ0 + g.plateD - 0.0045], [-Math.PI / 2, 0, 0])]);
+    return mergeColored(parts);
+  });
+}
+
+function rotorGeometry() {
+  return cachedGeometry('pf525-rotor', () => {
+    const parts: Array<[THREE.BufferGeometry, string, THREE.Matrix4?]> = [[new THREE.CylinderGeometry(0.0075, 0.0075, 0.0016, 20), '#2a2c2f']];
+    for (let i = 0; i < 7; i++) {
+      const b = new THREE.BoxGeometry(0.0165, 0.0007, 0.0055);
+      b.rotateX(0.38);
+      b.translate(0.0118, 0, 0);
+      b.rotateY((i / 7) * Math.PI * 2);
+      parts.push([b, '#2c2d30']);
+    }
+    return mergeColored(parts);
+  });
+}
+
+function fanGrilleMaterial() {
+  return cachedMaterial('pf525-grille', () => {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 256;
+    const ctx = c.getContext('2d')!;
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, w, h);
+    ctx.fillRect(0, 0, 256, 256);
     ctx.fillStyle = '#000000';
-    const cx = w / 2;
-    const cy = h / 2;
     for (let r = 26; r < 120; r += 18) {
       ctx.beginPath();
-      ctx.arc(cx, cy, r + 10, 0, Math.PI * 2);
-      ctx.arc(cx, cy, r, 0, Math.PI * 2, true);
+      ctx.arc(128, 128, r + 10, 0, Math.PI * 2);
+      ctx.arc(128, 128, r, 0, Math.PI * 2, true);
       ctx.fill();
     }
     ctx.fillStyle = '#ffffff';
     for (let i = 0; i < 4; i++) {
       ctx.save();
-      ctx.translate(cx, cy);
+      ctx.translate(128, 128);
       ctx.rotate((i * Math.PI) / 4 + Math.PI / 8);
       ctx.fillRect(-4, -128, 8, 256);
       ctx.restore();
     }
     ctx.beginPath();
-    ctx.arc(cx, cy, 24, 0, Math.PI * 2);
+    ctx.arc(128, 128, 24, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalCompositeOperation = 'destination-in';
     ctx.beginPath();
-    ctx.arc(cx, cy, 126, 0, Math.PI * 2);
+    ctx.arc(128, 128, 126, 0, Math.PI * 2);
     ctx.fill();
-  });
-  return t;
-}
-
-function knockoutTexture(frame: PowerFlexFrame, wMm: number) {
-  return canvasTexture(`pf525-knockouts:${frame}`, Math.round(wMm * 8), 52 * 8, (ctx, w, h) => {
-    ctx.clearRect(0, 0, w, h);
-    const m = mmCtx(ctx, 8, 52);
-    const n = wMm > 90 ? 3 : 2;
-    const r = frame === 'A' ? 11 : 13.5;
-    for (let i = 0; i < n; i++) {
-      const u = (wMm / n) * (i + 0.5);
-      m.circle(u, 30, r, '#0a0a0b');
-      m.circle(u, 30, r - 1.2, '#2a2c2f');
-    }
+    const t = new THREE.CanvasTexture(c);
+    return new THREE.MeshStandardMaterial({ color: '#1d1e21', roughness: 0.55, alphaMap: t, alphaTest: 0.5, side: THREE.DoubleSide });
   });
 }
 
-function ventSlotsTexture(key: string, wMm: number, dMm: number) {
-  return canvasTexture(`pf525-vents:${key}`, Math.round(wMm * 10), Math.round(dMm * 10), (ctx, w, h) => {
-    ctx.fillStyle = '#1c1d20';
-    ctx.fillRect(0, 0, w, h);
-    const m = mmCtx(ctx, 10, dMm);
-    const n = Math.floor((wMm - 6) / 3.2);
-    for (let i = 0; i < n; i++) m.rect(3 + i * 3.2 + 0.4, 3, 1.6, dMm - 6, '#040405', 0.8);
+/**
+ * Membrane keypad: every key is a very shallow pillow (0.35 mm) sampling the SAME atlas pixels as the printed
+ * key underneath (no double outline). One geometry, one morph target per key (press sinks it 0.2 mm).
+ */
+const PILLOW = { depth: 0.00035, edge: 1.3, lift: 0.00005, press: 0.0002 } as const;
+
+function keypadGeometry(rect: [number, number, number, number]) {
+  return cachedGeometry(`pf525-keypad:${rect.map((n) => n.toFixed(5)).join(',')}`, () => {
+    const nx = 30;
+    const ny = 16;
+    const perKey = (nx + 1) * (ny + 1);
+    const total = perKey * KEYS.length;
+    const pos = new Float32Array(total * 3);
+    const uv = new Float32Array(total * 2);
+    const index: number[] = [];
+    const smooth = (a: number, b: number, x: number) => {
+      const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+      return t * t * (3 - 2 * t);
+    };
+    KEYS.forEach((k, ki) => {
+      const hx = k.w / 2;
+      const hy = k.h / 2;
+      for (let j = 0; j <= ny; j++) {
+        for (let i = 0; i <= nx; i++) {
+          const gx = -hx + (2 * hx * i) / nx;
+          const gy = -hy + (2 * hy * j) / ny;
+          const qx = Math.abs(gx) - (hx - KEY_R);
+          const qy = Math.abs(gy) - (hy - KEY_R);
+          const outside = Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - KEY_R;
+          const h = PILLOW.depth * smooth(0, PILLOW.edge, -outside);
+          const vi = ki * perKey + j * (nx + 1) + i;
+          pos[vi * 3] = (k.u + gx) / 1000;
+          pos[vi * 3 + 1] = (k.v + gy) / 1000;
+          pos[vi * 3 + 2] = h + PILLOW.lift;
+          uv[vi * 2] = (k.u + gx + FRONT.w / 2) / FRONT.w;
+          uv[vi * 2 + 1] = (k.v + gy) / FRONT.h;
+        }
+      }
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const a = ki * perKey + j * (nx + 1) + i;
+          const b = a + 1;
+          const c = a + nx + 1;
+          const d = c + 1;
+          index.push(a, b, d, a, d, c);
+        }
+      }
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    g.setIndex(index);
+    g.computeVertexNormals();
+    remapUv(g, rect);
+    g.morphAttributes.position = KEYS.map((_, ki) => {
+      const m = new Float32Array(total * 3);
+      for (let v = ki * perKey; v < (ki + 1) * perKey; v++) m[v * 3 + 2] = -PILLOW.press;
+      return new THREE.BufferAttribute(m, 3);
+    });
+    g.morphTargetsRelative = true;
+    g.computeBoundingSphere();
+    return g;
   });
 }
 
@@ -424,7 +709,7 @@ function useLcd() {
       roughness: 0.35,
       metalness: 0,
     });
-    return { ctx: canvas.getContext('2d')!, tex, mat, key: '', last: -1 };
+    return { ctx: canvas.getContext('2d')!, tex, mat, prev: null as LcdState | null, last: -1 };
   }, []);
   useEffect(
     () => () => {
@@ -449,6 +734,8 @@ export interface PowerFlex525TwinProps extends PowerFlex525Props {
   onKey?: (key: PowerFlexKey) => void;
   /** Draw the EtherNet/IP patch cable in the embedded RJ45 (default true). */
   ethernet?: boolean;
+  /** How far below the drive's bottom the Ethernet cable is drawn before its capped end (m, default 0.08). */
+  cableLength?: number;
   highlighted?: boolean;
   onSelect?: () => void;
 }
@@ -466,6 +753,21 @@ const FAULT_TEXT: Record<number, string> = {
   81: 'Comm Loss',
 };
 
+function sameLcd(a: LcdState | null, b: LcdState): boolean {
+  return (
+    !!a &&
+    a.value === b.value &&
+    a.unit === b.unit &&
+    a.run === b.run &&
+    a.fwd === b.fwd &&
+    a.rev === b.rev &&
+    a.fault === b.fault &&
+    a.spinner === b.spinner &&
+    a.line === b.line &&
+    a.program === b.program
+  );
+}
+
 export function PowerFlex525({
   getFrequency,
   getRunning,
@@ -476,22 +778,22 @@ export function PowerFlex525({
   getFaultCode,
   onKey,
   ethernet = true,
+  cableLength = 0.08,
   highlighted = false,
   onSelect,
   position,
   rotation,
   scale,
 }: PowerFlex525TwinProps) {
-  const f = PF525_FRAMES[frame];
-  const { w: W, h: H, d: D, hs: HS } = f;
-  const pmFront = D - CM.d; // power module front face
-  const cmY0 = H - 0.004 - CM.h; // control module bottom
-  const guardH = Math.min(cmY0 - 0.006, 0.052);
+  const g = frameGeometryInfo(frame);
+  const { W, H, D } = g;
+  const cat = catalog ?? PF525_FRAMES[frame].catalog;
   const { hovered, handlers } = usePick(onSelect);
 
   const lcd = useLcd();
-  const fan = useRef<THREE.Group>(null);
+  const fan = useRef<THREE.Mesh>(null);
   const fanSpeed = useRef(0);
+  const lcdState = useMemo<LcdState>(() => ({ value: '', unit: '', run: false, fwd: false, rev: false, fault: false, spinner: -1, line: '', program: false }), []);
 
   useFrame(({ clock }, dt) => {
     const t = clock.elapsedTime;
@@ -499,180 +801,107 @@ export function PowerFlex525({
     const faulted = getFaulted?.() ?? false;
     const reverse = getReverse?.() ?? false;
     const hz = Math.max(0, getFrequency());
-    // fan spins up/down smoothly
     const target = running || hz > 0.5 ? 38 : 0;
     fanSpeed.current += (target - fanSpeed.current) * Math.min(1, dt * 1.5);
     if (fan.current) fan.current.rotation.y += fanSpeed.current * dt;
 
-    // LCD: redraw at ≤ 8 Hz and only when content changes
+    // LCD: redraw at ≤ 8 Hz and only when a field changed (no per-frame allocations)
     const tick = Math.floor(t * 8);
     if (tick === lcd.last) return;
     lcd.last = tick;
-    let s: LcdState;
+    const s = lcdState;
     if (faulted) {
       const code = getFaultCode?.() ?? 2;
       const blink = Math.floor(t * 2) % 2 === 0;
-      s = {
-        value: blink ? `F ${String(code).padStart(3, '0')}` : '',
-        unit: '',
-        run: false,
-        fwd: false,
-        rev: false,
-        fault: true,
-        spinner: -1,
-        line: `F${String(code).padStart(3, '0')} ${FAULT_TEXT[code] ?? 'Drive Fault'}`,
-        program: false,
-      };
+      s.value = blink ? `F ${String(code).padStart(3, '0')}` : '';
+      s.unit = '';
+      s.run = s.fwd = s.rev = false;
+      s.fault = true;
+      s.spinner = -1;
+      s.line = `F${String(code).padStart(3, '0')} ${FAULT_TEXT[code] ?? 'Drive Fault'}`;
+      s.program = false;
     } else {
-      const shown = (Math.round(hz * 100) / 100).toFixed(2);
-      s = {
-        value: shown,
-        unit: 'Hz',
-        run: running,
-        fwd: (running || hz > 0) && !reverse,
-        rev: (running || hz > 0) && reverse,
-        fault: false,
-        spinner: running && hz > 0.1 ? (reverse ? 7 - (Math.floor(t * (2 + hz / 6)) % 8) : Math.floor(t * (2 + hz / 6)) % 8) : -1,
-        line: running ? 'b001 Output Freq' : 'b001 Output Freq  Ready',
-        program: false,
-      };
+      s.value = (Math.round(hz * 100) / 100).toFixed(2);
+      s.unit = 'Hz';
+      s.run = running;
+      s.fwd = (running || hz > 0) && !reverse;
+      s.rev = (running || hz > 0) && reverse;
+      s.fault = false;
+      s.spinner = running && hz > 0.1 ? (reverse ? 7 - (Math.floor(t * (2 + hz / 6)) % 8) : Math.floor(t * (2 + hz / 6)) % 8) : -1;
+      s.line = running ? 'b001 Output Freq' : 'b001 Output Freq  Ready';
+      s.program = false;
     }
-    const key = JSON.stringify(s);
-    if (key === lcd.key) return;
-    lcd.key = key;
+    if (sameLcd(lcd.prev, s)) return;
+    lcd.prev = { ...s };
     drawLcd(lcd.ctx, s);
     lcd.tex.needsUpdate = true;
   });
 
-  // ------------------------------------------------------------------ geometry
-  const housing = profileGeometry(
-    `pf525-housing:${frame}`,
-    [
-      [HS - 0.002, 0.003],
-      [HS + 0.002, 0],
-      [pmFront - 0.004, 0],
-      [pmFront, 0.004],
-      [pmFront, H - 0.004],
-      [pmFront - 0.004, H],
-      [HS + 0.002, H],
-      [HS - 0.002, H - 0.003],
-    ],
-    W,
-    0.0012,
-  );
-  const cmGeo = profileGeometry(
-    'pf525-control-module',
-    [
-      [0, 0],
-      [CM.d - 0.003, 0],
-      [CM.d, 0.003],
-      [CM.d, CM.h - 0.009],
-      [CM.d - 0.0035, CM.h - 0.001],
-      [CM.d - 0.006, CM.h],
-      [0, CM.h],
-    ],
-    CM.w,
-    0.0012,
-  );
-  const fins = useMemo(() => {
-    const n = Math.max(6, Math.floor((W - 0.006) / 0.0046));
-    const pitch = (W - 0.006) / (n - 1);
-    return Array.from({ length: n }, (_, i): [number, number, number] => [-(W - 0.006) / 2 + i * pitch, H / 2, (HS - 0.006) / 2]);
-  }, [W, H, HS]);
+  const decals = pfDecals(frame, cat);
+  const leds = useMemo(() => {
+    const positions = PF_LEDS.map((l): [number, number, number] => [LED_U / 1000, g.cmY0 + l.v / 1000, g.pmFront + CM.d + 0.0003]);
+    const get = (i: number): LedMode => (i === 0 ? (ethernet ? 'on' : 'off') : i === 1 ? ethernet && activityFlicker(7) : getFaulted?.() ? 'flash' : 'off');
+    const color = (i: number): LedColor => PF_LEDS[i]!.color;
+    return { positions, get, color };
+  }, [g.cmY0, g.pmFront, ethernet, getFaulted]);
 
-  const body = materials.plastic('#1b1c1f', 0.55);
-  const cmMat = materials.plastic('#1e2023', 0.42);
-  const alu = materials.metal('#8f969d', 0.42);
-  const atlas = frontAtlas();
-  const atlasMat = decalMaterial(atlas, 0.5, 0.05);
-  const guardW = Math.min(W - 0.008, 0.1);
-  const fanR = Math.min(0.024, (W - 0.02) / 2);
-  const fanZ = HS + 0.006 + fanR;
-  const topVentD = pmFront - 0.006 - (fanZ + fanR + 0.006);
+  const cable = useMemo(() => {
+    if (!ethernet) return null;
+    const jack: [number, number, number] = [JACK.x, g.cmY0, g.pmFront + JACK.z];
+    const z = jack[2];
+    const path: Array<[number, number, number]> = [
+      [JACK.x - 0.002, g.cmY0 - 0.03, z + 0.002],
+      [-W / 2 - 0.004, Math.max(0.004, g.cmY0 - 0.05), z - 0.004],
+      [-W / 2 - 0.011, -0.02, z - 0.02],
+      [-W / 2 - 0.012, -cableLength, z - 0.026],
+    ];
+    const key = `pf525:${frame}:${cableLength.toFixed(3)}`;
+    return { cables: downCablesGeometry(key, [{ jack, path }]), plugs: downPlugsGeometry(key, [{ jack, path }]) };
+  }, [ethernet, frame, g.cmY0, g.pmFront, W, cableLength]);
 
   return (
     <group position={position} rotation={rotation} scale={scale} {...handlers}>
-      {/* heat sink */}
-      <mesh geometry={box(W - 0.003, H - 0.004, 0.006)} material={alu} position={[0, H / 2, HS - 0.003]} castShadow receiveShadow />
-      <StaticInstances geometry={box(0.0012, H - 0.012, HS - 0.006)} material={alu} positions={fins} castShadow />
-      {/* plastic housing (power module) */}
-      <mesh geometry={housing} material={body} castShadow receiveShadow />
-      {/* top vents + fan */}
+      <mesh geometry={metalGeometry(frame)} material={vertexColorMetal()} castShadow receiveShadow />
+      <mesh geometry={plasticGeometry(frame)} material={vertexColorPlastic()} castShadow receiveShadow />
+      <mesh geometry={decals.geometry} material={decals.atlas.material} receiveShadow />
+
+      {/* fan (centred over the fin channels) */}
+      <mesh ref={fan} geometry={rotorGeometry()} material={vertexColorPlastic()} position={[0, H + 0.0013, g.fanZ]} scale={[g.fanR / 0.021, 1, g.fanR / 0.021]} />
       <mesh
-        geometry={plane(W - 0.01, topVentD)}
-        material={decalMaterial(ventSlotsTexture(`top:${frame}`, (W - 0.01) * 1000, topVentD * 1000), 0.7)}
-        position={[0, H + 0.0002, pmFront - 0.006 - topVentD / 2]}
+        geometry={cachedGeometry(`pf525-grille:${g.fanR}`, () => new THREE.CircleGeometry(g.fanR, 40))}
+        material={fanGrilleMaterial()}
         rotation={[-Math.PI / 2, 0, 0]}
-      />
-      <FanAssembly W={W} H={H} cz={fanZ} spin={fan} />
-      {/* side nameplate (right) */}
-      <mesh
-        geometry={plane(0.07 * Math.min(1, (pmFront - HS) / 0.08), 0.052 * Math.min(1, (pmFront - HS) / 0.08))}
-        material={decalMaterial(nameplateTexture(frame, catalog), 0.5)}
-        position={[W / 2 + 0.0002, H * 0.56, HS + (pmFront - HS) / 2]}
-        rotation={[0, Math.PI / 2, 0]}
-      />
-      {/* bottom vents */}
-      <mesh
-        geometry={plane(W - 0.01, pmFront - HS - 0.03)}
-        material={decalMaterial(ventSlotsTexture(`bot:${frame}`, (W - 0.01) * 1000, (pmFront - HS - 0.03) * 1000), 0.7)}
-        position={[0, -0.0002, HS + 0.01 + (pmFront - HS - 0.03) / 2]}
-        rotation={[Math.PI / 2, 0, 0]}
+        position={[0, H + 0.0029, g.fanZ]}
       />
 
-      {/* power terminal guard */}
-      <mesh geometry={roundedBox(guardW, guardH, 0.014, 0.0012)} material={body} position={[0, 0.003 + guardH / 2, pmFront + 0.005]} castShadow />
-      <mesh
-        geometry={plane(guardW - 0.002, guardH - 0.002)}
-        material={decalMaterial(guardTexture(frame, (guardW - 0.002) * 1000, (guardH - 0.002) * 1000), 0.7)}
-        position={[0, 0.003 + guardH / 2, pmFront + 0.0122]}
-      />
-
-      {/* conduit / EMC plate under the power terminals with knockouts */}
-      <mesh geometry={box(W - 0.006, 0.0015, pmFront + 0.014 - (pmFront - 0.04))} material={materials.metal('#b9bec3', 0.4)} position={[0, 0.00075, pmFront - 0.04 + (0.054) / 2]} castShadow />
-      <mesh
-        geometry={plane(W - 0.008, 0.052)}
-        material={decalMaterial(knockoutTexture(frame, (W - 0.008) * 1000), 0.45, 0.8, true)}
-        position={[0, -0.0001, pmFront - 0.04 + 0.027]}
-        rotation={[Math.PI / 2, 0, 0]}
-      />
-
-      {/* control module */}
-      <group position={[0, cmY0, pmFront]}>
-        <mesh geometry={cmGeo} material={cmMat} castShadow receiveShadow />
-        <mesh geometry={atlasPlane()} material={atlasMat} position={[0, 0, CM.d + 0.0002]} />
-        {/* LCD */}
-        <mesh
-          geometry={plane((LCD.u1 - LCD.u0) / 1000, (LCD.v1 - LCD.v0) / 1000)}
-          material={lcd.mat}
-          position={[(LCD.u0 + LCD.u1) / 2000, (LCD.v0 + LCD.v1) / 2000, CM.d + 0.0004]}
-        />
+      {/* control module: LCD, LEDs, membrane keypad */}
+      <group position={[0, g.cmY0, g.pmFront]}>
+        <mesh geometry={plane((LCD.u1 - LCD.u0) / 1000, (LCD.v1 - LCD.v0) / 1000)} material={lcd.mat} position={[(LCD.u0 + LCD.u1) / 2000, (LCD.v0 + LCD.v1) / 2000, CM.d + 0.0004]} receiveShadow />
         <mesh
           geometry={plane((LCD.u1 - LCD.u0) / 1000 + 0.001, (LCD.v1 - LCD.v0) / 1000 + 0.001)}
           material={lcdGlass()}
           position={[(LCD.u0 + LCD.u1) / 2000, (LCD.v0 + LCD.v1) / 2000, CM.d + 0.0009]}
         />
-        {/* status indicators */}
-        <Led color="green" get={() => (ethernet ? 'on' : 'off')} size={[0.0024, 0.0016, 0.0006]} position={[-0.0302, PF_LEDS[0].v / 1000, CM.d + 0.0005]} />
-        <Led color="green" get={() => ethernet && activityFlicker(7)} size={[0.0024, 0.0016, 0.0006]} position={[-0.0302, PF_LEDS[1].v / 1000, CM.d + 0.0005]} />
-        <Led color="red" get={() => (getFaulted?.() ? 'flash' : 'off')} size={[0.0024, 0.0016, 0.0006]} position={[-0.0302, PF_LEDS[2].v / 1000, CM.d + 0.0005]} />
-        {/* keypad */}
-        {KEYS.map((k) => (
-          <Key key={k.id} def={k} z={CM.d} material={atlasMat} onKey={onKey} />
-        ))}
-        <Pot z={CM.d} />
-        {/* USB (top of control module) */}
-        <mesh geometry={box(0.0078, 0.0005, 0.0032)} material={materials.plastic('#050506', 0.8)} position={[0.022, CM.h + 0.0002, CM.d - 0.012]} />
-        {/* embedded EtherNet/IP port on the underside, cable dropping down */}
-        <Rj45Jack position={[-0.018, -0.0001, CM.d - 0.014]} rotation={[Math.PI / 2, 0, 0]} />
-        {ethernet && <DropCable position={[-0.018, 0, CM.d - 0.014]} length={cmY0 + 0.08} />}
+        <Keypad rect={decals.atlas.rects.front!} material={decals.atlas.material} z={CM.d + 0.0002} onKey={onKey} />
       </group>
+      <PointLeds positions={leds.positions} size={[0.0022, 0.0013, 0.0006]} get={leds.get} color={leds.color} intensity={1.8} />
+
+      {cable && (
+        <>
+          <mesh geometry={cable.plugs} material={plugClearMaterial()} />
+          <mesh geometry={cable.cables} material={cableBootMaterial()} castShadow receiveShadow />
+        </>
+      )}
 
       {(highlighted || hovered) && (
-        <HighlightFrame center={[0, H / 2, D / 2]} size={[W + 0.004, H + 0.004, D + 0.004]} strength={highlighted ? 1 : 0.35} />
+        <HighlightFrame center={[0, H / 2, D / 2]} size={[W + 0.004, H + 2 * TAB + 0.004, D + 0.004]} strength={highlighted ? 1 : 0.35} />
       )}
     </group>
   );
+}
+
+function plane(w: number, h: number) {
+  return cachedGeometry(`plane:${w}:${h}`, () => new THREE.PlaneGeometry(w, h));
 }
 
 function lcdGlass() {
@@ -691,144 +920,56 @@ function lcdGlass() {
   );
 }
 
-/** Front-face plane of the control module (y ∈ [FACE_V0, FACE_H] mm) with UVs into the atlas. */
-function atlasPlane() {
-  return cachedGeometry('pf525-atlas-plane', () => {
-    const h = (FACE_H - FACE_V0) / 1000;
-    const g = new THREE.PlaneGeometry(CM.w - 0.0024, h);
-    g.translate(0, FACE_V0 / 1000 + h / 2, 0);
-    const pos = g.getAttribute('position') as THREE.BufferAttribute;
-    const uv = g.getAttribute('uv') as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) uv.setY(i, pos.getY(i) / (FACE_H / 1000));
-    uv.needsUpdate = true;
-    return g;
-  });
-}
+const hitMaterial = () => cachedMaterial('hit-invisible', () => new THREE.MeshBasicMaterial({ visible: false }));
 
-/** Rounded key cap whose front face samples the control-module atlas (planar UV projection). */
-function keyGeometry(def: KeyDef) {
-  return cachedGeometry(`pf525-key:${def.id}`, () => {
-    const g = roundedBox(def.w / 1000 - 0.0006, def.h / 1000 - 0.0006, 0.0018, 0.0009, 3).clone();
-    const pos = g.getAttribute('position') as THREE.BufferAttribute;
-    const uv = g.getAttribute('uv') as THREE.BufferAttribute;
-    // atlas: width CM.w - 0.0024 centered at u = 0, covering v ∈ [0, FACE_H]
-    const aw = CM.w - 0.0024;
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i) + def.u / 1000;
-      const y = pos.getY(i) + def.v / 1000;
-      uv.setXY(i, (x + aw / 2) / aw, y / (FACE_H / 1000));
-    }
-    uv.needsUpdate = true;
-    return g;
-  });
-}
-
-function Key({ def, z, material, onKey }: { def: KeyDef; z: number; material: THREE.Material; onKey?: (k: PowerFlexKey) => void }) {
-  const ref = useRef<THREE.Mesh>(null);
+/** Membrane keypad: one pillow mesh (morph target per key) + invisible hit boxes per key. */
+function Keypad({ rect, material, z, onKey }: { rect: [number, number, number, number]; material: THREE.Material; z: number; onKey?: (k: PowerFlexKey) => void }) {
+  const mesh = useRef<THREE.Mesh>(null);
+  const pressed = useRef<boolean[]>(KEYS.map(() => false));
   const [hover, setHover] = useState(false);
-  const pressed = useRef(false);
   useCursor(hover && !!onKey);
+  const geo = keypadGeometry(rect);
+  useLayoutEffect(() => {
+    mesh.current?.updateMorphTargets();
+  }, [geo]);
   useFrame((_, dt) => {
-    const m = ref.current;
-    if (!m) return;
-    const target = z + (pressed.current ? 0.0003 : 0.0009);
-    m.position.z += (target - m.position.z) * Math.min(1, dt * 30);
+    const inf = mesh.current?.morphTargetInfluences;
+    if (!inf) return;
+    const k = Math.min(1, dt * 30);
+    for (let i = 0; i < KEYS.length; i++) {
+      const target = pressed.current[i] ? 1 : 0;
+      if (inf[i] !== target) inf[i] = Math.abs(target - inf[i]!) < 0.01 ? target : inf[i]! + (target - inf[i]!) * k;
+    }
   });
+  useEffect(() => () => void (pressed.current = KEYS.map(() => false)), []);
   return (
-    <mesh
-      ref={ref}
-      geometry={keyGeometry(def)}
-      material={material}
-      position={[def.u / 1000, def.v / 1000, z + 0.0009]}
-      onPointerOver={(e: ThreeEvent<PointerEvent>) => {
-        e.stopPropagation();
-        setHover(true);
-      }}
-      onPointerOut={() => {
-        setHover(false);
-        pressed.current = false;
-      }}
-      onPointerDown={(e: ThreeEvent<PointerEvent>) => {
-        e.stopPropagation();
-        pressed.current = true;
-      }}
-      onPointerUp={(e: ThreeEvent<PointerEvent>) => {
-        e.stopPropagation();
-        if (pressed.current) onKey?.(def.id);
-        pressed.current = false;
-      }}
-    />
-  );
-}
-
-function Pot({ z }: { z: number }) {
-  const knurl = cachedGeometry('pf525-pot', () => {
-    const pts: THREE.Vector2[] = [];
-    pts.push(new THREE.Vector2(0, 0));
-    pts.push(new THREE.Vector2(POT.r / 1000, 0));
-    pts.push(new THREE.Vector2(POT.r / 1000, 0.0032));
-    pts.push(new THREE.Vector2(POT.r / 1000 - 0.0006, 0.0038));
-    pts.push(new THREE.Vector2(0, 0.0038));
-    const g = new THREE.LatheGeometry(pts, 28);
-    g.rotateX(Math.PI / 2);
-    return g;
-  });
-  return (
-    <group position={[POT.u / 1000, POT.v / 1000, z]}>
-      <mesh geometry={knurl} material={materials.plastic('#121314', 0.45)} castShadow />
-      <mesh geometry={box(0.0008, 0.0036, 0.0003)} material={materials.plastic('#e8e8e8', 0.4)} position={[0, 0.0022, 0.0039]} rotation={[0, 0, 0.6]} />
-    </group>
-  );
-}
-
-/** Top-mounted cooling fan: low shroud, dark plenum, 7-blade impeller (spins with the drive) under a grille. */
-function FanAssembly({ W, H, cz, spin }: { W: number; H: number; cz: number; spin: RefObject<THREE.Group | null> }) {
-  const r = Math.min(0.024, (W - 0.02) / 2);
-  const grille = cachedMaterial(
-    'pf525-grille',
-    () => new THREE.MeshStandardMaterial({ color: '#1d1e21', roughness: 0.55, alphaMap: fanGrilleTexture(), alphaTest: 0.5, side: THREE.DoubleSide }),
-  );
-  const blade = cachedGeometry('pf525-fan-blade', () => {
-    const g = new THREE.BoxGeometry(0.0165, 0.0007, 0.0055);
-    g.rotateX(0.38);
-    g.translate(0.0118, 0, 0);
-    return g;
-  });
-  const blades = useMemo(() => Array.from({ length: 7 }, (_, i) => (i / 7) * Math.PI * 2), []);
-  const shroudMat = materials.plastic('#141517', 0.55);
-  return (
-    <group position={[0, H, cz]}>
-      <mesh geometry={cachedGeometry(`pf525-fan-floor:${r}`, () => new THREE.CircleGeometry(r, 32))} material={materials.plastic('#060606', 0.95)} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.0002, 0]} />
-      <mesh geometry={cachedGeometry(`pf525-fan-wall:${r}`, () => new THREE.CylinderGeometry(r + 0.0012, r + 0.0012, 0.003, 40, 1, true))} material={shroudMat} position={[0, 0.0015, 0]} />
-      <mesh geometry={cachedGeometry(`pf525-fan-ring:${r}`, () => new THREE.RingGeometry(r, r + 0.0028, 40))} material={shroudMat} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.003, 0]} />
-      <group ref={spin} position={[0, 0.0013, 0]} scale={[r / 0.021, 1, r / 0.021]}>
-        <mesh geometry={cylinderZ(0.0075, 0.0075, 0.0016, 20)} material={materials.plastic('#2a2c2f', 0.5)} rotation={[Math.PI / 2, 0, 0]} />
-        {blades.map((a) => (
-          <mesh key={a} geometry={blade} material={materials.plastic('#2c2d30', 0.5)} rotation={[0, a, 0]} />
-        ))}
-      </group>
-      <mesh geometry={cachedGeometry(`pf525-grille:${r}`, () => new THREE.CircleGeometry(r, 40))} material={grille} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.0029, 0]} />
-    </group>
-  );
-}
-
-/** EtherNet/IP patch cable plugged into an RJ45 facing down, dropping straight down. */
-function DropCable({ position, length }: { position: [number, number, number]; length: number }) {
-  const cable = cachedGeometry(`pf525-drop:${length.toFixed(3)}`, () => {
-    const curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(0, -0.019, 0),
-      new THREE.Vector3(0, -0.035, 0.002),
-      new THREE.Vector3(0, -0.06, 0.008),
-      new THREE.Vector3(0, -length, 0.014),
-    ]);
-    return new THREE.TubeGeometry(curve, 24, 0.0028, 10, false);
-  });
-  const boot = materials.plastic('#2f7fd8', 0.5);
-  return (
-    <group position={position}>
-      <mesh geometry={box(0.0114, 0.009, 0.0078)} material={cachedMaterial('rj45-plug-clear-pf', () => new THREE.MeshStandardMaterial({ color: '#9fb3c4', roughness: 0.12, transparent: true, opacity: 0.45 }))} position={[0, -0.0035, 0]} />
-      <mesh geometry={roundedBox(0.0122, 0.011, 0.0098, 0.0028)} material={boot} position={[0, -0.013, 0]} castShadow />
-      <mesh geometry={cable} material={boot} castShadow />
+    <group position={[0, 0, z]}>
+      <mesh ref={mesh} geometry={geo} material={material} receiveShadow />
+      {KEYS.map((k, i) => (
+        <mesh
+          key={k.id}
+          geometry={box(k.w / 1000, k.h / 1000, 0.002)}
+          material={hitMaterial()}
+          position={[k.u / 1000, k.v / 1000, 0.0006]}
+          onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+            e.stopPropagation();
+            setHover(true);
+          }}
+          onPointerOut={() => {
+            setHover(false);
+            pressed.current[i] = false;
+          }}
+          onPointerDown={(e: ThreeEvent<PointerEvent>) => {
+            e.stopPropagation();
+            pressed.current[i] = true;
+          }}
+          onPointerUp={(e: ThreeEvent<PointerEvent>) => {
+            e.stopPropagation();
+            if (pressed.current[i]) onKey?.(k.id);
+            pressed.current[i] = false;
+          }}
+        />
+      ))}
     </group>
   );
 }

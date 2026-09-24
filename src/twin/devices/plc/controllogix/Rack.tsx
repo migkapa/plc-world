@@ -61,6 +61,7 @@ function SlotModule({
   highlighted,
   onSelect,
   ip,
+  sideLabel,
 }: {
   module: ModuleConfig;
   live: RackLive;
@@ -69,6 +70,8 @@ function SlotModule({
   highlighted: boolean;
   onSelect?: () => void;
   ip: string;
+  /** Only the module in the last slot shows its side label (the others are hidden by their neighbours). */
+  sideLabel: boolean;
 }) {
   const { slot, catalog } = module;
   const kind = catalogKind(catalog);
@@ -91,10 +94,11 @@ function SlotModule({
           onKeySwitch={getters.key}
           onSelect={onSelect}
           highlighted={highlighted}
+          sideLabel={sideLabel}
         />
       );
     case 'COMM':
-      return <Comm1756 catalog={catalog as CommCatalog1756} ipAddress={ip} onSelect={onSelect} highlighted={highlighted} />;
+      return <Comm1756 catalog={catalog as CommCatalog1756} ipAddress={ip} onSelect={onSelect} highlighted={highlighted} sideLabel={sideLabel} />;
     case 'DI':
     case 'DO':
       return (
@@ -106,6 +110,7 @@ function SlotModule({
           wired={wired}
           onSelect={onSelect}
           highlighted={highlighted}
+          sideLabel={sideLabel}
         />
       );
     case 'AI':
@@ -118,6 +123,7 @@ function SlotModule({
           wired={wired}
           onSelect={onSelect}
           highlighted={highlighted}
+          sideLabel={sideLabel}
         />
       );
     default:
@@ -189,6 +195,7 @@ export function ControlLogixRack({
                   highlighted={highlightSlot === slot}
                   onSelect={selectFns[slot]}
                   ip={ipForSlot ? ipForSlot(slot) : `192.168.1.${10 + slot}`}
+                  sideLabel={slot === layout.slots - 1}
                 />
               ) : (
                 <SlotFiller1756N2 onSelect={selectFns[slot]} highlighted={highlightSlot === slot} />

@@ -4,7 +4,7 @@
  */
 import type { Placement } from '../../../contracts';
 import { MOD_H, MOD_W } from './dims';
-import { MAT, Selectable, boxAt, cachedGeo, merge, rboxAt } from './shared';
+import { MAT, Selectable, boxAt, cachedGeo, lockingTabParts, merge, rboxAt } from './shared';
 
 export interface SlotFiller1756N2Props extends Placement {
   onSelect?: () => void;
@@ -14,7 +14,7 @@ export interface SlotFiller1756N2Props extends Placement {
 const FRONT_Z = 0.1215;
 
 function fillerGeometry() {
-  return cachedGeo('clx:n2', () => {
+  return cachedGeo('clx:n2:v2', () => {
     const w = MOD_W - 0.0006;
     const h = MOD_H - 0.0012;
     const parts = [
@@ -28,6 +28,7 @@ function fillerGeometry() {
       boxAt(0.0012, MOD_H - 0.034, 0.0008, -w / 2 + 0.0026, MOD_H / 2, FRONT_Z + 0.0004),
       boxAt(0.0012, MOD_H - 0.034, 0.0008, w / 2 - 0.0026, MOD_H / 2, FRONT_Z + 0.0004),
     ];
+    parts.push(...lockingTabParts(MOD_H));
     // finger grips (top & bottom)
     for (let i = 0; i < 4; i++) {
       parts.push(rboxAt(0.016, 0.0009, 0.0012, 0, MOD_H - 0.005 - i * 0.0022, FRONT_Z + 0.0005, 0.0003));

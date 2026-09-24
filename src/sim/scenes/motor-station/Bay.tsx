@@ -4,10 +4,10 @@
  * curtain), steel columns, roof purlins, LED high-bays, overhead ladder cable tray on wall brackets and
  * trapeze hangers, a pallet rack, discharge gaylord, safety signage and small props. Static.
  */
-import { useMemo } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Vec3 } from '../../../twin/contracts';
-import { Boxes, type BoxState } from '../../../twin/devices';
+import { boxGeometry, boxMaterial, type BoxState } from '../../../twin/devices';
 import {
   FONT,
   Instances,
@@ -30,6 +30,48 @@ import {
   repeatedTexture,
 } from '../trainer/kit';
 import { BAY, BIN, CABINET, CONV, OPENING, TRAY } from './layout';
+
+/**
+ * Static cardboard boxes: matrices composed ONCE into two frustum-culled instanced meshes (short / tall), unlike
+ * the animated <Boxes> which recomposes and re-uploads every instance each frame.
+ */
+function StaticBoxes({ boxes, castShadow = true }: { boxes: readonly BoxState[]; castShadow?: boolean }) {
+  const sRef = useRef<THREE.InstancedMesh>(null);
+  const tRef = useRef<THREE.InstancedMesh>(null);
+  const short = useMemo(() => boxes.filter((b) => !b.tall), [boxes]);
+  const tall = useMemo(() => boxes.filter((b) => b.tall), [boxes]);
+  useLayoutEffect(() => {
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const e = new THREE.Euler();
+    const p = new THREE.Vector3();
+    const one = new THREE.Vector3(1, 1, 1);
+    const c = new THREE.Color();
+    for (const [mesh, list] of [
+      [sRef.current, short],
+      [tRef.current, tall],
+    ] as const) {
+      if (!mesh) continue;
+      list.forEach((b, i) => {
+        e.set(b.rotX ?? 0, b.rotY ?? 0, b.rotZ ?? 0);
+        m.compose(p.set(b.x, b.y ?? 0, b.z ?? 0), q.setFromEuler(e), one);
+        mesh.setMatrixAt(i, m);
+        const v = 0.9 + (((b.id ?? i) * 37) % 11) / 100;
+        mesh.setColorAt(i, c.setRGB(v, v * 0.985, v * 0.97));
+      });
+      mesh.count = list.length;
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.computeBoundingSphere();
+    }
+  }, [short, tall]);
+  return (
+    <group>
+      {short.length > 0 && <instancedMesh ref={sRef} args={[boxGeometry('short'), boxMaterial('short'), short.length]} castShadow={castShadow} receiveShadow />}
+      {tall.length > 0 && <instancedMesh ref={tRef} args={[boxGeometry('tall'), boxMaterial('tall'), tall.length]} castShadow={castShadow} receiveShadow />}
+    </group>
+  );
+}
 
 const WALL_LOW = '#6f7f8c';
 const WALL_HIGH = '#d7d8d3';
@@ -255,8 +297,8 @@ function PalletRack() {
     <group>
       <Instances geometry={KBOX()} material={km.paint('#1f4f9c', 0.45, 0.4)} items={uprights} />
       <Instances geometry={KBOX()} material={km.paint('#e35d12', 0.45, 0.4)} items={beams} />
-      <Instances geometry={KBOX()} material={km.paint('#a4865e', 0.85)} items={pallets} />
-      <Boxes getBoxes={() => boxes} maxCount={260} />
+      <Instances geometry={KBOX()} material={km.paint('#a4865e', 0.85)} items={pallets} castShadow={false} />
+      <StaticBoxes boxes={boxes} castShadow={false} />
     </group>
   );
 }
@@ -288,7 +330,7 @@ function DischargeBin() {
         <mesh key={px} geometry={KBOX()} material={kraft} position={[px, y0 + h / 2, z]} scale={[0.008, h, d]} castShadow receiveShadow />
       ))}
       <mesh geometry={KPLANE()} material={inner} rotation={[-Math.PI / 2, 0, 0]} position={[x, y0 + h - 0.36, z]} scale={[w - 0.02, d - 0.02, 1]} />
-      <Boxes getBoxes={() => piled} maxCount={4} />
+      <StaticBoxes boxes={piled} />
       <SignPlate
         id="bin-label"
         size={[0.22, 0.12]}
@@ -384,6 +426,12 @@ export function MotorBay() {
     </group>
   );
 }
+
+/** The gaylord (for the tag chips). */
+export const BIN_OCCLUDER: [Vec3, Vec3] = [
+  [BIN.x - BIN.w / 2, 0, BIN.z - BIN.d / 2],
+  [BIN.x + BIN.w / 2, BIN.pallet + BIN.h, BIN.z + BIN.d / 2],
+];
 
 /** Coarse occluders (for the tag chips). */
 export const BAY_OCCLUDERS: Array<[Vec3, Vec3]> = [

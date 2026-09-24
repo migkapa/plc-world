@@ -18,7 +18,10 @@ export const ROOM = {
   window: { z0: 0.35, z1: 1.95, y0: 0.95, y1: 2.3 },
 } as const;
 
-const WALL = '#dfe0db';
+const WALL = '#d3cfc6';
+/** Lower wall band (behind the bench) and chair rail: gives the bench a darker backdrop. */
+const DADO = '#5d7282';
+const DADO_H = 1.0;
 const SKIRT = '#3b3f44';
 
 // ---------------------------------------------------------------------------
@@ -26,7 +29,7 @@ const SKIRT = '#3b3f44';
 // ---------------------------------------------------------------------------
 
 function whiteboardTexture() {
-  return canvasTexture('wb-ladder', 2048, 1280, (ctx, w, h) => {
+  return canvasTexture('wb-ladder-v2', 2048, 1280, (ctx, w, h) => {
     const rnd = mulberry(31);
     ctx.fillStyle = '#fbfcfc';
     ctx.fillRect(0, 0, w, h);
@@ -56,7 +59,7 @@ function whiteboardTexture() {
     // title
     ctx.fillStyle = black;
     ctx.font = `700 70px ${hand}`;
-    ctx.fillText('LAB 2 - Start / Stop seal-in', 90, 120);
+    ctx.fillText('LAB 2 - Start / Stop seal-in (bench)', 90, 120);
     ctx.strokeStyle = black;
     ctx.lineWidth = 5;
     line(90, 140, 960, 146);
@@ -94,7 +97,7 @@ function whiteboardTexture() {
       ctx.fillText(label, x + 30, y - 58);
       ctx.textAlign = 'left';
     };
-    // rung 0: Start + seal-in branch, Stop (N.C. wired -> XIC), OL, coil
+    // rung 0: seal-in with the bench buttons: PB_Green starts, Light_0 seals in, PB_Red (N.C.) stops
     let y = 380;
     ctx.fillStyle = black;
     ctx.font = `600 34px ${hand}`;
@@ -102,23 +105,19 @@ function whiteboardTexture() {
     ctx.strokeStyle = blue;
     ctx.lineWidth = 6;
     line(L, y, 270, y);
-    contact(270, y, false, 'Start_PB');
+    contact(270, y, false, 'PB_Green');
     line(314, y, 520, y);
-    // branch
+    // seal-in branch
     line(230, y, 230, y + 170);
     line(230, y + 170, 270, y + 170);
-    contact(270, y + 170, false, 'Motor_Aux');
+    contact(270, y + 170, false, 'Light_0');
     line(314, y + 170, 470, y + 170);
     line(470, y + 170, 470, y);
-    contact(520, y, false, 'Stop_PB');
-    line(564, y, 700, y);
-    contact(700, y, false, 'OL_OK');
-    line(744, y, 900, y);
-    contact(900, y, false, 'EStop_OK');
-    line(944, y, 1200, y);
-    coil(1200, y, 'Motor_Starter');
+    contact(520, y, false, 'PB_Red');
+    line(564, y, 1200, y);
+    coil(1200, y, 'Light_0');
     line(1262, y, R, y);
-    // note about N.C. stop
+    // note about the N.C. stop button
     ctx.strokeStyle = red;
     ctx.lineWidth = 5;
     ctx.beginPath();
@@ -127,16 +126,20 @@ function whiteboardTexture() {
     ctx.fillStyle = red;
     ctx.font = `600 34px ${hand}`;
     ctx.fillText('N.C. button -> XIC !', 470, y - 120);
-    // rung 1: run light
+    ctx.fillStyle = green;
+    ctx.fillText('seal-in', 250, y + 250);
+    // rung 1: both black buttons -> buzzer
     y = 760;
     ctx.fillStyle = black;
     ctx.fillText('1', L - 60, y + 12);
     ctx.strokeStyle = blue;
     ctx.lineWidth = 6;
     line(L, y, 270, y);
-    contact(270, y, false, 'Motor_Aux');
-    line(314, y, 1200, y);
-    coil(1200, y, 'Run_Light');
+    contact(270, y, false, 'PB_Black_1');
+    line(314, y, 520, y);
+    contact(520, y, false, 'PB_Black_2');
+    line(564, y, 1200, y);
+    coil(1200, y, 'Buzzer');
     line(1262, y, R, y);
     // rung 2: XIO example
     y = 960;
@@ -155,13 +158,14 @@ function whiteboardTexture() {
     ctx.fillText('XIC = "examine if closed"', 1510, 300);
     ctx.fillText('XIO = "examine if open"', 1510, 370);
     ctx.fillStyle = black;
-    ctx.font = `600 38px ${hand}`;
-    ctx.fillText('Switch_0 = Local:1:I.Data.0', 1510, 500);
-    ctx.fillText('Light_0  = Local:2:O.Data.0', 1510, 560);
-    ctx.fillText('Pot_1    = Local:3:I.Ch0Data', 1510, 620);
+    ctx.font = `600 36px ${hand}`;
+    ctx.fillText('PB_Green = Local:1:I.Data.8', 1510, 480);
+    ctx.fillText('PB_Red   = Local:1:I.Data.9 (N.C.)', 1510, 535);
+    ctx.fillText('Light_0  = Local:2:O.Data.0', 1510, 590);
+    ctx.fillText('Buzzer   = Local:2:O.Data.8', 1510, 645);
     ctx.fillStyle = red;
     ctx.font = `700 46px ${hand}`;
-    ctx.fillText('Key: REM -> RUN', 1510, 760);
+    ctx.fillText('Key: REM -> RUN', 1510, 770);
     ctx.fillStyle = blue;
     ctx.font = `600 38px ${hand}`;
     ctx.fillText('Quiz Fri: timers (TON)', 1510, 900);
@@ -265,6 +269,56 @@ function Window() {
       {/* blinds (partially lowered) */}
       <Instances geometry={slatGeo} material={km.paint('#f2f2ef', 0.5)} items={slats} castShadow={false} />
       <Slab min={[x + 0.035, y1 - 0.02, z0]} max={[x + 0.085, y1 + 0.03, z1]} material={km.paint('#f2f2ef', 0.5)} />
+    </group>
+  );
+}
+
+/** Soft sun patch cast through the window onto the floor (additive decal, no extra shadow pass). */
+function sunPatchTexture() {
+  return canvasTexture(
+    'lab-sunpatch',
+    256,
+    256,
+    (ctx, w, h) => {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, w, h);
+      // two panes (mullion shadow in the middle) with soft edges
+      ctx.filter = 'blur(10px)';
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(w * 0.1, h * 0.12, w * 0.8, h * 0.34);
+      ctx.fillRect(w * 0.1, h * 0.54, w * 0.8, h * 0.34);
+      ctx.filter = 'none';
+      // blind slat stripes
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      for (let x = w * 0.12; x < w * 0.9; x += w * 0.07) ctx.fillRect(x, 0, w * 0.018, h);
+    },
+    { color: false },
+  );
+}
+
+/**
+ * Warm daylight through the window: a directional light from outside the left wall (no shadows: the main
+ * light owns them) plus a sun-patch decal on the floor in front of the window.
+ */
+export function WindowLight() {
+  const { z0, z1 } = ROOM.window;
+  const mat = kmat(
+    'k:lab-sunpatch',
+    () =>
+      new THREE.MeshBasicMaterial({
+        map: sunPatchTexture(),
+        color: new THREE.Color('#ffd9a0').multiplyScalar(0.34),
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+      }),
+  );
+  return (
+    <group>
+      <directionalLight position={[ROOM.leftX - 3, 3.0, (z0 + z1) / 2 + 0.6]} intensity={1.15} color="#ffe2b8" />
+      <mesh geometry={KPLANE()} material={mat} rotation={[-Math.PI / 2, 0, 0]} position={[ROOM.leftX + 1.25, 0.003, (z0 + z1) / 2 + 0.25]} scale={[1.9, z1 - z0 + 0.3, 1]} />
     </group>
   );
 }
@@ -374,8 +428,10 @@ export function LabRoom() {
   return (
     <group>
       <TexturedFloor center={[cx, cz]} size={[w, d]} texture={vinylTileTexture()} tile={1.2} roughness={0.42} />
-      {/* back wall */}
-      <TexturedWall position={[cx, height / 2, backZ]} size={[w, height]} texture={plaster} tile={[1.5, 1.5]} color={WALL} />
+      {/* back wall: painted dado band behind the bench + chair rail */}
+      <TexturedWall position={[cx, (height + DADO_H) / 2, backZ]} size={[w, height - DADO_H]} texture={plaster} tile={[1.5, 1.5]} color={WALL} />
+      <TexturedWall position={[cx, DADO_H / 2, backZ]} size={[w, DADO_H]} texture={plaster} tile={[1.5, 1.5]} color={DADO} />
+      <Slab min={[leftX, DADO_H - 0.012, backZ]} max={[rightX, DADO_H + 0.012, backZ + 0.014]} material={km.paint('#e9e6df', 0.45)} />
       {/* left wall with window opening (4 pieces) */}
       <group>
         <TexturedWall position={[leftX, height / 2, (backZ + win.z0) / 2]} rotation={[0, Math.PI / 2, 0]} size={[win.z0 - backZ, height]} texture={plaster} tile={[1.5, 1.5]} color={WALL} />
@@ -400,7 +456,7 @@ export function LabRoom() {
         <CeilingPanel key={`${x}:${z}`} position={[x!, height - 0.02, z!]} />
       ))}
       <Window />
-      <Whiteboard position={[2.15, 1.55, backZ]} />
+      <Whiteboard position={[2.45, 1.55, backZ]} />
       <StorageCabinet position={[-2.15, 0, backZ + 0.24]} />
       <LabStool position={[-0.05, 0, 0.78]} />
       <WallOutlet position={[-1.45, 0.38, backZ]} />

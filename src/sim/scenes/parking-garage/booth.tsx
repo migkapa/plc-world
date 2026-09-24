@@ -25,7 +25,7 @@ import {
 import { rackLiveFromController } from '../../../twin/live';
 import type { SimRuntime } from '../../types';
 import { canvasTexture, Conduit, FONT, IoTag, ioLine, kgeo, kmat, textLine } from '../trainer/kit';
-import { KeySwitch800F, StaticInstances, type InstXf } from '../traffic-light/cityKit';
+import { KeySwitch800F, StaticInstances, useDisposeOnUnmount, type InstXf } from '../traffic-light/cityKit';
 import { CURB, SITE } from './site';
 
 const B = SITE.booth;
@@ -96,6 +96,7 @@ function BoothShell() {
     });
     return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.5, emissive: '#ffffff', emissiveMap: tex, emissiveIntensity: 0.15 });
   }, []);
+  useDisposeOnUnmount(useMemo(() => [fascia], [fascia]));
   return (
     <group>
       <mesh position={[(B.x0 + B.x1) / 2, FLOOR - 0.005, (B.z0 + B.z1) / 2]} rotation={[-Math.PI / 2, 0, 0]} material={floorMat()} receiveShadow>
@@ -232,11 +233,11 @@ export function Booth({ runtime }: { runtime: SimRuntime }) {
           <boxGeometry args={[0.16, 0.08, 0.12]} />
         </mesh>
         <group position={[0, 0.085, 0]} rotation={[-0.9, 0, 0]}>
-          <mesh position={[0, 0, -0.004]} material={panelMat()} castShadow>
+          <mesh position={[0, 0, -0.004]} material={kmat('pg:consoleFace', () => new THREE.MeshStandardMaterial({ color: '#3b4148', roughness: 0.6, metalness: 0.3 }))} castShadow>
             <boxGeometry args={[0.15, 0.13, 0.008]} />
           </mesh>
           <IoTag position={[0, -0.01, 0]} size={[0.06, 0.08, 0.06]} center={[0, 0.008, 0.02]} anchor={[0, 0.06, 0.05]} title="Attendant key switch, spring return" lines={[ioLine(runtime, 'Reset_Key')]}>
-            <KeySwitch800F legend={['COUNT RESET']} positions={['RUN', 'RESET']} getOn={key.get} onPress={key.press} onRelease={key.release} />
+            <KeySwitch800F legend={['COUNT RESET']} positions={['RUN', 'RESET']} getOn={key.get} onPress={key.press} onRelease={key.release} scale={1.3} />
           </IoTag>
         </group>
       </group>

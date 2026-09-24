@@ -27,7 +27,7 @@ import {
 } from '../../../twin/devices';
 import type { SceneViewProps, SimRuntime } from '../../types';
 import { audioAllowed, canvasTexture, FONT, hazardTexture, infoLine, IoTag, ioLine, kgeo, kmat, TagLayer, useSfxLoops } from '../trainer/kit';
-import { useHoverCursor } from '../traffic-light/cityKit';
+import { useDisposeOnUnmount, useHoverCursor } from '../traffic-light/cityKit';
 import { Booth } from './booth';
 import { GARAGE_LAYOUT as Y, type GarageCar, type ParkingGarageState } from './logic';
 import { CURB, GarageSite, SITE, SITE_OCCLUDERS } from './site';
@@ -48,7 +48,7 @@ const PE_ENTRY_X = SITE.westIsland.x1 - 0.12;
 const PE_EXIT_X = SITE.eastIsland.x0 + 0.12;
 const PE_BEAM = PE_ENTRY_X * -1 - (SITE.centerIsland.x1 - 0.12);
 const TICKET: Vec3 = [-5.12, CURB, Y.entryWaitZ - 0.35];
-const DISPATCH: Vec3 = [-13.7, CURB, 15.2];
+const DISPATCH: Vec3 = [-13.7, CURB, 13.35];
 
 // ---------------------------------------------------------------------------
 // Gates, eyes, loops, ticket column, signs
@@ -192,6 +192,7 @@ function dispatchSignTexture() {
 function DispatchButton({ runtime, id, color, position }: { runtime: SimRuntime; id: string; color: string; position: Vec3 }) {
   const cap = useRef<THREE.Mesh>(null);
   const mat = useMemo(() => new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.6, roughness: 0.3, toneMapped: false }), [color]);
+  useDisposeOnUnmount(useMemo(() => [mat], [mat]));
   const { hovered, handlers } = useHoverCursor(true);
   useFrame(() => {
     const on = runtime.getControl(id) === true;
@@ -228,6 +229,7 @@ function DispatchConsole({ state, runtime }: P) {
     t.needsUpdate = true;
     return new THREE.MeshStandardMaterial({ map: t, roughness: 0.6 });
   }, []);
+  useDisposeOnUnmount(useMemo(() => [hazard.map, hazard], [hazard]));
   const lines = useMemo(
     () => [
       infoLine('Cars inside', () => state.carsInside, ` / ${Y.capacity}`),

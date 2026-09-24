@@ -7,12 +7,14 @@
 import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { Vec3 } from '../../../twin/contracts';
-import { FONT, Instances, KBOX, KCYL, Slab, canvasTexture, kgeo, km, kmat } from '../trainer/kit';
+import { FONT, Instances, KBOX, KCYL, Slab, canvasTexture, fitFont, kgeo, km, kmat } from '../trainer/kit';
 import { AXIS_Y, DRIVE, FRAME_X, HEAD_Z, PULLEY_R } from './layout';
 
 export const MACHINE_BLUE = '#2f5f8f';
-const CAST = '#3b5875';
+/** Gearbox paint: grey-green, clearly different from the blue motor. */
+const GEARBOX = '#5f6d64';
 const YELLOW = '#f2c200';
 
 /** Cylinder along X (unit, centered) scaled to radius r and length l. */
@@ -83,19 +85,22 @@ function perforatedYellow() {
 }
 
 function reducerPlateTexture() {
-  return canvasTexture('ms-reducer-plate', 320, 160, (ctx, w, h) => {
-    ctx.fillStyle = '#c9cdd0';
+  return canvasTexture('ms-reducer-plate-v2', 320, 170, (ctx, w, h) => {
+    ctx.fillStyle = '#d3d6d8';
     ctx.fillRect(0, 0, w, h);
     ctx.strokeStyle = '#333';
     ctx.lineWidth = 4;
     ctx.strokeRect(4, 4, w - 8, h - 8);
     ctx.fillStyle = '#1b1d20';
-    ctx.font = `800 26px ${FONT}`;
-    ctx.fillText('HELICAL GEAR REDUCER', 16, 38);
-    ctx.font = `600 21px ${FONT}`;
-    ctx.fillText(`RATIO  ${DRIVE.ratio} : 1`, 16, 72);
-    ctx.fillText('INPUT 5 HP @ 1750 RPM', 16, 102);
-    ctx.fillText('OIL  ISO VG 220  ·  3.2 L', 16, 132);
+    ctx.textBaseline = 'middle';
+    const line = (t: string, y: number, px: number, weight = 600) => {
+      fitFont(ctx, t, w - 32, px, weight, FONT);
+      ctx.fillText(t, 16, y);
+    };
+    line(`GEARBOX  ${DRIVE.ratio}:1`, 36, 34, 800);
+    line('HELICAL INLINE · FOOT MOUNT', 76, 22);
+    line('IN 5 HP @ 1750 RPM · OUT 77 RPM', 108, 22);
+    line('OIL ISO VG 220 · 3.2 L', 140, 22);
   });
 }
 
@@ -149,10 +154,13 @@ export function DrivePlatform() {
   );
 }
 
-/** Inline helical reducer, coaxial input/output along X (input toward +X). */
+/**
+ * Inline helical gearbox (foot mounted, coaxial input/output along X, input toward +X): boxy grey-green cast
+ * housing with cooling ribs, a round output flange toward the conveyor, input bearing cover toward the motor.
+ */
 export function InlineReducer({ getInputAngle, getOutputAngle }: { getInputAngle: () => number; getOutputAngle: () => number }) {
   const r = DRIVE.reducer;
-  const cast = km.paint(CAST, 0.55, 0.25);
+  const cast = km.paint(GEARBOX, 0.55, 0.25);
   const cx = (r.x0 + r.x1) / 2;
   const inHub = useRef<THREE.Group>(null);
   const outHub = useRef<THREE.Group>(null);
@@ -160,32 +168,47 @@ export function InlineReducer({ getInputAngle, getOutputAngle }: { getInputAngle
     if (inHub.current) inHub.current.rotation.x = getInputAngle();
     if (outHub.current) outHub.current.rotation.x = getOutputAngle();
   });
-  const ribs = useMemo(() => [-0.06, -0.03, 0, 0.03, 0.06].map((z) => ({ p: [cx, AXIS_Y + r.h / 2 + 0.006, HEAD_Z + z] as Vec3, s: [r.x1 - r.x0 - 0.03, 0.012, 0.006] as Vec3 })), [cx, r]);
-  const housingGeo = kgeo('ms:reducer-housing', () => {
-    const g = new THREE.CylinderGeometry(r.h / 2, r.h / 2, r.x1 - r.x0, 40);
-    g.rotateZ(Math.PI / 2);
-    g.scale(1, 1, r.d / r.h);
-    return g;
-  });
+  const bx0 = r.x0 + 0.022;
+  const bx1 = r.x1 - 0.008;
+  const by0 = DRIVE.deck.top + 0.014;
+  const by1 = AXIS_Y + 0.1;
+  const bz = 0.082;
+  const bodyGeo = kgeo('ms:gearbox-body', () => new RoundedBoxGeometry(bx1 - bx0, by1 - by0, 2 * bz, 3, 0.014));
+  const ribs = useMemo(() => {
+    const out: { p: Vec3; s: Vec3 }[] = [];
+    // vertical ribs on both sides + two across the top
+    // (the operator side keeps a flat field for the nameplate: ribs only near its edges)
+    for (const x of [0.5, 0.545, 0.59]) out.push({ p: [x, (by0 + by1) / 2, HEAD_Z - (bz + 0.004)], s: [0.007, by1 - by0 - 0.03, 0.01] });
+    for (const x of [0.482, 0.608]) out.push({ p: [x, (by0 + by1) / 2, HEAD_Z + bz + 0.004], s: [0.007, by1 - by0 - 0.03, 0.01] });
+    for (const x of [0.5, 0.59]) out.push({ p: [x, by1 + 0.004, HEAD_Z], s: [0.007, 0.01, 2 * bz - 0.03] });
+    return out;
+  }, [by0, by1]);
+  const flangeBolts = useMemo(
+    () =>
+      Array.from({ length: 6 }, (_, i) => {
+        const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+        return { p: [r.x0 + 0.004, AXIS_Y + Math.cos(a) * 0.062, HEAD_Z + Math.sin(a) * 0.062] as Vec3, r: [0, 0, Math.PI / 2] as Vec3, s: [0.012, 0.008, 0.012] as Vec3 };
+      }),
+    [r.x0],
+  );
   return (
     <group>
-      {/* housing: elliptic barrel + square base with feet */}
-      <mesh geometry={housingGeo} material={cast} position={[cx, AXIS_Y, HEAD_Z]} castShadow receiveShadow />
-      <Slab min={[r.x0 + 0.01, DRIVE.deck.top + 0.012, HEAD_Z - r.d / 2 + 0.01]} max={[r.x1 - 0.01, AXIS_Y, HEAD_Z + r.d / 2 - 0.01]} material={cast} castShadow />
-      <Slab min={[r.x0 + 0.02, DRIVE.deck.top, HEAD_Z - 0.13]} max={[r.x1 - 0.02, DRIVE.deck.top + 0.016, HEAD_Z + 0.13]} material={cast} castShadow />
-      <Instances geometry={KBOX()} material={cast} items={ribs} />
-      {/* output (−X) and input (+X) bearing bosses + seal caps */}
-      <mesh {...cylX(0.078, 0.03)} material={cast} position={[r.x0 - 0.012, AXIS_Y, HEAD_Z]} castShadow />
-      <mesh {...cylX(0.042, 0.016)} material={km.metal('#8f969c', 0.4)} position={[r.x0 - 0.034, AXIS_Y, HEAD_Z]} />
-      <mesh {...cylX(0.058, 0.026)} material={cast} position={[r.x1 + 0.011, AXIS_Y, HEAD_Z]} castShadow />
-      <mesh {...cylX(0.03, 0.012)} material={km.metal('#8f969c', 0.4)} position={[r.x1 + 0.03, AXIS_Y, HEAD_Z]} />
-      {/* breather, drain & level plug, eye bolt */}
-      <mesh geometry={KCYL()} material={km.plastic('#d8b400', 0.5)} scale={[0.018, 0.02, 0.018]} position={[cx + 0.05, AXIS_Y + r.h / 2 + 0.016, HEAD_Z + 0.04]} />
-      <mesh geometry={KCYL()} material={km.metal('#9aa0a6', 0.4)} rotation={[Math.PI / 2, 0, 0]} scale={[0.02, 0.01, 0.02]} position={[cx - 0.05, AXIS_Y - 0.06, HEAD_Z + r.d / 2 + 0.002]} />
-      <mesh geometry={KCYL()} material={kmat('ms:sightglass', () => new THREE.MeshStandardMaterial({ color: '#c88a22', roughness: 0.1, metalness: 0.1, emissive: '#3a2400' }))} rotation={[Math.PI / 2, 0, 0]} scale={[0.018, 0.008, 0.018]} position={[cx + 0.05, AXIS_Y - 0.02, HEAD_Z + r.d / 2 + 0.003]} />
-      <mesh geometry={kgeo('ms:eye', () => new THREE.TorusGeometry(0.016, 0.005, 8, 20))} material={km.metal('#c2c6ca', 0.35)} position={[cx - 0.05, AXIS_Y + r.h / 2 + 0.035, HEAD_Z]} castShadow />
+      {/* housing + ribs + feet */}
+      <mesh geometry={bodyGeo} material={cast} position={[(bx0 + bx1) / 2, (by0 + by1) / 2, HEAD_Z]} castShadow receiveShadow />
+      <Instances geometry={KBOX()} material={cast} items={ribs} castShadow={false} />
+      <Slab min={[bx0 - 0.004, DRIVE.deck.top, HEAD_Z - 0.115]} max={[bx1 + 0.004, DRIVE.deck.top + 0.016, HEAD_Z + 0.115]} material={cast} castShadow />
+      {/* output flange (toward the conveyor) with its bolt circle, input bearing cover (toward the motor) */}
+      <mesh {...cylX(0.078, 0.022)} material={cast} position={[r.x0 + 0.013, AXIS_Y, HEAD_Z]} castShadow />
+      <Instances geometry={KCYL()} material={km.metal('#9aa0a6', 0.4)} items={flangeBolts} castShadow={false} />
+      <mesh {...cylX(0.03, 0.012)} material={km.metal('#8f969c', 0.4)} position={[r.x0 - 0.004, AXIS_Y, HEAD_Z]} />
+      <mesh {...cylX(0.05, 0.02)} material={cast} position={[r.x1 + 0.004, AXIS_Y, HEAD_Z]} castShadow />
+      <mesh {...cylX(0.026, 0.012)} material={km.metal('#8f969c', 0.4)} position={[r.x1 + 0.019, AXIS_Y, HEAD_Z]} />
+      {/* breather, oil sight glass, drain plug */}
+      <mesh geometry={KCYL()} material={km.plastic('#d8b400', 0.5)} scale={[0.018, 0.02, 0.018]} position={[cx + 0.03, by1 + 0.01, HEAD_Z + 0.04]} />
+      <mesh geometry={KCYL()} material={kmat('ms:sightglass', () => new THREE.MeshStandardMaterial({ color: '#c88a22', roughness: 0.1, metalness: 0.1, emissive: '#3a2400' }))} rotation={[Math.PI / 2, 0, 0]} scale={[0.02, 0.008, 0.02]} position={[cx + 0.03, AXIS_Y - 0.048, HEAD_Z + bz + 0.003]} />
+      <mesh geometry={KCYL()} material={km.metal('#9aa0a6', 0.4)} rotation={[Math.PI / 2, 0, 0]} scale={[0.018, 0.01, 0.018]} position={[cx - 0.04, by0 + 0.02, HEAD_Z + bz + 0.002]} />
       {/* nameplate on the operator side */}
-      <mesh geometry={KBOX()} material={km.label(reducerPlateTexture(), 0.4)} scale={[0.1, 0.05, 0.001]} position={[cx - 0.01, AXIS_Y + 0.035, HEAD_Z + r.d / 2 * 0.93 + 0.004]} />
+      <mesh geometry={KBOX()} material={km.label(reducerPlateTexture(), 0.4)} scale={[0.1, 0.053, 0.001]} position={[cx - 0.012, AXIS_Y + 0.035, HEAD_Z + bz + 0.0015]} />
       {/* input shaft + reducer-side jaw hub (spins with the motor) */}
       <group ref={inHub} position={[0, AXIS_Y, HEAD_Z]}>
         <mesh {...cylX(0.014, 0.05)} material={km.metal('#cfd3d6', 0.25)} position={[r.x1 + 0.06, 0, 0]} />

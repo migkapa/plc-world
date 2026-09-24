@@ -15,7 +15,7 @@ import * as THREE from 'three';
 import type { Vec3 } from '../../../twin/contracts';
 import { GroundSlab, ParkingSpace, RoadSegment, roadMats } from '../../../twin/devices';
 import { canvasTexture, FONT, kgeo, kmat } from '../trainer/kit';
-import { Bollards, Buildings, GroundPlane, PullBoxes, SkyDome, StaticInstances, StreetLights, Trees, type BuildingSpec, type InstXf } from '../traffic-light/cityKit';
+import { Bollards, Buildings, GroundPlane, PullBoxes, SkyDome, StaticInstances, StreetLights, Trees, useDisposeOnUnmount, type BuildingSpec, type InstXf } from '../traffic-light/cityKit';
 import { GARAGE_LAYOUT as Y } from './logic';
 
 export const CURB = 0.15;
@@ -155,6 +155,7 @@ function Stripes({ rects, color }: { rects: [number, number, number, number][]; 
     g.computeVertexNormals();
     return g;
   }, [JSON.stringify(rects)]); // eslint-disable-line react-hooks/exhaustive-deps
+  useDisposeOnUnmount(useMemo(() => [geo], [geo]));
   const mat = color === 'yellow' ? roadMats.yellow() : roadMats.white();
   return <mesh geometry={geo} material={mat} receiveShadow />;
 }
@@ -255,6 +256,7 @@ function Canopy() {
     });
     return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.5, emissive: '#ffffff', emissiveMap: tex, emissiveIntensity: 0.12 });
   }, []);
+  useDisposeOnUnmount(useMemo(() => [fascia], [fascia]));
   const fw = c.x1 - c.x0;
   return (
     <group>

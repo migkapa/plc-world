@@ -31,6 +31,11 @@ export function useLatest<T>(v: T) {
   return r;
 }
 
+/** Dispose per-mount GPU resources (materials, geometries, cloned textures) on unmount. */
+export function useDisposeOnUnmount(items: ReadonlyArray<{ dispose: () => void } | null | undefined>) {
+  useEffect(() => () => items.forEach((i) => i?.dispose()), [items]);
+}
+
 /** Pointer cursor + hover flag for a clickable custom mesh. */
 export function useHoverCursor(enabled = true) {
   const gl = useThree((s) => s.gl);
@@ -110,7 +115,13 @@ export function GroundPlane({ size = 700, y = -0.04, tile = 6, color = '#ffffff'
     t.needsUpdate = true;
     return new THREE.MeshStandardMaterial({ map: t, color, roughness: 1 });
   }, [size, tile, color]);
-  useEffect(() => () => mat.dispose(), [mat]);
+  useEffect(
+    () => () => {
+      mat.map?.dispose();
+      mat.dispose();
+    },
+    [mat],
+  );
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, y, 0]} material={mat} receiveShadow>
       <planeGeometry args={[size, size]} />

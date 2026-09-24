@@ -8,9 +8,9 @@ export const definition: SceneDefinition<TrainerState> = {
   logic: trainerLogic,
   View: TrainerView,
   cameras: [
-    { id: 'overview', label: 'Lab', position: [2.3, 1.95, 2.85], target: [-0.1, 1.12, -0.3] },
+    { id: 'overview', label: 'Lab', position: [0.75, 1.8, 2.8], target: [-0.3, 1.15, -0.35] },
     { id: 'station', label: 'Trainer', position: [0.02, 1.82, 1.5], target: [-0.1, 1.28, -0.3] },
-    { id: 'console', label: 'Inputs', position: [-0.28, 1.62, 0.9], target: [-0.28, 0.98, -0.12] },
+    { id: 'console', label: 'Inputs', position: [-0.1, 1.55, 0.75], target: [-0.1, 1.1, -0.2] },
     { id: 'outputs', label: 'Outputs', position: [0.3, 1.52, 0.28], target: [0.28, 1.46, -0.58] },
     { id: 'rack', label: 'PLC rack', position: [-0.4, 1.52, 0.32], target: [-0.68, 1.44, -0.48] },
   ],

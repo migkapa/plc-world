@@ -27,7 +27,7 @@ import {
   type MastArmSpec,
 } from '../../../twin/devices';
 import type { SceneViewProps, SimRuntime } from '../../types';
-import { audioAllowed, canvasTexture, IoTag, ioLine, kgeo, kmat, TagLayer, useSfxLoops } from '../trainer/kit';
+import { audioAllowed, canvasTexture, fitFont, IoTag, ioLine, kgeo, kmat, TagLayer, useSfxLoops } from '../trainer/kit';
 import { TrafficCabinet } from './cabinet';
 import { useLatest } from './cityKit';
 import { CABINET, OCCLUDERS, PARKED_CARS, ROAD, TrafficEnvironment } from './environment';
@@ -409,7 +409,7 @@ function CrashEffects({ state }: P) {
   const sign = useRef<THREE.Sprite>(null);
   const tmp = useMemo(() => ({ m: new THREE.Matrix4(), q: new THREE.Quaternion(), e: new THREE.Euler(), p: new THREE.Vector3(), s: new THREE.Vector3() }), []);
   const smokeGeo = kgeo('tl:puff', () => new THREE.IcosahedronGeometry(1, 1));
-  const smokeMat = kmat('tl:puffMat', () => new THREE.MeshStandardMaterial({ color: '#8d8f91', roughness: 1, transparent: true, opacity: 0.5, depthWrite: false }));
+  const smokeMat = kmat('tl:puffMat', () => new THREE.MeshStandardMaterial({ color: '#b9bbbd', roughness: 1, transparent: true, opacity: 0.32, depthWrite: false, flatShading: true }));
   const shardGeo = kgeo('tl:shard', () => new THREE.BoxGeometry(0.12, 0.012, 0.07));
   const shardMat = kmat('tl:shardMat', () => new THREE.MeshStandardMaterial({ color: '#2a2d30', roughness: 0.4, metalness: 0.3 }));
   const signMat = useMemo(() => {
@@ -421,13 +421,24 @@ function CrashEffects({ state }: P) {
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 6;
       ctx.stroke();
+      // warning triangle
+      ctx.fillStyle = '#facc15';
+      ctx.beginPath();
+      ctx.moveTo(62, 26);
+      ctx.lineTo(108, 106);
+      ctx.lineTo(16, 106);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#111';
+      ctx.fillRect(58, 50, 8, 34);
+      ctx.fillRect(58, 90, 8, 8);
       ctx.fillStyle = '#fff';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.font = '800 58px Inter, Arial, sans-serif';
-      ctx.fillText('⚠ SIGNAL CONFLICT', w / 2, h * 0.4);
-      ctx.font = '600 30px Inter, Arial, sans-serif';
-      ctx.fillText('crossing streams both released', w / 2, h * 0.75);
+      fitFont(ctx, 'SIGNAL CONFLICT', w - 150, 54, 800);
+      ctx.fillText('SIGNAL CONFLICT', w / 2 + 50, h * 0.36);
+      fitFont(ctx, 'both streets released at once', w - 150, 28, 600);
+      ctx.fillText('both streets released at once', w / 2 + 50, h * 0.72);
     });
     return new THREE.SpriteMaterial({ map: tex, toneMapped: false, depthTest: false, transparent: true });
   }, []);
@@ -480,7 +491,9 @@ function CrashEffects({ state }: P) {
     const sg = sign.current;
     if (sg) {
       const recent = state.lastConflictMs >= 0 && state.timeMs - state.lastConflictMs < 4000;
-      sg.visible = (state.conflict || recent) && Math.floor(clock.elapsedTime * 3) % 2 === 0;
+      sg.visible = state.conflict || recent;
+      // pulse instead of blinking, so it is always readable
+      signMat.opacity = 0.65 + 0.35 * Math.abs(Math.sin(clock.elapsedTime * 4));
     }
   });
   return (

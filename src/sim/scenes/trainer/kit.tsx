@@ -432,13 +432,14 @@ export function Tube({
   material,
   bend = 0.08,
   radial = 12,
-  castShadow = true,
+  castShadow = false,
 }: {
   points: Vec3[];
   radius: number;
   material: THREE.Material;
   bend?: number;
   radial?: number;
+  /** Default false: only the main light casts shadows and thin tubes add little but cost a shadow pass. */
   castShadow?: boolean;
 }) {
   const key = JSON.stringify(points);
@@ -517,7 +518,9 @@ export function Instances({
     m.computeBoundingSphere();
     m.computeBoundingBox();
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  return <instancedMesh ref={ref} args={[geometry, material, Math.max(1, items.length)]} castShadow={castShadow} receiveShadow={receiveShadow} frustumCulled={false} />;
+  // frustum culling uses the instance bounding sphere computed above (all instances), so off-screen groups
+  // (pallet rack, columns, trays...) are skipped in both the main and the shadow pass
+  return <instancedMesh ref={ref} args={[geometry, material, Math.max(1, items.length)]} castShadow={castShadow} receiveShadow={receiveShadow} />;
 }
 
 /**
@@ -815,13 +818,41 @@ export function infoLine(label: string, get: () => number, units = '', decimals 
   return { alias: label, address: '', dir: 'output', analog: true, units, get, forced: () => false, decimals };
 }
 
+/**
+ * Pinned-mode grouping: when the members of a group are too small on screen to carry their own value pill,
+ * they share one summary chip (e.g. "Switch_0-7  0100 1000").
+ */
+export interface TagGroup {
+  id: string;
+  label: string;
+  /** 'bits' = digital values as a bit string (grouped by 4); 'rows' = one "alias value" row per member. */
+  mode?: 'bits' | 'rows';
+}
+
+type Line = IoTagLine & { decimals?: number };
+
 interface TagEntry {
   id: string;
+  /** Registration order (stable member order inside a group). */
+  order: number;
   /** Tag currently applicable (e.g. a fault marker that is only shown while the fault is active). */
   active?: () => boolean;
+  /** The IoTag frame (device placement); its +Z is the panel normal for the facing test. */
+  frame: THREE.Object3D;
+  /** Proxy-box center (for the projected device size / pill placement). */
+  center: THREE.Object3D;
   anchor: THREE.Object3D;
-  lines: (IoTagLine & { decimals?: number })[];
+  /** Half the proxy face size (m), for the projected size. */
+  radius: number;
+  /** Hide when the camera is behind the device's panel (its +Z). */
+  facing: boolean;
+  /** Take part in the pinned overlay (showTags). */
+  pin: boolean;
+  group?: TagGroup;
+  lines: Line[];
+  // full chip (hover, legacy pinned)
   el: HTMLDivElement;
+  box: HTMLDivElement;
   title: HTMLDivElement;
   values: HTMLSpanElement[];
   forces: HTMLSpanElement[];
@@ -830,6 +861,8 @@ interface TagEntry {
   lastForce: boolean[];
   shown: boolean;
   occluded: boolean;
+  /** Camera is behind the panel (facing test). */
+  back: boolean;
   w: number;
   h: number;
   x: number;
@@ -839,52 +872,127 @@ interface TagEntry {
   lnudge: number;
   titleShown: boolean;
   depth: number;
+  // compact value pill (pinned 'pill' style)
+  pill: HTMLDivElement;
+  pillAlias: HTMLSpanElement;
+  pillVal: HTMLSpanElement;
+  pillShown: boolean;
+  pillText: string;
+  pillWide: boolean;
+  pw: number;
+  ph: number;
+  plx: number;
+  ply: number;
+  // per-frame scratch
+  cx: number;
+  cy: number;
+  pr: number;
+  vis: boolean;
+  /** Frame stamp: candidate for a pinned pill in this frame. */
+  stamp: number;
+}
+
+interface GroupChip {
+  g: TagGroup;
+  el: HTMLDivElement;
+  body: HTMLDivElement;
+  members: TagEntry[];
+  text: string;
+  shown: boolean;
+  collapse: boolean;
+  w: number;
+  h: number;
+  lx: number;
+  ly: number;
 }
 
 const CHIP_CSS =
   'position:absolute;left:0;top:0;display:none;pointer-events:none;will-change:transform;transition:opacity 120ms linear;';
 const BOX_CSS =
   "background:rgba(10,14,20,0.9);border:1px solid rgba(148,163,184,0.35);border-radius:6px;padding:3px 7px 3px 6px;color:#e5e7eb;white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,0.45);font:500 10.5px/1.35 'JetBrains Mono',ui-monospace,monospace;";
+const PILL_CSS =
+  "position:absolute;left:0;top:0;display:none;pointer-events:none;will-change:transform;white-space:nowrap;background:rgba(10,14,20,0.82);border:1px solid rgba(148,163,184,0.3);border-radius:9px;padding:0 4px 0 4px;color:#e5e7eb;font:600 9.5px/15px 'JetBrains Mono',ui-monospace,monospace;box-shadow:0 1px 5px rgba(0,0,0,0.4);";
+const GROUP_CSS =
+  "position:absolute;left:0;top:0;display:none;pointer-events:none;will-change:transform;white-space:pre;background:rgba(10,14,20,0.86);border:1px solid rgba(148,163,184,0.35);border-radius:6px;padding:2px 6px;color:#e5e7eb;font:500 10px/1.35 'JetBrains Mono',ui-monospace,monospace;box-shadow:0 2px 8px rgba(0,0,0,0.45);";
+
+/** Pinned chips (legacy 'chip' style) are shown for devices within this distance of the camera (m). */
+const PIN_RANGE = 6;
+/** Pill style: a device gets its own pill when its projected half-size is at least this many pixels. */
+const PIN_MIN_PX = 6;
+/** Pill style: from this projected half-size on, the pill also shows the alias. */
+const PIN_ALIAS_PX = 30;
+/** Viewport margin for chips (px). */
+const EDGE = 4;
 
 class TagRegistry {
   entries = new Map<string, TagEntry>();
+  groups = new Map<string, GroupChip>();
   container: HTMLDivElement | null = null;
   hovered: string | null = null;
   showTags = false;
   boxes: THREE.Box3[] = [];
+  seq = 0;
 
   add(e: TagEntry) {
     this.entries.set(e.id, e);
     this.container?.appendChild(e.el);
+    this.container?.appendChild(e.pill);
+    if (e.group) {
+      let gc = this.groups.get(e.group.id);
+      if (!gc) {
+        gc = buildGroupChip(e.group);
+        this.groups.set(e.group.id, gc);
+        this.container?.appendChild(gc.el);
+      }
+      gc.members.push(e);
+      gc.members.sort((a, b) => a.order - b.order);
+    }
   }
 
   remove(id: string) {
     const e = this.entries.get(id);
     if (!e) return;
     e.el.remove();
+    e.pill.remove();
     this.entries.delete(id);
+    if (e.group) {
+      const gc = this.groups.get(e.group.id);
+      if (gc) {
+        gc.members = gc.members.filter((m) => m !== e);
+        if (gc.members.length === 0) {
+          gc.el.remove();
+          this.groups.delete(e.group.id);
+        }
+      }
+    }
     if (this.hovered === id) this.hovered = null;
   }
 
   attach(c: HTMLDivElement) {
     this.container = c;
-    for (const e of this.entries.values()) c.appendChild(e.el);
+    for (const e of this.entries.values()) {
+      c.appendChild(e.el);
+      c.appendChild(e.pill);
+    }
+    for (const g of this.groups.values()) c.appendChild(g.el);
   }
 }
 
 const RegistryContext = createContext<TagRegistry | null>(null);
 
 const _v = new THREE.Vector3();
+const _c = new THREE.Vector3();
 const _cam = new THREE.Vector3();
+const _camW = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _hit = new THREE.Vector3();
 const _ray = new THREE.Ray();
 const _inv = new THREE.Matrix4();
 const _tmp = new THREE.Vector3();
-/** Pinned chips (showTags) are shown for devices within this distance of the camera (m). */
-const PIN_RANGE = 6;
+const _n = new THREE.Vector3();
+const _q = new THREE.Quaternion();
 
-function formatValue(l: IoTagLine & { decimals?: number }): string {
+function formatValue(l: Line): string {
   if (l.format) return l.format();
   const v = l.get();
   if (!l.analog) return v ? '1' : '0';
@@ -892,11 +1000,45 @@ function formatValue(l: IoTagLine & { decimals?: number }): string {
   return `${v.toFixed(d)}${l.units ? ` ${l.units}` : ''}`;
 }
 
+/** Short value of an entry for pills / group chips: its first line (plus the second for 2-line digital tags). */
+function pillValue(e: TagEntry): string {
+  const a = e.lines[0];
+  if (!a) return '';
+  const s = formatValue(a);
+  const b = e.lines[1];
+  if (b && !a.analog && !b.analog) return s + formatValue(b);
+  return s;
+}
+
+function setBadge(span: HTMLSpanElement, s: string, digital: boolean) {
+  span.textContent = s;
+  span.style.display = s ? '' : 'none';
+  if (digital) {
+    const on = s === '1';
+    span.style.background = on ? '#16a34a' : '#334155';
+    span.style.color = on ? '#f0fdf4' : '#cbd5e1';
+  }
+}
+
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+const overlaps = (a: Rect, b: Rect, gap = 2) => a.x < b.x + b.w + gap && a.x + a.w + gap > b.x && a.y < b.y + b.h + gap && a.y + a.h + gap > b.y;
+const clamp = (v: number, lo: number, hi: number) => (hi < lo ? (lo + hi) / 2 : v < lo ? lo : v > hi ? hi : v);
+
 /**
  * Hosts the I/O tag chips of one scene view. `occluders` are coarse boxes [min, max] in this group's
  * coordinates (walls, cabinets, benches); a chip whose anchor is hidden behind one fades out.
+ *
+ * `pinStyle` selects what `showTags` pins: 'chip' (legacy: full chips for devices within 6 m, stacked
+ * upward) or 'pill' (compact value pills placed beside/below each device without covering other devices;
+ * devices too small on screen collapse into one summary chip per TagGroup). Hovering always shows the full
+ * chip. All chips are clamped to the viewport.
  */
-export function TagLayer({ children, occluders = [] }: { children: ReactNode; occluders?: Array<[Vec3, Vec3]> }) {
+export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { children: ReactNode; occluders?: Array<[Vec3, Vec3]>; pinStyle?: 'chip' | 'pill' }) {
   const gl = useThree((s) => s.gl);
   const frame = useRef<THREE.Group>(null);
   const reg = useMemo(() => new TagRegistry(), []);
@@ -921,8 +1063,11 @@ export function TagLayer({ children, occluders = [] }: { children: ReactNode; oc
     };
   }, [gl, reg]);
 
-  const timers = useRef({ text: 0, occ: 0 });
+  const timers = useRef({ text: 0, occ: 0, frame: 0 });
   const placed = useMemo<TagEntry[]>(() => [], []);
+  const cands = useMemo<TagEntry[]>(() => [], []);
+  const rects = useMemo<Rect[]>(() => [], []);
+  const pillMode = pinStyle === 'pill';
 
   useFrame((state, dt) => {
     const cont = reg.container;
@@ -935,30 +1080,42 @@ export function TagLayer({ children, occluders = [] }: { children: ReactNode; oc
     const doOcc = t.occ > 0.15;
     if (doText) t.text = 0;
     if (doOcc) t.occ = 0;
+    const stamp = ++t.frame;
     const f = frame.current;
     if (f) {
       _inv.copy(f.matrixWorld).invert();
       camera.getWorldPosition(_cam).applyMatrix4(_inv);
     }
+    camera.getWorldPosition(_camW);
+    const persp = camera as THREE.PerspectiveCamera;
+    const focal = persp.isPerspectiveCamera ? size.height / (2 * Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2)) : size.height;
     placed.length = 0;
+    cands.length = 0;
+    const W = size.width;
+    const H = size.height;
+
     for (const e of reg.entries.values()) {
       const hovered = reg.hovered === e.id;
-      let want = (reg.showTags || hovered) && (!e.active || e.active());
-      if (want && !hovered) {
-        // pinned mode: only nearby devices (distant chips would just clutter the view)
+      const act = !e.active || e.active();
+      const pinned = reg.showTags && act && e.pin;
+      let wantChip = act && (hovered || (reg.showTags && !pillMode));
+      if (wantChip && !hovered) {
+        // legacy pinned chips: only nearby devices (distant chips would just clutter the view)
         e.anchor.getWorldPosition(_v);
-        if (_v.distanceToSquared(camera.position) > PIN_RANGE * PIN_RANGE) want = false;
+        if (_v.distanceToSquared(_camW) > PIN_RANGE * PIN_RANGE) wantChip = false;
       }
-      if (!want) {
+      const wantPill = pillMode && pinned && !hovered;
+      e.vis = false;
+      if (!wantChip && !wantPill) {
         if (e.shown) {
           e.el.style.display = 'none';
           e.shown = false;
         }
         continue;
       }
-      e.anchor.getWorldPosition(_v);
-      // occlusion (in layer coordinates)
-      if ((doOcc || !e.shown) && f) {
+      // occlusion + facing (in layer coordinates), at ~7 Hz or when (re)appearing
+      if ((doOcc || (!e.shown && !e.pillShown)) && f) {
+        e.anchor.getWorldPosition(_v);
         const a = _hit.copy(_v).applyMatrix4(_inv);
         const dist = a.distanceTo(_cam);
         _dir.copy(a).sub(_cam).normalize();
@@ -972,16 +1129,57 @@ export function TagLayer({ children, occluders = [] }: { children: ReactNode; oc
             break;
           }
         }
-        if (occ !== e.occluded || !e.shown) {
-          e.occluded = occ;
-          e.el.style.opacity = occ ? '0' : '1';
+        let back = false;
+        if (e.facing) {
+          e.frame.getWorldQuaternion(_q);
+          _n.set(0, 0, 1).applyQuaternion(_q);
+          e.center.getWorldPosition(_c);
+          _tmp.copy(_camW).sub(_c);
+          back = _n.dot(_tmp) < 0.03 * _tmp.length();
         }
-        e.anchor.getWorldPosition(_v);
+        const was = e.occluded || e.back;
+        e.occluded = occ;
+        e.back = back;
+        if (occ || back) {
+          if (!was || !e.shown) e.el.style.opacity = hovered ? '1' : '0';
+        } else if (was || !e.shown) e.el.style.opacity = '1';
       }
-      if (e.occluded && e.shown) continue; // hidden behind a wall: keep it out of the de-clutter pass
-      // projection
+      if (hovered && e.el.style.opacity !== '1') e.el.style.opacity = '1';
+      if ((e.occluded || e.back) && !hovered) {
+        if (e.shown && !wantChip) {
+          e.el.style.display = 'none';
+          e.shown = false;
+        }
+        if (e.shown) continue; // faded out behind a wall: keep it out of the de-clutter pass
+        if (!wantChip) continue;
+      }
+      // projection of the chip anchor
+      e.anchor.getWorldPosition(_v);
       _v.project(camera);
-      if (_v.z > 1 || _v.z < -1 || Math.abs(_v.x) > 1.3 || Math.abs(_v.y) > 1.3) {
+      const inView = !(_v.z > 1 || _v.z < -1 || Math.abs(_v.x) > 1.3 || Math.abs(_v.y) > 1.3);
+      e.depth = _v.z;
+      if (wantPill) {
+        e.center.getWorldPosition(_c);
+        const dist = _c.distanceTo(_camW);
+        _c.project(camera);
+        const inner = _c.z < 1 && _c.z > -1 && Math.abs(_c.x) < 0.97 && Math.abs(_c.y) < 0.97;
+        if (inner && !e.occluded && !e.back) {
+          e.cx = (_c.x * 0.5 + 0.5) * W;
+          e.cy = (-_c.y * 0.5 + 0.5) * H;
+          e.pr = (e.radius * focal) / Math.max(0.05, dist);
+          e.vis = true;
+          e.stamp = stamp;
+          cands.push(e);
+        }
+      }
+      if (!wantChip) {
+        if (e.shown) {
+          e.el.style.display = 'none';
+          e.shown = false;
+        }
+        continue;
+      }
+      if (!inView) {
         if (e.shown) {
           e.el.style.display = 'none';
           e.shown = false;
@@ -992,37 +1190,27 @@ export function TagLayer({ children, occluders = [] }: { children: ReactNode; oc
         e.el.style.display = 'block';
         e.shown = true;
         e.lx = -1e9;
-        const tt = reg.hovered === e.id;
-        e.title.style.display = tt ? 'block' : 'none';
-        e.titleShown = tt;
-        e.w = e.el.offsetWidth;
-        e.h = e.el.offsetHeight;
+        e.title.style.display = hovered ? 'block' : 'none';
+        e.titleShown = hovered;
+        e.w = e.box.offsetWidth;
+        e.h = e.box.offsetHeight;
       }
-      const wantTitle = reg.hovered === e.id;
-      if (wantTitle !== e.titleShown) {
-        e.titleShown = wantTitle;
-        e.title.style.display = wantTitle ? 'block' : 'none';
-        e.w = e.el.offsetWidth;
-        e.h = e.el.offsetHeight;
+      if (hovered !== e.titleShown) {
+        e.titleShown = hovered;
+        e.title.style.display = hovered ? 'block' : 'none';
+        e.w = e.box.offsetWidth;
+        e.h = e.box.offsetHeight;
       }
-      e.x = (_v.x * 0.5 + 0.5) * size.width;
-      e.y = (-_v.y * 0.5 + 0.5) * size.height;
-      e.depth = _v.z;
-      if (doText) {
+      e.x = (_v.x * 0.5 + 0.5) * W;
+      e.y = (-_v.y * 0.5 + 0.5) * H;
+      if (doText || e.lastVals[0] === '') {
         let changed = false;
         for (let i = 0; i < e.lines.length; i++) {
           const l = e.lines[i]!;
           const s = formatValue(l);
           if (s !== e.lastVals[i]) {
             e.lastVals[i] = s;
-            const span = e.values[i]!;
-            span.textContent = s;
-            span.style.display = s ? '' : 'none';
-            if (!l.analog) {
-              const on = s === '1';
-              span.style.background = on ? '#16a34a' : '#334155';
-              span.style.color = on ? '#f0fdf4' : '#cbd5e1';
-            }
+            setBadge(e.values[i]!, s, !l.analog);
             changed = true;
           }
           const fo = l.forced();
@@ -1033,40 +1221,189 @@ export function TagLayer({ children, occluders = [] }: { children: ReactNode; oc
           }
         }
         if (changed) {
-          e.w = e.el.offsetWidth;
-          e.h = e.el.offsetHeight;
+          e.w = e.box.offsetWidth;
+          e.h = e.box.offsetHeight;
         }
       }
       placed.push(e);
     }
-    // de-clutter: hovered first, then near-to-far; push overlapping chips upward
+
+    // ---- full chips: hovered first, then near-to-far; (legacy pinned) push overlapping chips upward ----
     placed.sort((a, b) => (a.id === reg.hovered ? -1 : b.id === reg.hovered ? 1 : a.depth - b.depth));
     const GAP = 3;
+    rects.length = 0;
     for (let i = 0; i < placed.length; i++) {
       const e = placed[i]!;
+      // box bottom sits 6 px above the anchor (+ nudge); legacy pinned chips are pushed upward out of overlaps
       let nudge = 0;
-      for (let iter = 0; iter < 8; iter++) {
-        const top = e.y - e.h - nudge;
-        const left = e.x - e.w / 2;
+      if (i > 0 && !pillMode) {
+        for (let iter = 0; iter < 8; iter++) {
+          const top = e.y - 6 - nudge - e.h;
+          const left = e.x - e.w / 2;
+          let moved = false;
+          for (let j = 0; j < i; j++) {
+            const o = rects[j]!;
+            if (left < o.x + o.w + GAP && left + e.w + GAP > o.x && top < o.y + o.h + GAP && top + e.h + GAP > o.y) {
+              nudge = e.y - 6 - (o.y - GAP);
+              moved = true;
+            }
+          }
+          if (!moved) break;
+        }
+      }
+      // keep the box inside the viewport; the leader runs from the box down to the device
+      const x = clamp(e.x, e.w / 2 + EDGE, W - e.w / 2 - EDGE);
+      const bottom = clamp(e.y - 6 - nudge, e.h + EDGE, H - EDGE);
+      const lead = Math.max(0, e.y - bottom);
+      rects.push({ x: x - e.w / 2, y: bottom - e.h, w: e.w, h: e.h });
+      if (Math.abs(x - e.lx) > 0.3 || Math.abs(bottom - e.ly) > 0.3 || lead !== e.lnudge) {
+        e.lx = x;
+        e.ly = bottom;
+        if (lead !== e.lnudge) e.leader.style.height = `${lead.toFixed(1)}px`;
+        e.lnudge = lead;
+        e.el.style.transform = `translate(${x.toFixed(1)}px,${(bottom + lead).toFixed(1)}px) translate(-50%,-100%)`;
+        e.el.style.zIndex = e.id === reg.hovered ? '10' : '1';
+      }
+    }
+
+    if (!pillMode) return;
+
+    // ---- pinned value pills + group summary chips ----
+    // groups whose members are small on screen collapse into one summary chip
+    for (const gc of reg.groups.values()) {
+      let n = 0;
+      let sum = 0;
+      for (const m of gc.members) {
+        if (!m.vis) continue;
+        n++;
+        sum += m.pr;
+      }
+      gc.collapse = n > 0 && sum / n < PIN_MIN_PX * 2.2;
+      if (gc.collapse) for (const m of gc.members) if (m.vis) m.vis = false;
+    }
+    // device footprints are obstacles, so pills never cover a lamp or button
+    for (const e of cands) {
+      if (!e.vis) continue;
+      const r = e.pr * 0.85;
+      rects.push({ x: e.cx - r, y: e.cy - r, w: 2 * r, h: 2 * r });
+    }
+    cands.sort((a, b) => b.pr - a.pr);
+    for (const e of cands) {
+      if (!e.vis || e.pr < PIN_MIN_PX) {
+        hidePill(e);
+        continue;
+      }
+      const wide = e.pr >= PIN_ALIAS_PX;
+      if (doText || e.pillText === '' || wide !== e.pillWide) {
+        const s = pillValue(e);
+        if (s !== e.pillText || wide !== e.pillWide) {
+          e.pillText = s;
+          e.pillWide = wide;
+          e.pillAlias.style.display = wide ? '' : 'none';
+          const digital = !e.lines[0]?.analog;
+          e.pillVal.textContent = s;
+          const on = digital && /1/.test(s);
+          e.pill.style.background = digital ? (on ? 'rgba(22,163,74,0.92)' : 'rgba(30,41,59,0.88)') : 'rgba(10,14,20,0.82)';
+          e.pill.style.color = digital && !on ? '#cbd5e1' : '#f8fafc';
+          // measure (needs layout: show it for the read, restore afterwards)
+          if (!e.pillShown) e.pill.style.display = 'block';
+          e.pw = e.pill.offsetWidth;
+          e.ph = e.pill.offsetHeight;
+          if (!e.pillShown) e.pill.style.display = 'none';
+        }
+      }
+      // candidate spots: below, right, left, above the device footprint
+      const r = e.pr * 0.85 + 2;
+      const spots: [number, number][] = [
+        [e.cx - e.pw / 2, e.cy + r],
+        [e.cx + r, e.cy - e.ph / 2],
+        [e.cx - r - e.pw, e.cy - e.ph / 2],
+        [e.cx - e.pw / 2, e.cy - r - e.ph],
+      ];
+      let best: Rect | null = null;
+      for (const [sx, sy] of spots) {
+        const cand = { x: clamp(sx, EDGE, W - e.pw - EDGE), y: clamp(sy, EDGE, H - e.ph - EDGE), w: e.pw, h: e.ph };
+        let hit = false;
+        for (const o of rects) {
+          if (overlaps(cand, o, 1)) {
+            hit = true;
+            break;
+          }
+        }
+        if (!hit) {
+          best = cand;
+          break;
+        }
+      }
+      if (!best) {
+        hidePill(e);
+        continue;
+      }
+      rects.push(best);
+      if (!e.pillShown) {
+        e.pill.style.display = 'block';
+        e.pillShown = true;
+      }
+      if (Math.abs(best.x - e.plx) > 0.3 || Math.abs(best.y - e.ply) > 0.3) {
+        e.plx = best.x;
+        e.ply = best.y;
+        e.pill.style.transform = `translate(${best.x.toFixed(1)}px,${best.y.toFixed(1)}px)`;
+      }
+    }
+    for (const e of reg.entries.values()) if (e.pillShown && e.stamp !== stamp) hidePill(e);
+
+    for (const gc of reg.groups.values()) {
+      if (!reg.showTags || !gc.collapse) {
+        if (gc.shown) {
+          gc.el.style.display = 'none';
+          gc.shown = false;
+        }
+        continue;
+      }
+      let n = 0;
+      let sx = 0;
+      let top = Infinity;
+      for (const m of gc.members) {
+        if (m.stamp !== stamp) continue;
+        n++;
+        sx += m.cx;
+        top = Math.min(top, m.cy - m.pr);
+      }
+      if (n === 0) {
+        if (gc.shown) {
+          gc.el.style.display = 'none';
+          gc.shown = false;
+        }
+        continue;
+      }
+      if (doText || !gc.shown) {
+        const txt = groupText(gc);
+        if (txt !== gc.text || !gc.shown) {
+          gc.text = txt;
+          gc.body.textContent = txt;
+          if (!gc.shown) gc.el.style.display = 'block';
+          gc.w = gc.el.offsetWidth;
+          gc.h = gc.el.offsetHeight;
+        }
+      }
+      gc.shown = true;
+      const cand = { x: clamp(sx / n - gc.w / 2, EDGE, W - gc.w - EDGE), y: clamp(top - 6 - gc.h, EDGE, H - gc.h - EDGE), w: gc.w, h: gc.h };
+      for (let iter = 0; iter < 6; iter++) {
         let moved = false;
-        for (let j = 0; j < i; j++) {
-          const o = placed[j]!;
-          const ot = o.y - o.h - o.lnudge;
-          const ol = o.x - o.w / 2;
-          if (left < ol + o.w + GAP && left + e.w + GAP > ol && top < ot + o.h + GAP && top + e.h + GAP > ot) {
-            nudge = e.y - (ot - GAP);
+        for (const o of rects) {
+          if (overlaps(cand, o, 2)) {
+            cand.y = o.y - cand.h - 3;
             moved = true;
           }
         }
         if (!moved) break;
       }
-      if (Math.abs(e.x - e.lx) > 0.3 || Math.abs(e.y - e.ly) > 0.3 || nudge !== e.lnudge) {
-        e.lx = e.x;
-        e.ly = e.y;
-        if (nudge !== e.lnudge) e.leader.style.height = `${6 + nudge}px`;
-        e.lnudge = nudge;
-        e.el.style.transform = `translate(${e.x.toFixed(1)}px,${e.y.toFixed(1)}px) translate(-50%,-100%)`;
-        e.el.style.zIndex = e.id === reg.hovered ? '10' : '1';
+      cand.y = clamp(cand.y, EDGE, H - gc.h - EDGE);
+      rects.push(cand);
+      if (Math.abs(cand.x - gc.lx) > 0.3 || Math.abs(cand.y - gc.ly) > 0.3) {
+        gc.lx = cand.x;
+        gc.ly = cand.y;
+        gc.el.style.transform = `translate(${cand.x.toFixed(1)}px,${cand.y.toFixed(1)}px)`;
       }
     }
   });
@@ -1078,7 +1415,43 @@ export function TagLayer({ children, occluders = [] }: { children: ReactNode; oc
   );
 }
 
-function buildChip(id: string, title: string, lines: IoTagLine[]): Omit<TagEntry, 'anchor'> {
+function hidePill(e: TagEntry) {
+  if (e.pill.style.display !== 'none') e.pill.style.display = 'none';
+  e.pillShown = false;
+  e.plx = -1e9;
+}
+
+function groupText(gc: GroupChip): string {
+  const mode = gc.g.mode ?? 'bits';
+  if (mode === 'rows') {
+    const w = Math.max(...gc.members.map((m) => (m.lines[0]?.alias.length ?? 0)));
+    return gc.members.map((m) => `${(m.lines[0]?.alias ?? '').padEnd(w)} ${pillValue(m)}`).join('\n');
+  }
+  let bits = '';
+  gc.members.forEach((m, i) => {
+    if (i > 0 && i % 4 === 0) bits += ' ';
+    bits += pillValue(m);
+  });
+  return bits;
+}
+
+function buildGroupChip(g: TagGroup): GroupChip {
+  const el = document.createElement('div');
+  el.style.cssText = GROUP_CSS;
+  el.dataset.tagGroup = g.id;
+  const head = document.createElement('div');
+  head.style.cssText = "font:700 9.5px/1.3 'Inter Variable',Inter,sans-serif;color:#94a3b8;letter-spacing:0.02em;";
+  head.textContent = g.label;
+  const body = document.createElement('div');
+  body.style.cssText = 'color:#f8fafc;font-weight:600;';
+  el.appendChild(head);
+  el.appendChild(body);
+  return { g, el, body, members: [], text: '', shown: false, collapse: false, w: 0, h: 0, lx: -1e9, ly: -1e9 };
+}
+
+type ChipParts = Omit<TagEntry, 'anchor' | 'frame' | 'center' | 'radius' | 'facing' | 'pin' | 'group' | 'order' | 'active'>;
+
+function buildChip(id: string, title: string, lines: IoTagLine[]): ChipParts {
   const el = document.createElement('div');
   el.style.cssText = CHIP_CSS;
   el.dataset.tag = id;
@@ -1130,10 +1503,22 @@ function buildChip(id: string, title: string, lines: IoTagLine[]): Omit<TagEntry
   const leader = document.createElement('div');
   leader.style.cssText = 'width:1px;height:6px;margin:0 auto;background:rgba(203,213,225,0.7);';
   el.appendChild(leader);
+  // compact pill
+  const pill = document.createElement('div');
+  pill.style.cssText = PILL_CSS;
+  pill.dataset.tagPill = id;
+  const pa = document.createElement('span');
+  pa.style.cssText = 'display:none;color:inherit;opacity:0.85;margin-right:4px;font-weight:600;';
+  pa.textContent = lines[0]?.alias ?? '';
+  const pv = document.createElement('span');
+  pv.style.cssText = 'font-weight:700;';
+  pill.appendChild(pa);
+  pill.appendChild(pv);
   return {
     id,
     lines,
     el,
+    box,
     title: t,
     values,
     forces,
@@ -1142,6 +1527,7 @@ function buildChip(id: string, title: string, lines: IoTagLine[]): Omit<TagEntry
     lastForce: lines.map(() => false),
     shown: false,
     occluded: false,
+    back: false,
     w: 0,
     h: 0,
     x: 0,
@@ -1151,13 +1537,28 @@ function buildChip(id: string, title: string, lines: IoTagLine[]): Omit<TagEntry
     lnudge: 0,
     titleShown: false,
     depth: 0,
+    pill,
+    pillAlias: pa,
+    pillVal: pv,
+    pillShown: false,
+    pillText: '',
+    pillWide: false,
+    pw: 0,
+    ph: 0,
+    plx: -1e9,
+    ply: -1e9,
+    cx: 0,
+    cy: 0,
+    pr: 0,
+    vis: false,
+    stamp: 0,
   };
 }
 
 let tagSeq = 0;
 
-/** Pointer cursor while hovering a clickable proxy (does not stop propagation). */
-function useCursorOnHover(enabled: boolean, isActive: () => boolean) {
+/** Pointer cursor (+ optional hover outline) while hovering a clickable proxy (does not stop propagation). */
+function useCursorOnHover(enabled: boolean, isActive: () => boolean, outline?: { current: THREE.Object3D | null }) {
   const gl = useThree((st) => st.gl);
   useEffect(
     () => () => {
@@ -1168,15 +1569,50 @@ function useCursorOnHover(enabled: boolean, isActive: () => boolean) {
   return useMemo(
     () => ({
       over: () => {
-        if (enabled && isActive()) gl.domElement.style.cursor = 'pointer';
+        if (!enabled || !isActive()) return;
+        gl.domElement.style.cursor = 'pointer';
+        if (outline?.current) outline.current.visible = true;
       },
       leave: () => {
-        if (enabled) gl.domElement.style.cursor = '';
+        if (!enabled) return;
+        gl.domElement.style.cursor = '';
+        if (outline?.current) outline.current.visible = false;
       },
     }),
-    [enabled, gl, isActive],
+    [enabled, gl, isActive, outline],
   );
 }
+
+/** Thin rectangular frame (hover cue for clickable proxies), in the XY plane. */
+function outlineGeo(w: number, h: number) {
+  return kgeo(`k:outline:${w.toFixed(4)}:${h.toFixed(4)}`, () => {
+    const t = Math.max(0.0009, Math.min(w, h) * 0.035);
+    const r = Math.min(w, h) * 0.18;
+    const rr = (sh: THREE.Shape | THREE.Path, x: number, y: number, ww: number, hh: number, rad: number) => {
+      sh.moveTo(x + rad, y);
+      sh.lineTo(x + ww - rad, y);
+      sh.quadraticCurveTo(x + ww, y, x + ww, y + rad);
+      sh.lineTo(x + ww, y + hh - rad);
+      sh.quadraticCurveTo(x + ww, y + hh, x + ww - rad, y + hh);
+      sh.lineTo(x + rad, y + hh);
+      sh.quadraticCurveTo(x, y + hh, x, y + hh - rad);
+      sh.lineTo(x, y + rad);
+      sh.quadraticCurveTo(x, y, x + rad, y);
+    };
+    const shape = new THREE.Shape();
+    rr(shape, -w / 2, -h / 2, w, h, r);
+    const hole = new THREE.Path();
+    rr(hole, -w / 2 + t, -h / 2 + t, w - 2 * t, h - 2 * t, Math.max(0, r - t));
+    shape.holes.push(hole);
+    return new THREE.ShapeGeometry(shape, 6);
+  });
+}
+
+const outlineMat = () =>
+  kmat('k:outline-mat', () => new THREE.MeshBasicMaterial({ color: new THREE.Color('#58c8ff').multiplyScalar(1.5), toneMapped: false, transparent: true, opacity: 0.9, depthWrite: false }));
+
+/** Max pointer travel (px) between down and up for a click on a proxy (larger = a camera drag). */
+const CLICK_SLOP = 6;
 
 export interface IoTagProps {
   /** Device center (parent coordinates). */
@@ -1188,36 +1624,64 @@ export interface IoTagProps {
   center?: Vec3;
   /** Chip anchor, relative to `position` (device-local); default: just above the proxy box. */
   anchor?: Vec3;
-  /** Make the whole proxy clickable (pointer down), e.g. for small toggle levers. Stops propagation. */
-  onPress?: () => void;
+  /**
+   * Make the whole proxy a click target (fires once per click, drag-safe). Receives the hit point in the
+   * device frame (e.g. to tell the left/right half of a selector). The click is NOT passed on to the
+   * device underneath, so give the device no own click handler for the same control (or keep it purely
+   * cosmetic): one physical click = one action.
+   */
+  onPress?: (local: THREE.Vector3) => void;
+  /** Momentary proxy: pointer down = press, pointer up anywhere = release (the device gets neither). */
+  momentary?: { onPress: () => void; onRelease: () => void };
   /** When given and false, the tag neither shows nor reacts (e.g. a fault marker without the fault). */
   active?: () => boolean;
+  /** Hide the chip while the camera is behind the device's panel (the frame's +Z). Default false. */
+  facing?: boolean;
+  /** Take part in the pinned overlay (showTags). Default true. */
+  pin?: boolean;
+  /** Pinned-overlay group (summary chip when the members are small on screen). */
+  group?: TagGroup;
   /** Device title shown on hover, e.g. '800F green flush PB (N.O.)'. */
   title: string;
-  lines: (IoTagLine & { decimals?: number })[];
+  lines: Line[];
   /** Children rendered inside the device frame (e.g. the device itself). */
   children?: ReactNode;
 }
 
 /**
- * Hover zone + floating chip for one physical device. The hover proxy is an invisible box that never stops
- * event propagation, so the device underneath still receives its clicks.
+ * Hover zone + floating chip for one physical device. Without `onPress` / `momentary` the invisible hover
+ * proxy never stops event propagation, so the device underneath still receives its clicks.
  */
-export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, title, lines, onPress, active, children }: IoTagProps) {
+export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, title, lines, onPress, momentary, active, facing = false, pin = true, group, children }: IoTagProps) {
   const reg = useContext(RegistryContext);
+  const frameRef = useRef<THREE.Group>(null);
   const anchorRef = useRef<THREE.Group>(null);
+  const centerRef = useRef<THREE.Group>(null);
   const id = useMemo(() => `tag${++tagSeq}`, []);
   const linesRef = useRef(lines);
   linesRef.current = lines;
   const activeRef = useRef(active);
   activeRef.current = active;
   const isActive = useMemo(() => () => (activeRef.current ? activeRef.current() : true), []);
+  const radius = Math.max(size[0], size[1]) / 2;
+  const groupKey = group ? `${group.id}|${group.label}|${group.mode ?? ''}` : '';
   useLayoutEffect(() => {
-    if (!reg || !anchorRef.current) return;
-    const e: TagEntry = { ...buildChip(id, title, linesRef.current), anchor: anchorRef.current, active: isActive };
+    if (!reg || !anchorRef.current || !frameRef.current || !centerRef.current) return;
+    const e: TagEntry = {
+      ...buildChip(id, title, linesRef.current),
+      order: ++reg.seq,
+      anchor: anchorRef.current,
+      frame: frameRef.current,
+      center: centerRef.current,
+      radius,
+      facing,
+      pin,
+      group,
+      active: isActive,
+    };
     reg.add(e);
     return () => reg.remove(id);
-  }, [reg, id, title, lines.map((l) => l.alias + l.address).join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reg, id, title, radius, facing, pin, groupKey, lines.map((l) => l.alias + l.address).join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlers = useMemo(
     () => ({
@@ -1241,23 +1705,48 @@ export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, ti
   );
   const pressRef = useRef(onPress);
   pressRef.current = onPress;
-  const press = useMemo(
-    () =>
-      onPress
-        ? {
-            onPointerDown: (ev: ThreeEvent<PointerEvent>) => {
-              if (ev.button !== 0 || !isActive()) return;
-              ev.stopPropagation();
-              pressRef.current?.();
-            },
-          }
-        : {},
-    [!!onPress], // eslint-disable-line react-hooks/exhaustive-deps
-  );
-  const cursor = useCursorOnHover(!!onPress, isActive);
+  const momRef = useRef(momentary);
+  momRef.current = momentary;
+  const clickable = !!onPress || !!momentary;
+  const press = useMemo(() => {
+    if (!clickable) return {};
+    const local = new THREE.Vector3();
+    return {
+      onPointerDown: (ev: ThreeEvent<PointerEvent>) => {
+        if (ev.button !== 0 || !isActive()) return;
+        ev.stopPropagation();
+        const m = momRef.current;
+        if (!m) return;
+        m.onPress();
+        let done = false;
+        const release = () => {
+          if (done) return;
+          done = true;
+          window.removeEventListener('pointerup', release);
+          window.removeEventListener('pointercancel', release);
+          window.removeEventListener('blur', release);
+          momRef.current?.onRelease();
+        };
+        window.addEventListener('pointerup', release);
+        window.addEventListener('pointercancel', release);
+        window.addEventListener('blur', release);
+      },
+      onClick: (ev: ThreeEvent<MouseEvent>) => {
+        if (ev.button !== 0 || !isActive()) return;
+        ev.stopPropagation();
+        const fn = pressRef.current;
+        if (!fn || momRef.current || ev.delta > CLICK_SLOP) return;
+        local.copy(ev.point);
+        frameRef.current?.worldToLocal(local);
+        fn(local);
+      },
+    };
+  }, [clickable]); // eslint-disable-line react-hooks/exhaustive-deps
+  const outline = useRef<THREE.Mesh>(null);
+  const cursor = useCursorOnHover(clickable, isActive, outline);
   const a: Vec3 = anchor ?? [center[0], center[1] + size[1] / 2 + 0.004, center[2]];
   return (
-    <group position={position} rotation={rotation}>
+    <group ref={frameRef} position={position} rotation={rotation}>
       {children}
       <mesh
         visible={false}
@@ -1270,7 +1759,11 @@ export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, ti
         onPointerOver={cursor.over}
         onPointerLeave={cursor.leave}
       />
+      <group ref={centerRef} position={[center[0], center[1], center[2] + size[2] / 2]} />
       <group ref={anchorRef} position={a} />
+      {clickable && (
+        <mesh ref={outline} visible={false} geometry={outlineGeo(size[0], size[1])} material={outlineMat()} position={[center[0], center[1], center[2] - size[2] / 2 + 0.0012]} renderOrder={3} />
+      )}
     </group>
   );
 }

@@ -4,11 +4,11 @@
  * trees, street lights, pull boxes over the underground signal conduits, a bus stop and small street
  * furniture. Everything here is static (no per-frame work except the street-light lenses).
  */
-import { memo, useMemo } from 'react';
+import { memo } from 'react';
 import * as THREE from 'three';
 import type { Vec3 } from '../../../twin/contracts';
 import { Intersection, ParkingSpace, roadMats } from '../../../twin/devices';
-import { FONT, fitFont, kgeo, kmat } from '../trainer/kit';
+import { Conduit, FONT, fitFont, kgeo, kmat } from '../trainer/kit';
 import { Bollards, Buildings, GroundPlane, PostSign, PullBoxes, SkyDome, StaticInstances, StreetLights, Trees, type BuildingSpec, type InstXf, type StreetLightSpec, type TreeSpec } from './cityKit';
 
 /** Road geometry used by the view (plan frame of TRAFFIC_GEOMETRY). */
@@ -56,8 +56,8 @@ const T = (x: number, z: number, s = 1): TreeSpec => ({ x, z, y: ROAD.lawn, s })
 const TREES: TreeSpec[] = [
   // lawn strips along the main street (x = ±7.6) and side street (z = ±7.6), clear of the corners
   ...[-16, -26, -36, -48].flatMap((z) => [T(7.7, z, 0.95), T(-7.7, z, 1.05)]),
-  ...[14, 24, 34, 46].flatMap((z) => [T(7.7, z, 1), T(-7.7, z + 2, 0.9)]),
-  ...[16, 26, 36, 48].flatMap((x) => [T(x, 7.7, 0.95), T(x + 3, -7.7, 1)]),
+  ...[14, 24, 34, 46].flatMap((z) => (z < 20 ? [T(-7.7, z + 2, 0.9)] : [T(7.7, z, 1), T(-7.7, z + 2, 0.9)])),
+  ...[16, 26, 36, 48].flatMap((x) => (x < 20 ? [T(x + 3, -7.7, 1)] : [T(x, 7.7, 0.95), T(x + 3, -7.7, 1)])),
   ...[-18, -30, -40, -52].flatMap((x) => [T(x, -7.7, 1.05), T(x + 2, 7.7, 0.9)]),
   // little park on the SW corner
   T(-11.5, 9.2, 1.15),
@@ -186,7 +186,7 @@ function mergeNonIndexed(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
 }
 
 function ShopSign({ id, text, bg, fg, position, size, rotY = 0 }: { id: string; text: string; bg: string; fg: string; position: Vec3; size: [number, number]; rotY?: number }) {
-  const mat = useMemo(() => {
+  const mat = kmat(`tl:shop:${id}`, () => {
     const c = document.createElement('canvas');
     c.width = Math.round(size[0] * 120);
     c.height = Math.round(size[1] * 120);
@@ -201,8 +201,8 @@ function ShopSign({ id, text, bg, fg, position, size, rotY = 0 }: { id: string; 
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = 8;
-    return kmat(`tl:shop:${id}`, () => new THREE.MeshStandardMaterial({ map: t, roughness: 0.5, emissive: '#ffffff', emissiveMap: t, emissiveIntensity: 0.15 }));
-  }, [id, text, bg, fg, size]);
+    return new THREE.MeshStandardMaterial({ map: t, roughness: 0.5, emissive: '#ffffff', emissiveMap: t, emissiveIntensity: 0.15 });
+  });
   return (
     <mesh position={position} rotation={[0, rotY, 0]} material={mat}>
       <boxGeometry args={[size[0], size[1], 0.08]} />
@@ -252,6 +252,43 @@ function ParkingLot() {
   );
 }
 
+/** Utility service pedestal (meter + main disconnect) feeding the signal cabinet through a short conduit run. */
+function ServicePedestal() {
+  const x = CABINET.x - 1.05;
+  const z = CABINET.z - 1.05;
+  const y = ROAD.lawn;
+  const body = kmat('tl:pedestal', () => new THREE.MeshStandardMaterial({ color: '#8c9296', roughness: 0.5, metalness: 0.6 }));
+  const glass = kmat('tl:meterGlass', () => new THREE.MeshStandardMaterial({ color: '#dfe8ec', roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.55 }));
+  return (
+    <group>
+      <group position={[x, y, z]} rotation={[0, Math.PI / 4, 0]}>
+        <mesh position={[0, 0.6, 0]} material={body} castShadow receiveShadow>
+          <boxGeometry args={[0.36, 1.2, 0.24]} />
+        </mesh>
+        <mesh position={[0, 1.24, 0]} material={body} castShadow>
+          <boxGeometry args={[0.42, 0.06, 0.3]} />
+        </mesh>
+        <mesh position={[0, 0.92, 0.15]} rotation={[Math.PI / 2, 0, 0]} material={glass}>
+          <cylinderGeometry args={[0.085, 0.085, 0.08, 20]} />
+        </mesh>
+        <mesh position={[0.1, 0.55, 0.13]} material={kmat('tl:handle', () => new THREE.MeshStandardMaterial({ color: '#b21e1e', roughness: 0.5 }))}>
+          <boxGeometry args={[0.03, 0.14, 0.03]} />
+        </mesh>
+      </group>
+      <Conduit
+        points={[
+          [x + 0.1, y + 0.3, z + 0.1],
+          [x + 0.1, y + 0.05, z + 0.1],
+          [CABINET.x - 0.42, y + 0.05, CABINET.z - 0.42],
+          [CABINET.x - 0.42, y + 0.12, CABINET.z - 0.42],
+        ]}
+        radius={0.021}
+        bend={0.08}
+      />
+    </group>
+  );
+}
+
 /** Everything static around the intersection. `getNight` lights the street lights. */
 export const TrafficEnvironment = memo(function TrafficEnvironment({ getNight }: { getNight: () => boolean }) {
   return (
@@ -266,6 +303,7 @@ export const TrafficEnvironment = memo(function TrafficEnvironment({ getNight }:
       <Bollards at={[[-9.7, -7.2], [-7.2, -9.7]]} y={ROAD.lawn} height={0.9} color="#f2c200" />
       <StreetFurniture />
       <ParkingLot />
+      <ServicePedestal />
     </group>
   );
 });

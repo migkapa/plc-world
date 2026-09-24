@@ -7,13 +7,19 @@ import { Link } from 'wouter';
 import { ProgressBar, cn } from '../../ui';
 import { routes } from '../routes';
 import { SHOWROOM_DEVICES, SHOWROOM_GROUPS, devicesInGroup, type ShowroomDevice, type ShowroomGroup } from './catalog';
+import { matchesQuery } from './search';
+
+/** Search match over name, catalog number, family, tagline and nicknames (normalised: '24V' finds '24 V'). */
+export function deviceMatches(d: ShowroomDevice, query: string): boolean {
+  return matchesQuery(`${d.name} ${d.catalog} ${d.family} ${d.tagline} ${(d.keywords ?? []).join(' ')}`, query);
+}
 
 export const GROUP_ICONS: Record<ShowroomGroup['icon'], LucideIcon> = { Cpu, Cable, Server, Gauge, CircleDot, PanelsTopLeft, Factory, TrafficCone };
 
 export function DeviceList({ current, explored, className }: { current: string; explored: ReadonlySet<string>; className?: string }) {
   const [query, setQuery] = useState('');
-  const q = query.trim().toLowerCase();
-  const match = (d: ShowroomDevice) => !q || `${d.name} ${d.catalog} ${d.family} ${d.tagline}`.toLowerCase().includes(q);
+  const q = query.trim();
+  const match = (d: ShowroomDevice) => deviceMatches(d, q);
   const total = SHOWROOM_DEVICES.length;
   const count = SHOWROOM_DEVICES.filter((d) => explored.has(d.id)).length;
   return (
@@ -27,7 +33,7 @@ export function DeviceList({ current, explored, className }: { current: string; 
         </div>
         <div>
           <ProgressBar value={count / total} color="bg-gradient-to-r from-ab-red to-amber-400" className="h-1.5" />
-          <div className="mt-1 text-[10.5px] text-slate-500">{count === total ? 'Every device explored — nice!' : 'Devices explored'}</div>
+          <div className="mt-1 text-[10.5px] text-slate-400">{count === total ? 'Every device explored — nice!' : 'Devices explored'}</div>
         </div>
         <label className="flex h-8 items-center gap-2 rounded-lg border border-edge bg-panel px-2 text-slate-400 focus-within:border-slate-500">
           <Search size={14} />
@@ -47,7 +53,7 @@ export function DeviceList({ current, explored, className }: { current: string; 
           const Icon = GROUP_ICONS[g.icon];
           return (
             <div key={g.id} className="mb-2">
-              <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 text-[10.5px] font-bold tracking-[0.08em] text-slate-500 uppercase">
+              <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 text-[10.5px] font-bold tracking-[0.08em] text-slate-400 uppercase">
                 <Icon size={12} style={{ color: g.accent }} />
                 {g.title}
               </div>
@@ -67,7 +73,7 @@ export function DeviceList({ current, explored, className }: { current: string; 
                     {active && <span className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-full" style={{ background: g.accent }} />}
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[13px] leading-tight font-medium">{d.name}</span>
-                      <span className="block truncate font-mono text-[10.5px] text-slate-500">{d.catalog}</span>
+                      <span className="block truncate font-mono text-[10.5px] text-slate-400">{d.catalog}</span>
                     </span>
                     {!seen && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" title="Not explored yet" />}
                   </Link>
@@ -76,7 +82,7 @@ export function DeviceList({ current, explored, className }: { current: string; 
             </div>
           );
         })}
-        {q && SHOWROOM_DEVICES.filter(match).length === 0 && <div className="px-3 py-6 text-center text-[13px] text-slate-500">Nothing matches “{query}”.</div>}
+        {q && SHOWROOM_DEVICES.filter(match).length === 0 && <div className="px-3 py-6 text-center text-[13px] text-slate-400">Nothing matches “{query}”.</div>}
       </div>
     </nav>
   );
@@ -111,7 +117,7 @@ export function DevicePicker({ current, onPick, explored }: { current: string; o
             </optgroup>
           ))}
         </select>
-        <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 font-mono text-[10.5px] text-slate-500">
+        <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 font-mono text-[10.5px] text-slate-400">
           {count}/{SHOWROOM_DEVICES.length}
         </span>
       </label>

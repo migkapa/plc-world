@@ -279,6 +279,7 @@ const conveyor: StageDef = {
     { kind: 'slider', key: 'speed', label: 'Belt speed', min: 0.1, max: 1, step: 0.05, unit: 'm/s', digits: 2 },
   ],
   Scene: ConveyorScene,
+  liveShadow: true,
 };
 
 // ---------------------------------------------------------------------------

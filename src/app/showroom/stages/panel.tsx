@@ -51,7 +51,10 @@ const contactor: StageDef = {
 // Overload relay (motor starter)
 // ---------------------------------------------------------------------------
 
-/** Thermal model: heats with (I/FLA)² − 1 while current flows; class-10-ish demo speed. */
+/** E100 trip rating: the relay eventually trips at 120 % of its FLA dial setting, never below it. */
+const TRIP_RATING = 1.2;
+
+/** Thermal model: heats with (I/FLA)² − 1.2² while current flows (cools below the trip rating); sped-up demo time. */
 function OverloadScene({ demo }: { demo: DemoStore }) {
   useClack(demo, () => demo.bool('coil') && !demo.bool('tripped'));
   const heat = useRef(0);
@@ -60,7 +63,7 @@ function OverloadScene({ demo }: { demo: DemoStore }) {
     const dt = Math.min(dtRaw, 0.1);
     const flowing = demo.bool('coil') && !demo.bool('tripped');
     const i = flowing ? demo.num('load') / 100 : 0;
-    heat.current = Math.max(0, heat.current + (flowing ? Math.max(i * i - 1, -0.2) / 12 : -0.12) * dt);
+    heat.current = Math.max(0, heat.current + (flowing ? Math.max(i * i - TRIP_RATING * TRIP_RATING, -0.2) / 12 : -0.12) * dt);
     if (heat.current >= 1 && !demo.bool('tripped')) {
       demo.set('tripped', true);
       sfx.play('fault');
@@ -95,7 +98,7 @@ const overload: StageDef = {
   defaults: { coil: true, load: 100, tripped: false, heat: 0 },
   controls: [
     { kind: 'toggle', key: 'coil', label: 'Contactor coil (run)', tone: 'green' },
-    { kind: 'slider', key: 'load', label: 'Motor current', min: 50, max: 250, step: 5, unit: '% FLA', hint: 'Above ≈ 115 % the thermal model heats up and trips.' },
+    { kind: 'slider', key: 'load', label: 'Motor current', min: 50, max: 250, step: 5, unit: '% FLA', hint: 'The E100 trips at ≈ 120 % of its FLA setting — more current, faster trip (demo time is sped up).' },
     { kind: 'readout', label: 'Thermal memory', value: (d) => `${d.num('heat')} %`, tone: (d) => (d.num('heat') > 70 ? 'red' : d.num('heat') > 30 ? 'amber' : 'green') },
     { kind: 'readout', label: '95-96 (N.C.) → OL_OK', value: (d) => (d.bool('tripped') ? 'OPEN → 0 · TRIPPED' : 'closed → 1'), tone: (d) => (d.bool('tripped') ? 'red' : 'green') },
     {

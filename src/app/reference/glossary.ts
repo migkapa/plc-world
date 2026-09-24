@@ -91,7 +91,7 @@ export const GLOSSARY: GlossaryEntry[] = [
     term: 'Prescan & S:FS',
     short: 'On the transition to Run the controller **prescans** the logic once; then the first real scan runs with the first-scan bit **S:FS** = 1.',
     points: [
-      'Prescan puts instructions in a safe initial state: OTE bits are cleared, TON timers reset, one-shot storage bits are set so they cannot fire on the first scan.',
+      'Prescan puts instructions in a safe initial state: OTE bits are cleared and TON timers reset. **ONS/OSR** storage bits are **set** (so a rung that is already true does not fire on the first scan); **OSF**’s storage bit is **cleared** (so a rung that is already false does not fire either).',
       'OTL/OTU bits are **not** touched by prescan: a latched motor bit is still 1 when the controller goes back to Run.',
       'Use `XIC(S:FS)OTU(Motor)` (or initialisation logic) to start from a known state.',
     ],
@@ -151,3 +151,17 @@ export const GLOSSARY: GlossaryEntry[] = [
 ];
 
 export const getGlossaryEntry = (id: string): GlossaryEntry | undefined => GLOSSARY.find((g) => g.id === id);
+
+/** Deep link to one glossary term (the route has a single segment: `/reference/glossary:<id>`). */
+export function glossaryHref(id?: string): string {
+  return id ? `/reference/glossary:${id}` : '/reference/glossary';
+}
+
+/** Parses the reference route segment: `glossary` or `glossary:<id>` → { term }, anything else → null. */
+export function parseGlossaryParam(raw: string | undefined): { term?: string } | null {
+  if (!raw) return null;
+  const m = /^glossary(?::([a-z0-9-]+))?$/i.exec(raw);
+  if (!m) return null;
+  const term = m[1]?.toLowerCase();
+  return { term: term && GLOSSARY.some((g) => g.id === term) ? term : undefined };
+}

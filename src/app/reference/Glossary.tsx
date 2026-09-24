@@ -3,16 +3,25 @@
  * and missions.
  */
 import { BookA, Box, Map as MapIcon } from 'lucide-react';
-import { Link } from 'wouter';
+import { useEffect } from 'react';
+import { Link, useLocation } from 'wouter';
+import { cn } from '../../ui';
 import { getMission } from '../../game/missions';
 import { routes } from '../routes';
 import { getShowroomDevice } from '../showroom/catalog';
-import { GLOSSARY, type GlossaryEntry } from './glossary';
+import { GLOSSARY, glossaryHref, type GlossaryEntry } from './glossary';
 import { GlossaryArt } from './GlossaryArt';
 import { InlineMd } from './InlineMd';
 import { MnemonicBadge } from './InstructionList';
 
-export function Glossary({ reducedMotion }: { reducedMotion: boolean }) {
+export function Glossary({ reducedMotion, term }: { reducedMotion: boolean; term?: string }) {
+  const [, navigate] = useLocation();
+  // deep link (/reference/glossary:<id>): bring that term into view
+  useEffect(() => {
+    if (!term) return;
+    const raf = requestAnimationFrame(() => document.getElementById(`g-${term}`)?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' }));
+    return () => cancelAnimationFrame(raf);
+  }, [term, reducedMotion]);
   return (
     <div className="mx-auto max-w-[1180px] px-4 py-6 sm:px-6">
       <header className="mb-5">
@@ -27,12 +36,17 @@ export function Glossary({ reducedMotion }: { reducedMotion: boolean }) {
           {GLOSSARY.map((g) => (
             <a
               key={g.id}
-              href={`#g-${g.id}`}
+              href={`#${glossaryHref(g.id)}`}
+              aria-current={term === g.id ? 'location' : undefined}
               onClick={(e) => {
                 e.preventDefault();
-                document.getElementById(`g-${g.id}`)?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
+                if (term === g.id) document.getElementById(`g-${g.id}`)?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
+                else navigate(glossaryHref(g.id), { replace: true });
               }}
-              className="rounded-full border border-edge bg-panel-3/60 px-2.5 py-1 text-[12px] font-medium text-slate-300 hover:border-slate-500 hover:text-white"
+              className={cn(
+                'rounded-full border px-2.5 py-1 text-[12px] font-medium hover:border-slate-500 hover:text-white',
+                term === g.id ? 'border-amber-400/50 bg-amber-400/10 text-amber-100' : 'border-edge bg-panel-3/60 text-slate-300',
+              )}
             >
               {g.term}
             </a>
@@ -41,22 +55,25 @@ export function Glossary({ reducedMotion }: { reducedMotion: boolean }) {
       </header>
       <div className="grid gap-4 lg:grid-cols-2">
         {GLOSSARY.map((g, i) => (
-          <GlossaryCard key={g.id} entry={g} index={i} />
+          <GlossaryCard key={g.id} entry={g} index={i} highlighted={term === g.id} />
         ))}
       </div>
     </div>
   );
 }
 
-function GlossaryCard({ entry: g, index }: { entry: GlossaryEntry; index: number }) {
+function GlossaryCard({ entry: g, index, highlighted }: { entry: GlossaryEntry; index: number; highlighted: boolean }) {
   return (
-    <article id={`g-${g.id}`} className="flex scroll-mt-4 flex-col overflow-hidden rounded-xl border border-edge bg-panel-2">
+    <article
+      id={`g-${g.id}`}
+      className={cn('flex scroll-mt-4 flex-col overflow-hidden rounded-xl border bg-panel-2 transition-colors', highlighted ? 'border-amber-400/60 ring-1 ring-amber-400/30' : 'border-edge')}
+    >
       <div className="border-b border-edge bg-[radial-gradient(ellipse_at_top,rgba(56,189,248,0.07),transparent_70%)] px-3 pt-2 pb-1">
         <GlossaryArt id={g.art} />
       </div>
       <div className="flex flex-1 flex-col gap-2 px-4 py-3">
         <h2 className="flex items-baseline gap-2 text-[16px] font-bold text-white">
-          <span className="font-mono text-[11px] font-semibold text-slate-500">{String(index + 1).padStart(2, '0')}</span>
+          <span className="font-mono text-[11px] font-semibold text-slate-400">{String(index + 1).padStart(2, '0')}</span>
           {g.term}
         </h2>
         <p className="text-[13.5px] leading-relaxed text-slate-200">

@@ -10,4 +10,6 @@ export interface StageDef {
   Scene: ComponentType<{ demo: DemoStore }>;
   /** Floor height (m), or false for no floor (wall-mounted panel devices bring their own backplate). */
   floor?: number | false;
+  /** The silhouette moves by itself (e.g. cartons riding a belt): keep the contact shadow updating every frame. */
+  liveShadow?: boolean;
 }

@@ -8,7 +8,8 @@ import { INSTRUCTION_CATEGORIES, INSTRUCTIONS, instructionsByCategory } from '..
 import type { InstructionInfo } from '../../plc/types';
 import { ProgressBar, cn } from '../../ui';
 import { routes } from '../routes';
-import { GLOSSARY } from './glossary';
+import { matchesQuery } from '../showroom/search';
+import { GLOSSARY, glossaryHref } from './glossary';
 
 export type Category = InstructionInfo['category'];
 
@@ -25,9 +26,7 @@ export const CATEGORY_STYLE: Record<Category, { icon: LucideIcon; color: string;
 export const ALL_MNEMONICS: string[] = INSTRUCTION_CATEGORIES.flatMap((c) => instructionsByCategory()[c].map((i) => i.mnemonic));
 
 export function matchInstruction(i: InstructionInfo, q: string): boolean {
-  if (!q) return true;
-  const s = q.toLowerCase();
-  return i.mnemonic.toLowerCase().includes(s) || i.name.toLowerCase().includes(s) || i.summary.toLowerCase().includes(s) || i.category.toLowerCase().includes(s);
+  return matchesQuery(`${i.mnemonic} ${i.name} ${i.summary} ${i.category}`, q);
 }
 
 export function MnemonicBadge({ mnemonic, className }: { mnemonic: string; className?: string }) {
@@ -48,7 +47,7 @@ export function InstructionList({ current, viewed, glossaryActive, className }: 
   }, [q]);
   const total = ALL_MNEMONICS.length;
   const seen = ALL_MNEMONICS.filter((m) => viewed.has(m)).length;
-  const glossHits = q ? GLOSSARY.filter((g) => `${g.term} ${g.short}`.toLowerCase().includes(q.toLowerCase())) : [];
+  const glossHits = q ? GLOSSARY.filter((g) => matchesQuery(`${g.term} ${g.short}`, q)) : [];
   return (
     <nav className={cn('flex min-h-0 flex-col', className)} aria-label="Instructions">
       <div className="space-y-2.5 border-b border-edge px-3 pt-3 pb-3">
@@ -62,7 +61,7 @@ export function InstructionList({ current, viewed, glossaryActive, className }: 
         </div>
         <div>
           <ProgressBar value={seen / total} color="bg-gradient-to-r from-sky-500 to-emerald-400" className="h-1.5" />
-          <div className="mt-1 text-[10.5px] text-slate-500">Instructions studied</div>
+          <div className="mt-1 text-[10.5px] text-slate-400">Instructions studied</div>
         </div>
         <label className="flex h-8 items-center gap-2 rounded-lg border border-edge bg-panel px-2 text-slate-400 focus-within:border-slate-500">
           <Search size={14} />
@@ -74,7 +73,7 @@ export function InstructionList({ current, viewed, glossaryActive, className }: 
             className="min-w-0 flex-1 bg-transparent text-[13px] text-slate-100 placeholder:text-slate-500 focus:outline-none"
           />
           {q && (
-            <button type="button" onClick={() => setQuery('')} className="cursor-pointer text-[11px] text-slate-500 hover:text-slate-200">
+            <button type="button" onClick={() => setQuery('')} className="cursor-pointer text-[11px] text-slate-400 hover:text-slate-200">
               clear
             </button>
           )}
@@ -89,10 +88,10 @@ export function InstructionList({ current, viewed, glossaryActive, className }: 
           )}
         >
           <BookA size={15} className="text-amber-300" /> Glossary
-          <span className="ml-auto font-mono text-[10.5px] text-slate-500">{GLOSSARY.length} terms</span>
+          <span className="ml-auto font-mono text-[10.5px] text-slate-400">{GLOSSARY.length} terms</span>
         </Link>
         {glossHits.map((g) => (
-          <Link key={g.id} href={routes.reference('glossary')} className="ml-6 block truncate rounded px-2 py-1 text-[12px] text-amber-200/80 hover:text-amber-100">
+          <Link key={g.id} href={glossaryHref(g.id)} className="ml-6 block truncate rounded px-2 py-1 text-[12px] text-amber-200/80 hover:text-amber-100">
             {g.term}
           </Link>
         ))}
@@ -102,10 +101,10 @@ export function InstructionList({ current, viewed, glossaryActive, className }: 
           const Icon = st.icon;
           return (
             <div key={c} className="mb-1.5">
-              <div className="flex items-center gap-1.5 px-2 pt-2.5 pb-1 text-[10.5px] font-bold tracking-[0.08em] text-slate-500 uppercase">
+              <div className="flex items-center gap-1.5 px-2 pt-2.5 pb-1 text-[10.5px] font-bold tracking-[0.08em] text-slate-400 uppercase">
                 <Icon size={12} style={{ color: st.color }} />
                 {c}
-                <span className="ml-auto font-mono font-normal tracking-normal text-slate-600">{items.length}</span>
+                <span className="ml-auto font-mono font-normal tracking-normal text-slate-400">{items.length}</span>
               </div>
               {items.map((i) => {
                 const active = i.mnemonic === current;
@@ -130,7 +129,7 @@ export function InstructionList({ current, viewed, glossaryActive, className }: 
           );
         })}
         {q && groups.every((g) => g.items.length === 0) && glossHits.length === 0 && (
-          <div className="px-3 py-6 text-center text-[13px] text-slate-500">
+          <div className="px-3 py-6 text-center text-[13px] text-slate-400">
             <Hash size={16} className="mx-auto mb-1 opacity-60" />
             Nothing matches “{q}”.
           </div>

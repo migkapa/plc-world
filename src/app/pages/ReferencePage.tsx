@@ -12,9 +12,9 @@ import { INSTRUCTION_CATEGORIES, INSTRUCTIONS, instructionsByCategory } from '..
 import { cn } from '../../ui';
 import { useReducedMotion } from '../hud/prefs';
 import { Glossary } from '../reference/Glossary';
-import { GLOSSARY } from '../reference/glossary';
+import { GLOSSARY, glossaryHref, parseGlossaryParam } from '../reference/glossary';
 import { InlineMd } from '../reference/InlineMd';
-import { ALL_MNEMONICS, CATEGORY_STYLE, InstructionList, MnemonicBadge } from '../reference/InstructionList';
+import { ALL_MNEMONICS, CATEGORY_STYLE, InstructionList, MnemonicBadge, matchInstruction } from '../reference/InstructionList';
 import { Playground } from '../reference/Playground';
 import { playgroundFor } from '../reference/playgrounds';
 import { useMedia } from '../reference/useMedia';
@@ -44,7 +44,9 @@ function saveViewed(s: ReadonlySet<string>): void {
 export default function ReferencePage() {
   const params = useParams<{ mnemonic?: string }>();
   const raw = params.mnemonic ? decodeURIComponent(params.mnemonic) : undefined;
-  const glossary = raw?.toLowerCase() === 'glossary';
+  const glossaryRoute = parseGlossaryParam(raw);
+  const glossary = glossaryRoute !== null;
+  const glossaryTerm = glossaryRoute?.term;
   const mnemonic = raw && !glossary ? raw.toUpperCase() : undefined;
   const info = mnemonic ? INSTRUCTIONS[mnemonic] : undefined;
   const desktop = useMedia('(min-width: 1024px)');
@@ -63,13 +65,13 @@ export default function ReferencePage() {
     recordEvent({ type: 'referenceViewed', mnemonic: info.mnemonic });
   }, [info, recordEvent]);
 
-  // scroll the main pane to the top when the page changes
+  // scroll the main pane to the top when the page changes (a glossary deep link scrolls to its term instead)
   useEffect(() => {
-    document.getElementById('ref-main')?.scrollTo({ top: 0 });
-  }, [raw]);
+    if (!glossaryTerm) document.getElementById('ref-main')?.scrollTo({ top: 0 });
+  }, [raw, glossaryTerm]);
 
   const main = glossary ? (
-    <Glossary reducedMotion={reducedMotion} />
+    <Glossary reducedMotion={reducedMotion} term={glossaryTerm} />
   ) : info ? (
     <Detail mnemonic={info.mnemonic} compact={!desktop} />
   ) : (
@@ -135,7 +137,7 @@ function Detail({ mnemonic, compact }: { mnemonic: string; compact: boolean }) {
   return (
     <div className="mx-auto max-w-[1320px] px-3 py-4 sm:px-5 sm:py-5">
       {!compact && (
-        <div className="mb-3 flex items-center gap-2 text-[12px] text-slate-500">
+        <div className="mb-3 flex items-center gap-2 text-[12px] text-slate-400">
           <Link href={routes.reference()} className="hover:text-slate-200">
             Reference
           </Link>
@@ -185,7 +187,7 @@ function Detail({ mnemonic, compact }: { mnemonic: string; compact: boolean }) {
         {def ? (
           <Playground mnemonic={mnemonic} def={def} className="order-1 xl:order-none" />
         ) : (
-          <div className="rounded-xl border border-dashed border-edge p-6 text-center text-sm text-slate-500">No playground for {mnemonic} yet.</div>
+          <div className="rounded-xl border border-dashed border-edge p-6 text-center text-sm text-slate-400">No playground for {mnemonic} yet.</div>
         )}
       </div>
     </div>
@@ -196,11 +198,7 @@ function Landing({ unknown, viewed, showList }: { unknown?: string; viewed: Read
   const [, navigate] = useLocation();
   const by = instructionsByCategory();
   const [q, setQ] = useState('');
-  const hits = q.trim() ? ALL_MNEMONICS.filter((m) => {
-    const i = INSTRUCTIONS[m]!;
-    const s = q.trim().toLowerCase();
-    return m.toLowerCase().includes(s) || i.name.toLowerCase().includes(s) || i.summary.toLowerCase().includes(s);
-  }) : [];
+  const hits = q.trim() ? ALL_MNEMONICS.filter((m) => matchInstruction(INSTRUCTIONS[m]!, q)) : [];
   return (
     <div className="mx-auto max-w-[1180px] px-4 py-6 sm:px-6 sm:py-8">
       {unknown && (
@@ -244,6 +242,11 @@ function Landing({ unknown, viewed, showList }: { unknown?: string; viewed: Read
               ))}
             </div>
           )}
+          {showList && q.trim() !== '' && hits.length === 0 && (
+            <p className="mt-2 text-[13px] text-slate-400" role="status">
+              Nothing matches “{q.trim()}”. Try a mnemonic (XIC, TON) or a word like “timer” or “compare”.
+            </p>
+          )}
         </div>
       </section>
 
@@ -264,7 +267,7 @@ function Landing({ unknown, viewed, showList }: { unknown?: string; viewed: Read
                   <h2 className="text-[15px] font-bold text-white">{c}</h2>
                   <p className="truncate text-[12px] text-slate-400">{st.blurb}</p>
                 </div>
-                <span className="font-mono text-[11px] text-slate-500">
+                <span className="font-mono text-[11px] text-slate-400">
                   {done}/{items.length}
                 </span>
               </div>
@@ -288,13 +291,13 @@ function Landing({ unknown, viewed, showList }: { unknown?: string; viewed: Read
             </div>
             <h2 className="text-lg font-bold text-white">Concepts behind the rungs</h2>
           </div>
-          <Link href={routes.reference('glossary')} className="shrink-0 rounded-lg border border-edge bg-panel-2 px-3 py-1.5 text-[12.5px] font-semibold text-slate-200 hover:border-slate-500">
+          <Link href={glossaryHref()} className="shrink-0 rounded-lg border border-edge bg-panel-2 px-3 py-1.5 text-[12.5px] font-semibold text-slate-200 hover:border-slate-500">
             Open glossary →
           </Link>
         </div>
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
           {GLOSSARY.map((g) => (
-            <Link key={g.id} href={routes.reference('glossary')} className="rounded-lg border border-edge bg-panel-2 px-3 py-2.5 transition-colors hover:border-slate-600">
+            <Link key={g.id} href={glossaryHref(g.id)} className="rounded-lg border border-edge bg-panel-2 px-3 py-2.5 transition-colors hover:border-slate-600">
               <div className="text-[13px] font-semibold text-white">{g.term}</div>
               <div className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-slate-400">
                 <InlineMd text={g.short} />

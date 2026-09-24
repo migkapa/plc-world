@@ -3,7 +3,6 @@
  * numbered hotspot markers. Markers are plain DOM in the overlay, positioned every frame by a projector inside the
  * canvas (StrictMode-safe, unlike drei <Html>); they fade when their feature faces away from the camera.
  */
-import { ContactShadows } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Eye, EyeOff, Move3d, RotateCcw, X } from 'lucide-react';
 import { Suspense, useEffect, useMemo, useRef, type ReactNode } from 'react';
@@ -11,6 +10,8 @@ import * as THREE from 'three';
 import { SceneCanvas, useStageCamera, type StageQuality } from '../../twin/Stage';
 import { IconButton, Markdown, cn } from '../../ui';
 import type { Hotspot, ShowroomDevice } from './catalog';
+import { ContactShadow } from './ContactShadow';
+import { spreadMarkers } from './spreadMarkers';
 import type { DemoStore } from './demo';
 import type { StageDef } from './stages';
 
@@ -112,7 +113,7 @@ export function DeviceViewer(props: DeviceViewerProps) {
       className={cn('relative h-full w-full overflow-hidden', props.className)}
     >
       <CameraDirector device={device} active={active} homeSignal={homeSignal} reducedMotion={reducedMotion} />
-      {floorY !== null && <Floor y={floorY} size={device.size} />}
+      {floorY !== null && <Floor y={floorY} size={device.size} deviceId={device.id} demo={demo} live={stage.liveShadow ?? false} />}
       <Suspense fallback={null}>
         <stage.Scene key={device.id} demo={demo} />
       </Suspense>
@@ -172,7 +173,7 @@ function CameraDirector({ device, active, homeSignal, reducedMotion }: { device:
 // Floor
 // ---------------------------------------------------------------------------
 
-function Floor({ y, size }: { y: number; size: number }) {
+function Floor({ y, size, deviceId, demo, live }: { y: number; size: number; deviceId: string; demo: DemoStore; live: boolean }) {
   const ringMat = useMemo(() => new THREE.MeshBasicMaterial({ color: '#e0252b', transparent: true, opacity: 0.35, toneMapped: false }), []);
   useEffect(() => () => ringMat.dispose(), [ringMat]);
   const r = size * 0.95;
@@ -189,7 +190,7 @@ function Floor({ y, size }: { y: number; size: number }) {
       <mesh rotation-x={-Math.PI / 2} position={[0, 0.0002, 0]} material={ringMat}>
         <ringGeometry args={[r * 0.995, r, 128]} />
       </mesh>
-      <ContactShadows position={[0, 0.0006, 0]} opacity={0.55} scale={size * 3} blur={2.2} far={size * 1.2} resolution={512} />
+      <ContactShadow size={size * 3} far={size * 1.2} opacity={0.55} blur={2.2} resetKey={deviceId} version={() => demo.version} live={live} />
     </group>
   );
 }
@@ -198,30 +199,49 @@ function Floor({ y, size }: { y: number; size: number }) {
 // Hotspots
 // ---------------------------------------------------------------------------
 
-/** Projects hotspot world positions to overlay pixels every frame and fades back-facing ones. */
+/**
+ * Projects hotspot world positions to overlay pixels every frame, fades back-facing ones (and takes them out of
+ * the tab order) and nudges crowded markers apart.
+ */
 function HotspotProjector({ spots, markers }: { spots: Hotspot[]; markers: Map<number, HTMLDivElement> }) {
   const data = useMemo(
     () => spots.map((s) => ({ at: new THREE.Vector3(...s.at), n: new THREE.Vector3(...(s.normal ?? [0, 0, 1])).normalize() })),
     [spots],
   );
+  const scratch = useMemo(
+    () => ({ xs: new Float32Array(spots.length), ys: new Float32Array(spots.length), front: new Array<boolean>(spots.length).fill(false), vis: new Array<boolean>(spots.length).fill(false) }),
+    [spots],
+  );
   const v = useMemo(() => new THREE.Vector3(), []);
   const d = useMemo(() => new THREE.Vector3(), []);
   useFrame(({ camera, size }) => {
+    const { xs, ys, front, vis } = scratch;
+    for (let i = 0; i < data.length; i++) {
+      const { at, n } = data[i]!;
+      v.copy(at).project(camera);
+      front[i] = v.z < 1 && v.z > -1;
+      xs[i] = ((v.x + 1) / 2) * size.width;
+      ys[i] = ((1 - v.y) / 2) * size.height;
+      const facing = d.copy(camera.position).sub(at).normalize().dot(n);
+      vis[i] = front[i]! && facing > -0.08;
+    }
+    spreadMarkers(xs, ys, vis, size.width < 640 ? 21 : 26);
     for (let i = 0; i < data.length; i++) {
       const el = markers.get(i);
       if (!el) continue;
-      const { at, n } = data[i]!;
-      v.copy(at).project(camera);
-      const inFront = v.z < 1 && v.z > -1;
-      const x = ((v.x + 1) / 2) * size.width;
-      const y = ((1 - v.y) / 2) * size.height;
-      const facing = d.copy(camera.position).sub(at).normalize().dot(n);
-      const visible = inFront && facing > -0.08;
-      el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0)`;
-      const o = !inFront ? '0' : visible ? '1' : '0.15';
+      // markers that drift under the top toolbar row (zoomed-in camera) fade out instead of hiding behind it
+      const visible = vis[i]! && ys[i]! > 46;
+      el.style.transform = `translate3d(${xs[i]!.toFixed(1)}px, ${ys[i]!.toFixed(1)}px, 0)`;
+      const o = !front[i] ? '0' : visible ? '1' : '0.15';
       if (el.style.opacity !== o) el.style.opacity = o;
       const pe = visible ? 'auto' : 'none';
-      if (el.style.pointerEvents !== pe) el.style.pointerEvents = pe;
+      if (el.style.pointerEvents !== pe) {
+        el.style.pointerEvents = pe;
+        // faded / behind-the-model markers are not reachable by keyboard or announced
+        el.setAttribute('aria-hidden', visible ? 'false' : 'true');
+        const btn = el.querySelector('button');
+        if (btn) btn.tabIndex = visible ? 0 : -1;
+      }
     }
   });
   return null;
@@ -257,7 +277,7 @@ function HotspotMarker({
           onClick={onClick}
           aria-label={`Hotspot ${index + 1}: ${spot.label}`}
           className={cn(
-            'relative flex h-[22px] w-[22px] cursor-pointer items-center justify-center rounded-full border text-[11px] font-bold tabular-nums shadow-lg shadow-black/50 transition-transform',
+            'relative flex h-[19px] w-[19px] cursor-pointer items-center justify-center rounded-full border text-[10px] font-bold tabular-nums shadow-lg shadow-black/50 transition-transform sm:h-[22px] sm:w-[22px] sm:text-[11px]',
             'focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:outline-none',
             active
               ? 'scale-110 border-white bg-ab-red text-white'
@@ -271,7 +291,7 @@ function HotspotMarker({
         </button>
         <span
           className={cn(
-            'pointer-events-none absolute top-1/2 left-[28px] -translate-y-1/2 rounded-md border border-white/10 bg-black/75 px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap text-slate-100 opacity-0 shadow-lg backdrop-blur transition-opacity',
+            'pointer-events-none absolute top-1/2 left-[24px] -translate-y-1/2 sm:left-[28px] rounded-md border border-white/10 bg-black/75 px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap text-slate-100 opacity-0 shadow-lg backdrop-blur transition-opacity',
             'group-hover:opacity-100',
             active && 'opacity-100',
           )}
@@ -310,7 +330,7 @@ function HotspotCallout({
       <div className="flex items-center gap-2">
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-ab-red text-[11px] font-bold text-white">{index + 1}</span>
         <div className="min-w-0 flex-1 truncate text-sm font-semibold text-white">{spot.label}</div>
-        <span className="font-mono text-[10px] text-slate-500">
+        <span className="font-mono text-[10px] text-slate-400">
           {index + 1}/{count}
         </span>
         <StepButton label="Previous hotspot" onClick={() => onStep(-1)}>

@@ -278,7 +278,7 @@ export const PLAYGROUNDS: Record<string, PlaygroundDef> = {
     tags: [bool('Car_In'), bool('Car_Out'), bool('Reset_PB'), counter('Cars_Inside', 'Garage occupancy, 5 spaces')],
     inputs: [tap('Car_In', 'Car in'), tap('Car_Out', 'Car out'), tap('Reset_PB', 'Reset')],
     traces: [tb('Car_In'), tb('Car_Out'), tn('Cars_Inside.ACC', -2, 7, 'dec', '.ACC'), tb('Cars_Inside.DN', '.DN (full)'), tb('Cars_Inside.UN', '.UN')],
-    tryIt: ['CTU and CTD share one COUNTER: `.ACC` is the occupancy (Chapter 4, “Full House”).', '`.DN` = ACC ≥ PRE: the garage is full.', 'CTD below zero goes negative — it does not stop at 0.'],
+    tryIt: ['CTU and CTD share one COUNTER: `.ACC` is the occupancy (Chapter 4, “Full House”).', '`.DN` = ACC ≥ PRE: the garage is full.', 'CTD below zero goes negative — it does not stop at 0.', '`.UN` (underflow) stays 0 here: it only sets when `.ACC` wraps past **−2,147,483,648**, not when it drops below 0.'],
   },
   RES: {
     rungs: ['XIC(Run)RTO(Run_Timer,3000,0);', 'XIC(Reset_PB)RES(Run_Timer);'],

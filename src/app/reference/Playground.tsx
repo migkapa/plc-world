@@ -15,6 +15,7 @@ import { trainerLogic } from '../../sim/scenes';
 import type { SimRuntime } from '../../sim/types';
 import { useSimLoop } from '../../sim/useSimLoop';
 import { Button, cn } from '../../ui';
+import { useReducedMotion } from '../hud/prefs';
 import type { PlaygroundDef, PlaygroundInput } from './playgrounds';
 import { TraceRecorder, withStepHook } from './recorder';
 import { InlineMd } from './InlineMd';
@@ -109,7 +110,7 @@ function Session({ mnemonic, def, onReset, className }: { mnemonic: string; def:
       {def.routines?.map((r) => (
         <div key={r.name} className="border-b border-edge bg-panel/60 px-3 py-2">
           <div className="mb-1.5 font-mono text-[11px] font-semibold text-slate-400">
-            Routine <span className="text-slate-200">{r.name}</span> <span className="text-slate-600">(called by JSR · read-only)</span>
+            Routine <span className="text-slate-200">{r.name}</span> <span className="text-slate-400">(called by JSR · read-only)</span>
           </div>
           <div className="flex flex-col gap-1.5">
             {r.rungs.map((t, i) => (
@@ -119,14 +120,14 @@ function Session({ mnemonic, def, onReset, className }: { mnemonic: string; def:
         </div>
       ))}
 
-      <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-0">
         <Inputs runtime={sim.runtime} controller={sim.controller} inputs={def.inputs} />
-        <div className="border-t border-edge px-2 pt-2 pb-1">
-          <div className="mb-1 flex items-center gap-2 px-1">
+        <div className="min-w-0 border-t border-edge px-2 pt-2 pb-1">
+          <div className="mb-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-1">
             <span className="text-[11px] font-bold tracking-[0.08em] text-slate-400 uppercase">Timing diagram</span>
-            <span className="text-[11px] text-slate-500">one sample per scan · hover to read values</span>
+            <span className="hidden text-[11px] text-slate-400 sm:inline">one sample per scan · hover to read values</span>
             <div className="flex-1" />
-            <div role="radiogroup" aria-label="Time window" className="flex rounded-md border border-edge bg-panel p-0.5">
+            <div role="radiogroup" aria-label="Time window" className="flex shrink-0 rounded-md border border-edge bg-panel p-0.5">
               {WINDOWS.map((w) => (
                 <button
                   key={w.ms}
@@ -136,7 +137,7 @@ function Session({ mnemonic, def, onReset, className }: { mnemonic: string; def:
                   onClick={() => setWindowMs(w.ms)}
                   className={cn(
                     'h-6 cursor-pointer rounded px-2 font-mono text-[11px] font-semibold',
-                    windowMs === w.ms ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-200',
+                    windowMs === w.ms ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200',
                   )}
                 >
                   {w.label}
@@ -188,6 +189,7 @@ function useRuntimeVersion(runtime: SimRuntime): number {
 
 function StatusPill({ runtime, controller, paused }: { runtime: SimRuntime; controller: PlcController; paused: boolean }) {
   useRuntimeVersion(runtime);
+  const reducedMotion = useReducedMotion();
   const st = controller.getStatus();
   const faulted = st.mode === 'FAULTED';
   return (
@@ -197,7 +199,7 @@ function StatusPill({ runtime, controller, paused }: { runtime: SimRuntime; cont
         faulted ? 'border-red-500/40 bg-red-500/10 text-red-300' : paused ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
       )}
     >
-      <span className={cn('h-1.5 w-1.5 rounded-full', faulted ? 'bg-red-400' : paused ? 'bg-amber-400' : 'animate-pulse bg-emerald-400')} />
+      <span className={cn('h-1.5 w-1.5 rounded-full', faulted ? 'bg-red-400' : paused ? 'bg-amber-400' : cn('bg-emerald-400', !reducedMotion && 'animate-pulse'))} />
       {faulted ? 'FAULTED' : paused ? 'PAUSED' : 'RUN'} · {(runtime.timeMs / 1000).toFixed(1)} s
     </span>
   );
@@ -256,7 +258,7 @@ function InputControl({ input, controller }: { input: PlaygroundInput; controlle
         </span>
         <span className="min-w-0">
           <span className="block truncate font-mono text-[12px] font-semibold text-slate-100">{label}</span>
-          <span className={cn('block font-mono text-[10.5px]', on ? 'text-emerald-300' : 'text-slate-500')}>{on ? '1 · ON' : '0 · OFF'}</span>
+          <span className={cn('block font-mono text-[10.5px]', on ? 'text-emerald-300' : 'text-slate-400')}>{on ? '1 · ON' : '0 · OFF'}</span>
         </span>
       </button>
     );
@@ -267,7 +269,7 @@ function InputControl({ input, controller }: { input: PlaygroundInput; controlle
       <div className="rounded-lg border border-edge bg-panel px-2.5 py-1.5">
         <div className="mb-1 flex items-baseline gap-2">
           <span className="font-mono text-[12px] font-semibold text-slate-100">{label}</span>
-          <span className="font-mono text-[10.5px] text-slate-500">= {Number.isFinite(v) ? v : '—'}</span>
+          <span className="font-mono text-[10.5px] text-slate-400">= {Number.isFinite(v) ? v : '—'}</span>
         </div>
         <div className="flex gap-[3px]">
           {[7, 6, 5, 4, 3, 2, 1, 0].map((b) => {
@@ -285,7 +287,7 @@ function InputControl({ input, controller }: { input: PlaygroundInput; controlle
                 className={cn(
                   'flex h-7 w-6 cursor-pointer flex-col items-center justify-center rounded border font-mono leading-none transition-colors',
                   b === 3 && 'mr-1',
-                  on ? 'border-emerald-400/60 bg-emerald-500/25 text-emerald-200' : 'border-edge bg-slate-800 text-slate-500 hover:border-slate-500',
+                  on ? 'border-emerald-400/60 bg-emerald-500/25 text-emerald-200' : 'border-edge bg-slate-800 text-slate-400 hover:border-slate-500',
                 )}
               >
                 <span className="text-[11px] font-bold">{on ? 1 : 0}</span>
@@ -369,7 +371,7 @@ function HoldButton({ label, tag, controller, on }: { label: string; tag: string
       )}
     >
       <span className="font-mono text-[12px] font-semibold text-slate-100">{label}</span>
-      <span className={cn('font-mono text-[10.5px]', on ? 'text-emerald-300' : 'text-slate-500')}>{on ? 'pressed · 1' : 'hold to press'}</span>
+      <span className={cn('font-mono text-[10.5px]', on ? 'text-emerald-300' : 'text-slate-400')}>{on ? 'pressed · 1' : 'hold to press'}</span>
     </button>
   );
 }

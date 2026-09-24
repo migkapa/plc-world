@@ -35,11 +35,13 @@ export function InfoCard({ device, reducedMotion, className, scroll = true }: { 
         <div className="flex items-center gap-2 text-[11px] font-semibold tracking-wide text-slate-400 uppercase">
           <span className="h-2 w-2 rounded-full" style={{ background: group.accent }} />
           {group.title}
-          <span className="text-slate-600">·</span>
+          <span className="text-slate-600" aria-hidden>·</span>
           <span className="truncate normal-case">{device.family}</span>
         </div>
-        <div className="mt-1.5 font-mono text-2xl leading-tight font-bold tracking-tight text-white">{device.catalog}</div>
-        <div className="text-[15px] font-semibold text-slate-200">{device.name}</div>
+        <h2 className="mt-1.5">
+          <span className="block font-mono text-2xl leading-tight font-bold tracking-tight text-white">{device.catalog}</span>
+          <span className="block text-[15px] font-semibold text-slate-200">{device.name}</span>
+        </h2>
         <p className="mt-1 text-[13px] leading-snug text-slate-400">{device.tagline}</p>
         <nav className="mt-3 flex flex-wrap gap-1.5" aria-label="Sections">
           {[
@@ -90,7 +92,7 @@ export function InfoCard({ device, reducedMotion, className, scroll = true }: { 
             ))}
           </dl>
           {hasApprox && (
-            <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-500">
+            <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-400">
               <AlertTriangle size={11} className="text-amber-400" /> = check the current data sheet before relying on it.
             </p>
           )}
@@ -158,7 +160,7 @@ export function InfoCard({ device, reducedMotion, className, scroll = true }: { 
           </Section>
         )}
 
-        <p className="border-t border-edge pt-3 text-[11px] leading-relaxed text-slate-500">
+        <p className="border-t border-edge pt-3 text-[11px] leading-relaxed text-slate-400">
           {device.note ?? 'Condensed from Rockwell Automation user manuals and technical data. Always follow the product’s own documentation on real equipment.'}{' '}
           PLC World is not affiliated with Rockwell Automation.
         </p>
@@ -188,7 +190,7 @@ function InWorld({ device }: { device: ShowroomDevice }) {
       <p className="text-[13px] leading-snug text-slate-300">{note}</p>
       {scenes.length > 0 && (
         <div>
-          <div className="mb-1 text-[10.5px] font-semibold tracking-wide text-slate-500 uppercase">Plants</div>
+          <div className="mb-1 text-[10.5px] font-semibold tracking-wide text-slate-400 uppercase">Plants</div>
           <div className="flex flex-wrap gap-1.5">
             {scenes.map((id) => (
               <Link
@@ -204,7 +206,7 @@ function InWorld({ device }: { device: ShowroomDevice }) {
       )}
       {missions.length > 0 && (
         <div>
-          <div className="mb-1 text-[10.5px] font-semibold tracking-wide text-slate-500 uppercase">Missions</div>
+          <div className="mb-1 text-[10.5px] font-semibold tracking-wide text-slate-400 uppercase">Missions</div>
           <div className="grid gap-1">
             {missions.map((id) => {
               const m = getMission(id);
@@ -220,12 +222,12 @@ function InWorld({ device }: { device: ShowroomDevice }) {
                     unlocked ? 'border-edge bg-panel-3/50 text-slate-200 hover:border-slate-500' : 'border-edge/60 bg-panel/40 text-slate-500',
                   )}
                 >
-                  <span className="w-8 shrink-0 font-mono text-[11px] text-slate-500">{m.id}</span>
+                  <span className="w-8 shrink-0 font-mono text-[11px] text-slate-400">{m.id}</span>
                   <span className="min-w-0 flex-1 truncate font-medium">{m.title}</span>
                   {done ? (
                     <span className="text-[10.5px] font-semibold text-emerald-400">DONE</span>
                   ) : !unlocked ? (
-                    <Lock size={12} className="text-slate-600" />
+                    <Lock size={12} className="text-slate-500" aria-label="Locked" />
                   ) : (
                     <span className="text-[10.5px] font-semibold text-slate-400">PLAY</span>
                   )}

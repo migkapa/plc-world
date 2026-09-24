@@ -108,6 +108,8 @@ export type DemoControl =
       onSet?: (store: DemoStore, value: string) => void;
       /** Custom getter of the selected option (default: String(store.get(key))). */
       value?: (store: DemoStore) => string;
+      /** Grey the whole choice out (e.g. remote mode while the key is not in REM). */
+      disabled?: (store: DemoStore) => boolean;
     }
   | { kind: 'slider'; key: string; label: string; min: number; max: number; step: number; unit?: string; digits?: number; hint?: string }
   /** Grid of toggle bits (I/O points). */

@@ -1,6 +1,7 @@
 /**
  * Hardware Showroom (/showroom/:device?): device list · 3D viewer with hotspots and demo controls · info card.
  */
+import { AlertTriangle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useParams } from 'wouter';
 import { useGame } from '../../game/store';
@@ -40,7 +41,10 @@ function saveExplored(s: ReadonlySet<string>): void {
 export default function ShowroomPage() {
   const params = useParams<{ device?: string }>();
   const [, navigate] = useLocation();
-  const device = getShowroomDevice(params.device) ?? getShowroomDevice(DEFAULT_SHOWROOM_DEVICE)!;
+  const requested = params.device ? decodeURIComponent(params.device) : undefined;
+  const found = getShowroomDevice(requested);
+  const device = found ?? getShowroomDevice(DEFAULT_SHOWROOM_DEVICE)!;
+  const unknown = requested && !found ? requested : undefined;
   const stage = STAGES[device.id]!;
   const demo = useMemo(() => new DemoStore(stage.defaults), [stage]);
   const reducedMotion = useReducedMotion();
@@ -106,20 +110,38 @@ export default function ShowroomPage() {
           setHomeSignal((n) => n + 1);
         }}
       />
-      <div className="pointer-events-none absolute top-12 left-2.5 hidden max-w-[60%] rounded-lg sm:block bg-gradient-to-r from-black/55 to-black/0 px-2.5 py-1.5 sm:top-14">
+      {/* device title: bottom-left (clear of the toolbar and most hotspots); hidden while a hotspot callout is open */}
+      <div
+        aria-hidden
+        className={cn(
+          'pointer-events-none absolute bottom-2.5 left-2.5 hidden max-w-[55%] rounded-lg bg-gradient-to-r from-black/55 to-black/0 px-2.5 py-1.5 sm:block',
+          !reducedMotion && 'transition-opacity duration-200',
+          active !== null && 'opacity-0',
+        )}
+      >
         <div className="font-mono text-[11px] font-semibold tracking-wide text-slate-300">{device.catalog}</div>
-        <div className="text-lg leading-tight font-bold text-white [text-shadow:0_1px_8px_rgba(0,0,0,0.6)] sm:text-xl">{device.name}</div>
+        <div className="text-base leading-tight font-bold text-white [text-shadow:0_1px_8px_rgba(0,0,0,0.6)] xl:text-lg">{device.name}</div>
       </div>
     </div>
   );
 
   const controls = <DemoControls controls={stage.controls} demo={demo} title={`Try it · ${device.catalog}`} />;
+  const notice = unknown && (
+    <div role="status" className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-200">
+      <AlertTriangle size={14} className="shrink-0 text-amber-300" />
+      <span className="min-w-0">
+        There is no device called “<span className="font-mono">{unknown}</span>” — showing the {device.catalog} instead.
+      </span>
+    </div>
+  );
 
   if (!desktop) {
     return (
       <div className="h-full overflow-y-auto">
         <div className="mx-auto flex max-w-3xl flex-col gap-3 p-3 pb-10">
+          <h1 className="sr-only">Hardware Showroom: {device.name}</h1>
           <DevicePicker current={device.id} explored={explored} onPick={(id) => navigate(routes.showroom(id))} />
+          {notice}
           <div className="h-[56vh] max-h-[520px] min-h-[300px]">{viewer}</div>
           {controls}
           <div className="rounded-xl border border-edge bg-panel-2">
@@ -136,6 +158,7 @@ export default function ShowroomPage() {
       {wide ? (
         <>
           <div className="flex min-h-0 flex-col gap-3 p-3">
+            {notice}
             <div className="min-h-0 flex-1">{viewer}</div>
             <div className="max-h-[42%] shrink-0 overflow-y-auto">{controls}</div>
           </div>
@@ -144,6 +167,7 @@ export default function ShowroomPage() {
       ) : (
         <div className="min-h-0 overflow-y-auto">
           <div className="flex flex-col gap-3 p-3">
+            {notice}
             <div className="h-[60vh] min-h-[340px]">{viewer}</div>
             {controls}
             <div className="rounded-xl border border-edge bg-panel-2">

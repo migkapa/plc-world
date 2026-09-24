@@ -22,6 +22,7 @@ import { staticRackLive } from '../../../twin/live';
 import type { ControllerStatus, HardwareConfig, KeySwitch } from '../../../plc/types';
 import { useDemoVersion, type DemoControl, type DemoStore } from '../demo';
 import { Backplate, DisplayStand, useRamp } from './common';
+import { clearMajors, isRunning, simulateMajorFault, turnKey } from './controllerMode';
 import type { StageDef } from './types';
 
 const RACK_Y = 0.05;
@@ -31,16 +32,6 @@ const CPX_Y = 0.1;
 // ---------------------------------------------------------------------------
 // Controller status driven by the demo panel
 // ---------------------------------------------------------------------------
-
-const isRunning = (d: DemoStore): boolean => !d.bool('faulted') && (d.str('key') === 'RUN' || (d.str('key') === 'REM' && d.bool('remoteRun')));
-
-function turnKey(d: DemoStore, pos: string): void {
-  if (pos === d.str('key')) return;
-  // Moving into REM keeps the current mode (Remote Run / Remote Program), like the real key switch.
-  const wasRunning = isRunning(d);
-  d.patch({ key: pos, remoteRun: pos === 'REM' ? wasRunning : d.bool('remoteRun') });
-  sfx.play('toggle');
-}
 
 function statusOf(d: DemoStore): Partial<ControllerStatus> {
   const key = (d.str('key') || 'REM') as KeySwitch;
@@ -75,7 +66,7 @@ function useDemoLive(d: DemoStore, point?: (slot: number, i: number) => boolean)
   );
 }
 
-const CONTROLLER_DEFAULTS = { key: 'REM', remoteRun: true, faulted: false, forces: 'none' };
+const CONTROLLER_DEFAULTS = { key: 'REM', remoteRun: true, faulted: false, faultTrail: '', forces: 'none' };
 
 const controllerControls = (keyLabel: string): DemoControl[] => [
   {
@@ -88,7 +79,7 @@ const controllerControls = (keyLabel: string): DemoControl[] => [
       { value: 'PROG', label: 'PROG' },
     ],
     onSet: turnKey,
-    hint: 'Click the key in 3D too. REM keeps the current mode.',
+    hint: 'Click the key in 3D too. REM keeps the current mode. Faulted? PROG → RUN → PROG clears it.',
   },
   {
     kind: 'select',
@@ -98,13 +89,14 @@ const controllerControls = (keyLabel: string): DemoControl[] => [
       { value: 'run', label: 'Rem Run' },
       { value: 'prog', label: 'Rem Prog' },
     ],
-    value: (d) => (d.bool('remoteRun') ? 'run' : 'prog'),
+    value: (d) => (d.str('key') !== 'REM' ? '' : d.bool('remoteRun') ? 'run' : 'prog'),
     onSet: (d, v) => {
-      if (d.str('key') !== 'REM') return;
+      if (d.str('key') !== 'REM' || d.bool('faulted')) return;
       d.set('remoteRun', v === 'run');
       sfx.play('click');
     },
-    hint: 'Only works with the key in REM — like going online in Studio 5000.',
+    disabled: (d) => d.str('key') !== 'REM' || d.bool('faulted'),
+    hint: 'Only works with the key in REM — like changing mode online from Studio 5000.',
   },
   {
     kind: 'select',
@@ -121,23 +113,20 @@ const controllerControls = (keyLabel: string): DemoControl[] => [
     kind: 'action',
     label: 'Simulate major fault',
     tone: 'red',
-    run: (d) => {
-      d.set('faulted', true);
-      sfx.play('fault');
-    },
-    disabled: (d) => d.bool('faulted'),
-    hint: 'T04:C20 — array subscript out of range.',
+    run: simulateMajorFault,
+    disabled: (d) => d.bool('faulted') || !isRunning(d),
+    hint: 'T04:C20 — array subscript out of range. Only running logic can fault, so put the controller in Run first.',
   },
   {
     kind: 'action',
     label: 'Clear Majors',
     tone: 'green',
     run: (d) => {
-      d.patch({ faulted: false, remoteRun: false });
+      clearMajors(d);
       sfx.play('click');
     },
     disabled: (d) => !d.bool('faulted'),
-    hint: 'The controller returns to Program mode.',
+    hint: 'Key in REM → Remote Program. Key in RUN → it runs again straight away (fix the cause first!).',
   },
 ];
 
@@ -522,9 +511,21 @@ const m5069ib16: StageDef = {
   Scene: ({ demo }) => <Module5069Scene demo={demo} catalog="5069-IB16" />,
 };
 const m5069ob16: StageDef = {
-  defaults: { points: bits([0, 2, 5, 7]), conn: 'ok', noload: false },
+  defaults: { points: bits([0, 2, 5, 7]), conn: 'ok', noload: false, la: true },
   controls: [
     { kind: 'points', key: 'points', label: 'Outputs · Local:2:O.Pt00.Data …', count: 16 },
+    {
+      kind: 'toggle',
+      key: 'la',
+      label: 'LA+ / LA− field power (24 V DC)',
+      hint: 'This module switches its own LA power, not SA power. Turn it off: Pt00.Data can still be 1, but the load gets 0 V.',
+    },
+    {
+      kind: 'readout',
+      label: 'Lamp on OUT-0',
+      value: (d) => (!d.bit('points', 0) ? 'Pt00.Data = 0 → 0 V, lamp off' : d.bool('la') ? 'Pt00.Data = 1 → 24 V, lamp ON' : 'Pt00.Data = 1 → 0 V: no LA power!'),
+      tone: (d) => (!d.bit('points', 0) ? 'neutral' : d.bool('la') ? 'amber' : 'red'),
+    },
     { kind: 'toggle', key: 'noload', label: 'Point 15: no load (diagnostic)', tone: 'red', hint: 'Point indicator turns red.' },
     moduleConn,
   ],

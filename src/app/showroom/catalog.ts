@@ -101,6 +101,8 @@ export interface ShowroomDevice {
   note?: string;
   /** Related device ids. */
   related?: string[];
+  /** Search nicknames (e.g. 'vfd', 'photo eye', 'hmi'); filled from DEVICE_KEYWORDS below. */
+  keywords?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -358,15 +360,17 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
     name: 'ControlLogix power supply',
     catalog: '1756-PA72',
     family: 'ControlLogix 1756',
-    tagline: 'Turns mains AC into the 5.1 V, 3.3 V and 24 V the backplane needs.',
+    tagline: 'Turns mains AC into the 1.2 V, 3.3 V, 5.1 V and 24 V DC the backplane needs.',
     what:
       'The **standard ControlLogix AC power supply**. It plugs into the left end of the chassis and powers every ' +
       'module through the backplane. It does not power field devices — those get their own 24 V DC supply (e.g. a 1606-XLS).',
     where: 'Every ControlLogix chassis needs one (or a redundant pair with the special redundant chassis).',
     specs: [
       { label: 'Input', value: '85–265 V AC, 47–63 Hz' },
-      { label: 'Backplane outputs', value: '5.1 V DC · 3.3 V DC · 24 V DC', approx: false },
-      { label: 'Output power', value: '75 W max (sum of all backplane rails)', approx: true },
+      { label: 'Backplane outputs', value: '1.2 V · 3.3 V · 5.1 V · 24 V DC' },
+      { label: 'Rail currents', value: '5.1 V: 10 A · 3.3 V: 4 A · 24 V: 2.8 A' },
+      { label: '1.2 V rail', value: '1.5 A', approx: true },
+      { label: 'Output power', value: '75 W max — all four rails combined (up to 60 °C)' },
       { label: 'Sibling', value: '1756-PB72: 18–32 V DC input version' },
       { label: 'Size', value: '≈ 140 × 112 × 145 mm (H × W × D)' },
     ],
@@ -625,7 +629,7 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
       { label: 'Port', value: '1 × RJ45, 10/100 Mbps' },
       { label: 'Connections', value: '256 CIP connections, 128 TCP/IP connections' },
       { label: 'Configuration', value: 'IP by rotary switches, BOOTP/DHCP or software; USB port for setup', approx: true },
-      { label: 'Successor', value: '1756-EN2TR (2 ports, DLR) / 1756-EN4TR' },
+      { label: 'Related', value: '1756-EN2TR (2 ports, DLR ring) · 1756-EN4TR (current high-capacity module)' },
     ],
     indicators: [
       {
@@ -701,9 +705,11 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
     wiring: {
       summary:
         'Two 24 V DC feeds on the power column: **MOD power** runs the controller and the module electronics over ' +
-        'the backplane; **SA power** is passed along the modules to supply field sensors and actuators.',
+        'the backplane; **SA power** is passed along the modules to supply input modules and field sensors. ' +
+        'Some output modules (e.g. the 5069-OB16) take their own **LA** (local actuator) power on their RTB instead.',
       notes: [
         'Keeping MOD and SA on separate supplies lets you kill field power (e.g. from a safety relay) while the controller stays online.',
+        'SA power only reaches modules that draw it: a 5069-OB16 passes SA straight through to its neighbour and switches its outputs from LA+ / LA−.',
         'The Ethernet jacks are on the underside — cables drop straight into the duct.',
         'The last local module needs a **5069-ECR** end cap.',
       ],
@@ -771,13 +777,16 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
     family: 'Compact 5000 I/O',
     tagline: '16 sourcing 24 V DC outputs, point-level status.',
     what:
-      'A **16-point sourcing DC output module**. Outputs are powered from the **SA bus** and switch +24 V to ' +
-      'their loads. Point indicators are bi-colour: yellow = on, red = point fault (when the diagnostics are enabled).',
+      'A **16-point sourcing DC output module**. Its outputs are powered from an external 24 V DC supply wired to ' +
+      'the **LA+ / LA−** (local actuator) terminals on its own RTB and switch that voltage to their loads — it does ' +
+      '**not** draw SA power (it just passes the SA bus on to the next module). Point indicators are bi-colour: ' +
+      'yellow = on, red = point fault (when the diagnostics are enabled).',
     where: 'Lamps, signal heads, solenoids, relays, barrier gate motor contactors.',
     specs: [
       { label: 'Outputs', value: '16, sourcing' },
-      { label: 'Voltage', value: '24 V DC nominal (SA power)' },
-      { label: 'Current', value: '≈ 0.5 A per point', approx: true },
+      { label: 'Voltage', value: '10–32 V DC via LA+ / LA− (local actuator power)' },
+      { label: 'Current', value: '0.5 A per point, 8 A per module' },
+      { label: 'SA power', value: 'Not used — passed through to the next module' },
       { label: 'Diagnostics', value: 'Per-point fault reporting, e.g. no-load (enable in configuration)', approx: true },
       { label: 'Tags', value: '`Local:<slot>:O.Pt00.Data` …' },
     ],
@@ -792,12 +801,20 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
         ],
       },
     ],
-    wiring: { summary: 'Each output drives **OUT → load → 0 V**; +24 V comes from SA power.', notes: ['Outputs turn off in Program mode and on a major fault.', 'A load that is too small (LED lamp) can trigger a no-load diagnostic.'] },
+    wiring: {
+      summary: 'Wire an external 24 V DC supply to **LA+ / LA−** on the RTB. Current path: **LA+ → module → OUT-n → load → LA− (0 V)**.',
+      notes: [
+        'No LA power = no outputs, even with the controller in Run and the point indicators requested on. SA power does **not** feed this module.',
+        'Switching LA+ through a safety relay or contactor group-disables every output of the module at once.',
+        'Outputs turn off in Program mode and on a major fault.',
+        'A load that is too small (LED lamp) can trigger a no-load diagnostic.',
+      ],
+    },
     inWorld: { scenes: ['traffic-light', 'parking-garage'], missions: ['3-6', '6-3', '4-5'], note: 'Drives every traffic lamp, WALK/DON’T WALK and the garage gates and signs.' },
     hotspots: [
       { label: 'Module status', at: [-0.006, CPX_Y + 0.1365, 0.107], text: 'Module status indicator (see table).' },
       { label: 'Point indicators', at: [0, CPX_Y + 0.12, 0.107], text: 'Yellow = on, red = point fault. Use “Point fault” in the demo panel.' },
-      { label: 'RTB', at: [0, CPX_Y + 0.05, 0.106], text: '18-pin removable terminal block.' },
+      { label: 'RTB', at: [0, CPX_Y + 0.05, 0.106], text: '18-pin removable terminal block with the outputs and the **LA+ / LA−** local-actuator power terminals.' },
     ],
     camera: { position: [0.12, CPX_Y + 0.12, 0.3], target: [0, CPX_Y + 0.07, 0.07] },
     size: 0.18,
@@ -947,7 +964,8 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
     specs: [
       { label: 'Display', value: '7" widescreen, 800 × 480, touch' },
       { label: 'Other sizes', value: '9" (800 × 480), 10.4" (800 × 600), 12.1" (1280 × 800)' },
-      { label: 'Power', value: '24 V DC (SELV/PELV)' },
+      { label: 'Touch', value: 'Analog resistive, 1 million actuations' },
+      { label: 'Power', value: '18–30 V DC (24 V DC nominal, SELV/PELV)' },
       { label: 'Network', value: '1 × EtherNet/IP 10/100' },
       { label: 'Controllers', value: 'One Logix controller (5570/5580, 5370/5380/5480)' },
       { label: 'Software', value: 'Studio 5000 View Designer' },
@@ -958,7 +976,7 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
     wiring: { summary: '24 V DC to the 3-pin terminal block on the back (+, −, functional earth); Ethernet to the same network as the controller.', notes: ['The panel cutout gasket keeps the NEMA/IP rating — tighten the mounting levers evenly.'] },
     inWorld: { scenes: [], missions: [], note: 'Showroom only for now.' },
     hotspots: [
-      { label: 'Touchscreen', at: [0, 0.02 + 0.095, 0.007], text: 'Resistive/PCAP touch display showing View Designer screens — try the START / STOP buttons.' },
+      { label: 'Touchscreen', at: [0, 0.02 + 0.095, 0.007], text: 'Analog-resistive touch display showing View Designer screens — try the START / STOP buttons.' },
       { label: 'Bezel', at: [-0.105, 0.02 + 0.02, 0.006], text: 'Front bezel sealed against the enclosure door by a gasket.' },
       { label: 'Rear connectors', at: [0.06, 0.02 + 0.06, -0.07], normal: [0, 0, -1], text: 'Ethernet RJ45, USB-A (host), USB-B (device), SD card and the 24 V DC terminal block — orbit behind the door to see them.' },
     ],
@@ -985,7 +1003,7 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
       { label: 'Operators', value: 'Flush, extended, guarded, mushroom, illuminated' },
       { label: 'Contact blocks', value: '800F-X10 = 1 N.O. · 800F-X01 = 1 N.C.' },
       { label: 'Terminal numbers', value: 'N.O. x3-x4 (e.g. 13-14), N.C. x1-x2 (e.g. 11-12)' },
-      { label: 'Enclosure rating', value: 'Type 4/4X/13, IP66 (metal 800FM / plastic 800FP)', approx: true },
+      { label: 'Enclosure rating', value: 'Metal 800FM: Type 4/13, IP66 · plastic 800FP: Type 4/4X/13, IP66/69K', approx: true },
     ],
     indicators: [
       {
@@ -1036,6 +1054,7 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
     specs: [
       { label: 'Head', value: '40 mm red mushroom, twist-to-release', approx: false },
       { label: 'Contacts', value: 'N.C., direct (positive) opening action' },
+      { label: 'Contact block', value: '800F-X01S: 1 N.C. self-monitoring (the usual E-stop choice)' },
       { label: 'Legend', value: 'Yellow background ring (60 mm)' },
       { label: 'Standards', value: 'IEC 60947-5-5, ISO 13850' },
     ],
@@ -1044,6 +1063,7 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
       summary: 'The N.C. contacts go to a **safety relay or safety controller** that removes power from the hazard. A standard PLC input may also *monitor* the E-stop.',
       notes: [
         '**N.C. = fail-safe**: a broken wire looks like a pressed E-stop.',
+        'Use a **self-monitoring N.C. block (800F-X01S)**: if the block falls off the back of the operator, its contact opens — it reads as a pressed E-stop instead of silently staying closed.',
         'In logic: `XIC(EStop_OK)` in series with the run rung, and **no automatic restart** after release — require a new START press.',
         'A standard PLC alone is not a safety system; PLC World’s scenes also hardwire the E-stop into the contactor coil.',
       ],
@@ -1206,6 +1226,7 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
     specs: [
       { label: 'FLA range', value: '3.2–16 A (dial)' },
       { label: 'Trip class', value: '10 or 20 (selectable)' },
+      { label: 'Trip rating', value: '120 % of the FLA dial setting' },
       { label: 'Contacts', value: '95-96 N.C. (trip), 97-98 N.O. (alarm)' },
       { label: 'Reset', value: 'Manual (blue TRIP/RESET button), TEST button', approx: false },
       { label: 'Fits', value: '100-C09 … C23 contactors (direct mount)' },
@@ -1300,7 +1321,7 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
     where: 'The boundary between the cabinet and the field: every sensor, lamp and motor cable lands here.',
     specs: [
       { label: 'Width', value: '5.1 mm' },
-      { label: 'Wire', value: '22–12 AWG (0.2–2.5 mm²)', approx: true },
+      { label: 'Wire', value: '#22–12 AWG (UL) · rated cross-section 2.5 mm² (IEC)', approx: true },
       { label: 'Accessories', value: 'End barrier, end anchors, jumpers, marker tags' },
       { label: 'PE block', value: 'Green/yellow, clamps to the rail (grounding)' },
     ],
@@ -1503,16 +1524,16 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
     name: 'Mixing tank & instruments',
     catalog: 'LT / TT / LS',
     family: 'Field — process',
-    tagline: 'A 2000 L tank with radar level, RTD temperature and fork level switches.',
+    tagline: 'A 2000 L tank with radar level, RTD temperature, fork and float level switches.',
     what:
       'A **process vessel** with its instruments: a radar **level transmitter** (LT-101, 4–20 mA), an RTD ' +
-      '**temperature transmitter** (TT-101), vibrating-fork **level switches** (LSL, LSH, LSHH), an agitator and an ' +
-      'immersion heater.',
+      '**temperature transmitter** (TT-101), **level switches** (vibrating-fork LSL and LSH, a float switch for the ' +
+      'high-high trip LSHH), an agitator and an immersion heater.',
     where: 'Batch processes: food, chemicals, water treatment.',
     specs: [
       { label: 'Level', value: '80 GHz radar, 4–20 mA → 0–100 %' },
       { label: 'Temperature', value: 'RTD (Pt100) + head transmitter, 4–20 mA → 0–150 °C' },
-      { label: 'Level switches', value: 'Vibrating fork, discrete' },
+      { label: 'Level switches', value: 'LSL / LSH: vibrating fork · LSHH: float switch (N.C., fail-safe)' },
     ],
     indicators: [{ name: 'Transmitter LCDs', states: [{ color: 'white', state: 'Display', meaning: 'Local reading of the measured value.' }] }],
     wiring: {
@@ -1526,7 +1547,7 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
     hotspots: [
       { label: 'Level transmitter', at: [0.402, 2.46, -0.108], normal: [0.3, 1, 0.3], text: '**LT-101** radar: measures distance to the surface → 0–100 %.' },
       { label: 'Temperature transmitter', at: [0.69, 0.99, 0.49], normal: [0.8, 0, 0.6], text: '**TT-101** RTD in a thermowell with a head transmitter.' },
-      { label: 'Level switches', at: [0.72, 1.9, 0.12], normal: [1, 0, 0.2], text: '**LSL / LSH / LSHH** fork switches at fixed heights.' },
+      { label: 'Level switches', at: [0.72, 1.9, 0.12], normal: [1, 0, 0.2], text: '**LSL / LSH** vibrating-fork switches and the **LSHH** float switch at fixed heights.' },
       { label: 'Agitator', at: [0, 2.62, 0], normal: [0, 1, 0.3], text: 'Top-mounted agitator motor and gearbox.' },
       { label: 'Fill valve', at: [-0.78, 2.62, -0.142], text: '**XV-101** inlet valve.' },
     ],
@@ -1663,6 +1684,47 @@ export const SHOWROOM_DEVICES: ShowroomDevice[] = [
     related: ['barrier-gate'],
   },
 ];
+
+/** What people actually type when looking for a device. */
+const DEVICE_KEYWORDS: Record<string, string[]> = {
+  'controllogix-rack': ['chassis', 'backplane', 'plc rack', 'slots'],
+  '1756-l85e': ['plc', 'cpu', 'processor', 'controller', 'key switch'],
+  '1756-pa72': ['power supply', 'psu', 'chassis power'],
+  '1756-ib16': ['input card', 'di', 'digital input', '24v input'],
+  '1756-ob16e': ['output card', 'do', 'digital output', 'fused'],
+  '1756-if8': ['analog input', 'ai', '4-20 ma', 'transmitter input'],
+  '1756-of8': ['analog output', 'ao', '4-20 ma', 'setpoint'],
+  '1756-en2t': ['ethernet', 'network', 'comms', 'bridge', 'ip address'],
+  '5069-l320er': ['plc', 'cpu', 'compactlogix', 'controller', 'l320'],
+  '5069-ib16': ['input card', 'di', 'digital input', 'compact i/o'],
+  '5069-ob16': ['output card', 'do', 'digital output', 'la power', 'compact i/o'],
+  '5069-if8': ['analog input', 'ai', '4-20 ma', 'compact i/o'],
+  '5069-of4': ['analog output', 'ao', '4-20 ma', 'compact i/o'],
+  'powerflex-525': ['vfd', 'drive', 'inverter', 'variable frequency', 'motor speed'],
+  'panelview-5310': ['hmi', 'touchscreen', 'operator interface', 'screen', 'terminal'],
+  'push-buttons-800f': ['pb', 'button', 'start', 'stop', 'pushbutton', 'contact block'],
+  'estop-800fm': ['e-stop', 'estop', 'emergency', 'mushroom', 'safety'],
+  'selector-800f': ['hoa', 'hand off auto', 'switch', 'selector'],
+  'pilot-lights-800f': ['indicator', 'lamp', 'light', 'led'],
+  'stack-light-855t': ['beacon', 'tower light', 'andon', 'signal tower', 'horn', '856t'],
+  'contactor-100c': ['starter', 'relay', 'coil', 'motor starter'],
+  'overload-193e': ['ol', 'overload', 'thermal', 'motor protection', 'e100'],
+  'breaker-1489': ['cb', 'mcb', 'circuit breaker', 'fuse'],
+  '1606-xls': ['power supply', 'psu', '24v', '24 v dc', 'dc supply'],
+  'terminal-1492': ['tb', 'terminals', 'terminal block', 'din rail'],
+  motor: ['induction', 'tefc', '3 phase', 'three phase', 'ac motor'],
+  'photo-eye-42ef': ['photo eye', 'pe', 'photoelectric', 'sensor', 'light curtain'],
+  'prox-872c': ['proximity', 'inductive', 'prox', 'sensor', 'pnp'],
+  cylinder: ['pneumatic', 'air', 'actuator', 'reed switch'],
+  valves: ['solenoid', 'valve', 'pneumatic', 'process valve'],
+  conveyor: ['belt', 'material handling'],
+  'tank-instruments': ['level', 'temperature', 'transmitter', 'lt', 'tt', 'level switch', 'process'],
+  'signal-head': ['traffic light', 'stoplight', 'red amber green'],
+  'ped-signal': ['walk', 'pedestrian', 'crosswalk', "don't walk"],
+  'barrier-gate': ['gate', 'boom', 'parking', 'arm'],
+  'ticket-kiosk': ['ticket', 'parking', 'dispenser', 'kiosk'],
+};
+for (const d of SHOWROOM_DEVICES) d.keywords ??= DEVICE_KEYWORDS[d.id];
 
 const BY_ID = new Map(SHOWROOM_DEVICES.map((d) => [d.id, d] as const));
 

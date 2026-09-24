@@ -55,7 +55,7 @@ function Cell({ label, hint, children, wide }: { label?: ReactNode; hint?: strin
     <div className={cn('flex min-w-0 flex-col gap-1.5 rounded-lg border border-edge/70 bg-panel/60 px-2.5 py-2', wide && 'col-span-full sm:col-span-2')}>
       {label !== undefined && <div className="truncate text-[11px] font-medium text-slate-400">{label}</div>}
       {children}
-      {hint && <div className="text-[10.5px] leading-snug text-slate-500">{hint}</div>}
+      {hint && <div className="text-[10.5px] leading-snug text-slate-400">{hint}</div>}
     </div>
   );
 }
@@ -80,7 +80,7 @@ function ControlCell({ control: c, demo }: { control: DemoControl; demo: DemoSto
             <span className={cn('relative h-5 w-9 shrink-0 rounded-full border transition-colors', on ? 'border-white/20 bg-slate-700' : 'border-edge bg-slate-800', 'group-focus-visible:ring-2 group-focus-visible:ring-sky-400/70')}>
               <span className={cn('absolute top-[2px] h-3.5 w-3.5 rounded-full transition-all', on ? cn('left-[18px]', TONE_ON[c.tone ?? 'green']) : 'left-[2px] bg-slate-500')} />
             </span>
-            <span className={cn('font-mono text-xs font-semibold', on ? TONE_TEXT[c.tone ?? 'green'] : 'text-slate-500')}>{on ? 'ON' : 'OFF'}</span>
+            <span className={cn('font-mono text-xs font-semibold', on ? TONE_TEXT[c.tone ?? 'green'] : 'text-slate-400')}>{on ? 'ON' : 'OFF'}</span>
           </button>
         </Cell>
       );
@@ -93,14 +93,16 @@ function ControlCell({ control: c, demo }: { control: DemoControl; demo: DemoSto
       );
     case 'select': {
       const current = c.value ? c.value(demo) : String(demo.get(c.key) ?? '');
+      const disabled = c.disabled?.(demo) ?? false;
       return (
         <Cell label={c.label} hint={c.hint} wide={c.options.length > 4}>
-          <div role="radiogroup" aria-label={c.label} className="flex flex-wrap gap-1">
+          <div role="radiogroup" aria-label={c.label} aria-disabled={disabled || undefined} className="flex flex-wrap gap-1">
             {c.options.map((o) => (
               <button
                 key={o.value}
                 type="button"
                 role="radio"
+                disabled={disabled}
                 aria-checked={current === o.value}
                 onClick={() => {
                   if (c.onSet) c.onSet(demo, o.value);
@@ -110,7 +112,7 @@ function ControlCell({ control: c, demo }: { control: DemoControl; demo: DemoSto
                   }
                 }}
                 className={cn(
-                  'h-7 cursor-pointer rounded-md border px-2 text-[11.5px] font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-sky-400/70 focus-visible:outline-none',
+                  'h-7 cursor-pointer rounded-md border px-2 text-[11.5px] font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-sky-400/70 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40',
                   current === o.value ? 'border-ab-red/60 bg-ab-red/20 text-white' : 'border-edge bg-panel-3/70 text-slate-400 hover:text-slate-100',
                 )}
               >

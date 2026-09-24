@@ -5,3 +5,4 @@ export * from './plc/drives';
 export * from './operator';
 export * from './panel';
 export * from './field';
+export * from './traffic';

@@ -15,6 +15,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '@/ui/cn';
+import { toast } from '@/ui/toast';
 
 // ---------------------------------------------------------------------------
 // Autocomplete input
@@ -32,16 +33,28 @@ export interface AutoItem {
   /** Accepting inserts `value.` and keeps editing (structure members, bits). */
   expandable?: boolean;
   disabled?: boolean;
+  /** Special rows (e.g. 'newTag': "New tag 'Motor' (BOOL)…"); passed back to onCommit. */
+  action?: string;
+  /** Emphasised row (drawn with an accent). */
+  accent?: boolean;
 }
 
 export type CommitHow = 'enter' | 'tab' | 'shift-tab' | 'blur';
 
+/**
+ * Text input with a suggestion list.
+ *
+ * Keys: Enter commits what was TYPED (an exact case-insensitive match is committed in the item's
+ * spelling) — it never swaps the text for a longer suggestion, unless the user moved the highlight
+ * with ↑/↓. Tab completes to the highlighted row, or to the first suggestion extending the typed text
+ * (marked "Tab"). Mouse click picks a row. Esc cancels.
+ */
 export interface AutocompleteInputProps {
   value: string;
   onChange(value: string): void;
   items: readonly AutoItem[];
-  /** Return false to reject the value and keep editing. */
-  onCommit(value: string, how: CommitHow): void | boolean;
+  /** Return false to reject the value and keep editing. `item` is the picked row (if any). */
+  onCommit(value: string, how: CommitHow, item?: AutoItem): void | boolean;
   onCancel(): void;
   /** Custom accept (e.g. replace the current token); default: expandable → `value.`, else commit. */
   onAccept?(item: AutoItem, how: CommitHow): void;
@@ -64,6 +77,7 @@ export interface AutocompleteInputProps {
 export function AutocompleteInput(p: AutocompleteInputProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  /** Row highlighted with ↑/↓ (-1: none — Enter commits the typed text). */
   const [active, setActive] = useState(-1);
   const done = useRef(false);
   const { items, value } = p;
@@ -77,36 +91,43 @@ export function AutocompleteInput(p: AutocompleteInputProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // highlight the first suggestion when it extends what was typed
-  useEffect(() => {
-    const q = value.trim().toLowerCase();
-    const first = items.findIndex((i) => !i.disabled);
-    if (first >= 0 && q !== '' && items[first]!.value.toLowerCase().startsWith(q.split(/\s+/).pop() ?? q)) setActive(first);
-    else setActive(-1);
-  }, [items, value]);
+  // typing (or new suggestions) drops the keyboard highlight: Enter means "what I typed" again
+  useEffect(() => setActive(-1), [items, value]);
+
+  const token = (value.split(/\s+/).pop() ?? '').toLowerCase();
+  /** Tab-completion candidate: the first enabled row that extends the last typed token. */
+  const candidate = token === '' ? -1 : items.findIndex((i) => !i.disabled && !i.action && i.value.toLowerCase().startsWith(token) && i.value.toLowerCase() !== token);
 
   useEffect(() => {
     const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${active}"]`);
-    el?.scrollIntoView({ block: 'nearest' });
+    el?.scrollIntoView?.({ block: 'nearest' });
   }, [active]);
 
   const accept = (item: AutoItem, how: CommitHow): void => {
     if (item.disabled) return;
-    if (p.onAccept) {
+    if (p.onAccept && !item.action) {
       p.onAccept(item, how);
       return;
     }
-    if (item.expandable && how !== 'tab') {
+    // structures / arrays / integers with bits: drill into the members (Tab on "Blink" → "Blink_Timer.")
+    if (item.expandable) {
       p.onChange(`${item.value}.`);
       return;
     }
-    commit(item.value, how);
+    commit(item.value, how, item);
   };
 
-  const commit = (v: string, how: CommitHow): void => {
+  const commit = (v: string, how: CommitHow, item?: AutoItem): void => {
     if (done.current) return;
     done.current = true;
-    if (p.onCommit(v, how) === false) done.current = false;
+    if (p.onCommit(v, how, item) === false) done.current = false;
+  };
+
+  /** Enter / Tab without a highlighted row: the typed text, in an exact match's spelling. */
+  const commitTyped = (how: CommitHow): void => {
+    const typed = value.trim().toLowerCase();
+    const exact = !p.onAccept && typed !== '' ? items.find((i) => !i.action && !i.disabled && i.value.toLowerCase() === typed) : undefined;
+    commit(exact ? exact.value : value, how);
   };
 
   const onKey = (e: ReactKeyboardEvent<HTMLInputElement>): void => {
@@ -120,14 +141,15 @@ export function AutocompleteInput(p: AutocompleteInputProps) {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const it = active >= 0 ? items[active] : undefined;
-      if (it && it.value.toLowerCase() !== value.trim().toLowerCase()) accept(it, 'enter');
-      else commit(value, 'enter');
+      if (it) accept(it, 'enter');
+      else commitTyped('enter');
     } else if (e.key === 'Tab') {
       e.preventDefault();
       const how: CommitHow = e.shiftKey ? 'shift-tab' : 'tab';
-      const it = active >= 0 ? items[active] : undefined;
-      if (it && !e.shiftKey && it.value.toLowerCase() !== value.trim().toLowerCase()) accept(it, how);
-      else commit(value, how);
+      const pick = e.shiftKey ? -1 : active >= 0 ? active : candidate;
+      const it = pick >= 0 ? items[pick] : undefined;
+      if (it && (it.action || it.value.toLowerCase() !== value.trim().toLowerCase())) accept(it, how);
+      else commitTyped(how);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       done.current = true;
@@ -181,19 +203,24 @@ export function AutocompleteInput(p: AutocompleteInputProps) {
                     e.preventDefault();
                     accept(it, 'enter');
                   }}
-                  onMouseEnter={() => setActive(i)}
                   className={cn(
-                    'flex cursor-pointer items-start gap-2 px-2 py-1',
-                    i === active && 'bg-[var(--ld-ov-active)]',
+                    'flex cursor-pointer items-start gap-2 px-2 py-1 hover:bg-[var(--ld-ov-hover)]',
+                    i === active && 'bg-[var(--ld-ov-active)] hover:bg-[var(--ld-ov-active)]',
+                    it.accent && 'border-b border-[var(--ld-ov-border)]',
                     it.disabled && 'cursor-not-allowed opacity-45',
                   )}
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
-                      <span className="truncate font-mono text-[12px] font-semibold text-[var(--ld-ov-text)]">{it.primary}</span>
+                      <span className={cn('truncate text-[12px] font-semibold', it.accent ? 'font-sans text-[var(--ld-sel)]' : 'font-mono text-[var(--ld-ov-text)]')}>{it.primary}</span>
                       {it.expandable && <span className="text-[10px] text-[var(--ld-ov-muted)]">▸</span>}
                       {it.badge && (
                         <span className="rounded bg-[var(--ld-ov-bg-2)] px-1 text-[9.5px] font-semibold text-[var(--ld-ov-muted)]">{it.badge}</span>
+                      )}
+                      {i === candidate && active < 0 && (
+                        <span className="ml-auto rounded border border-[var(--ld-ov-border)] px-1 font-mono text-[9px] leading-[13px] text-[var(--ld-ov-muted)]" title="Press Tab to complete">
+                          Tab
+                        </span>
                       )}
                     </div>
                     {it.secondary && <div className="truncate text-[10.5px] leading-4 text-[var(--ld-ov-muted)]">{it.secondary}</div>}
@@ -259,8 +286,14 @@ export function ContextMenu({ x, y, entries, onClose, themeClass }: { x: number;
 
   const run = (it: MenuItem): void => {
     if (it.disabled) return;
-    onClose();
-    it.onSelect();
+    // run the action first (it may open an editor that takes focus), then close the menu
+    try {
+      it.onSelect();
+    } catch (e) {
+      toast({ tone: 'error', title: `${it.label} failed`, body: e instanceof Error ? e.message : String(e) });
+    } finally {
+      onClose();
+    }
   };
 
   return createPortal(
@@ -413,8 +446,25 @@ export function RungTextEditor({
         />
         <div className="mt-1.5 flex items-center gap-2 text-[11px]">
           {err ? (
-            <span className="min-w-0 flex-1 truncate text-red-400" role="alert">
+            <span className="min-w-0 flex-1 truncate text-red-400" role="alert" title={err.message}>
               {err.message}
+              {err.position !== undefined && (
+                <button
+                  type="button"
+                  className="ml-1.5 cursor-pointer rounded bg-red-500/15 px-1 font-mono text-[10.5px] text-red-300 hover:bg-red-500/25"
+                  title="Show where"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    const el = ref.current;
+                    if (!el || err.position === undefined) return;
+                    const end = /^[A-Za-z_]\w*/.exec(text.slice(err.position))?.[0].length ?? 1;
+                    el.focus();
+                    el.setSelectionRange(err.position, err.position + Math.max(1, end));
+                  }}
+                >
+                  col {err.position + 1}
+                </button>
+              )}
             </span>
           ) : (
             <span className="min-w-0 flex-1 text-emerald-400">✓ Valid rung</span>

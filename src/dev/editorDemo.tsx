@@ -11,6 +11,8 @@
  *   zoom=1.2             initial ladder zoom
  *   rungs=100            stress test with N generated rungs (+ FPS meter)
  *   errors=1             add rungs with verification errors (controller stays in Program mode)
+ *   long=1               add a long rung (wraps onto continuation lines) and a rung with 40-character tag names
+ *   newtag=1             open the New Tag dialog for the selection (e.g. errors=1&select=2.0&newtag=1)
  *   empty=1              empty routine
  *   menu=1               open the context menu for the selection
  *   quick=XIC%20Sw       open ASCII quick entry with this text
@@ -73,6 +75,18 @@ const EXTRA_TAGS: TagDef[] = [
   { name: 'Count_ONS', dataType: 'BOOL', description: 'One-shot storage bit' },
   { name: 'Recipe', dataType: 'DINT', dims: 10, description: 'Recipe values' },
   { name: 'Level_SP', dataType: 'REAL', description: 'Level setpoint (%)', initial: 55.5 },
+  { name: 'Long_Timer', dataType: 'TIMER', description: 'All-conditions delay' },
+  { name: 'Infeed_Conveyor_Photoeye_Blocked_Zone01', dataType: 'BOOL', description: 'Infeed PE zone 1 blocked' },
+  { name: 'Infeed_Conveyor_Photoeye_Blocked_Zone02', dataType: 'BOOL', description: 'Infeed PE zone 2 blocked' },
+  { name: 'Outfeed_Conveyor_Motor_Run_Cmd_Zone02', dataType: 'BOOL', description: 'Outfeed motor zone 2 run' },
+];
+
+const LONG_RUNGS: Array<[string, string?]> = [
+  [
+    'XIC(Switch_0)XIC(Switch_1)XIO(Switch_2)XIC(Switch_3)XIC(Switch_4)XIO(Switch_5)XIC(Switch_6)XIC(Switch_7)XIC(PB_Green)XIO(PB_Black_1)XIC(PB_Black_2)XIC(PB_Red)XIC(Motor_Run)TON(Long_Timer,3000,0)OTE(Light_3);',
+    'A long rung wraps onto continuation lines at the window width (like Studio 5000), so the coil stays against the right rail.',
+  ],
+  ['XIC(Infeed_Conveyor_Photoeye_Blocked_Zone01)XIO(Infeed_Conveyor_Photoeye_Blocked_Zone02)OTE(Outfeed_Conveyor_Motor_Run_Cmd_Zone02);', 'Full tag names are always shown (Zone01 vs Zone02).'],
 ];
 
 function stressRungs(n: number): Array<[string, string?]> {
@@ -91,9 +105,15 @@ function stressRungs(n: number): Array<[string, string?]> {
 function buildRungs(): Array<[string, string?]> {
   if (P('empty')) return [['']];
   const n = Number(P('rungs'));
-  const base = n > 0 ? stressRungs(n) : DEMO_RUNGS;
+  const base = n > 0 ? stressRungs(n) : P('long') ? [...DEMO_RUNGS.slice(0, 2), ...LONG_RUNGS, ...DEMO_RUNGS.slice(2)] : DEMO_RUNGS;
   if (P('errors')) {
-    return [...base.slice(0, 2), ['XIC(Undefined_Tag)TON(Timer_X,?,0);', 'This rung does not verify: unknown tags and a missing preset.'], ['XIC(Switch_1)[OTE(Light_1),];'], ...base.slice(2)];
+    return [
+      ...base.slice(0, 2),
+      ['XIC(Undefined_Tag)TON(Timer_X,?,0);', 'This rung does not verify: unknown tags and a missing preset.'],
+      ['XIC(Switch_1)[OTE(Light_1),];'],
+      ['XIC(Motor_Run)[XIC(Switch_1),]OTE(Light_5);', 'Shorted branch: the empty level always passes power.'],
+      ...base.slice(2),
+    ];
   }
   if (P('fault')) return [...base, ['XIC(Switch_0)MOV(Recipe[Press_Count],Level_SP);', 'Indirect address: faults when Press_Count is out of range.']];
   return base;
@@ -251,7 +271,8 @@ function Demo() {
       if (P('text') !== null) ed.editRungText(rungs[Number(P('text'))]?.id);
       if (P('comment') !== null) ed.editRungComment(rungs[Number(P('comment'))]?.id);
       if (P('help')) ed.showHelp(P('help')!);
-      if (!P('menu') && !P('quick') && !P('edit') && !P('text') && !P('comment')) ed.focus();
+      if (P('newtag')) ed.newTag();
+      if (!P('menu') && !P('quick') && !P('edit') && !P('text') && !P('comment') && !P('newtag')) ed.focus();
     }, 350);
     return () => window.clearTimeout(t);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -286,6 +307,7 @@ function Demo() {
       online={online}
       readOnly={!!P('readonly')}
       errors={errors}
+      onTagsChanged={() => setErrors(controller.verify())}
       theme={P('theme') === 'classic' ? 'classic' : 'dark'}
       zoom={Number(P('zoom')) || 1}
       initialSelection={initialSel}
@@ -305,7 +327,7 @@ function Demo() {
   }
 
   return (
-    <div className="grid h-full grid-rows-[auto_auto_1fr] bg-[#0b0f14] text-slate-200">
+    <div className="grid h-full min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)] bg-[#0b0f14] text-slate-200">
       <header className="flex h-9 items-center gap-3 border-b border-edge bg-panel px-3">
         <span className="flex h-5 w-5 items-center justify-center rounded bg-ab-red text-white">
           <Cpu size={13} />
@@ -318,7 +340,8 @@ function Demo() {
         </button>
       </header>
       <OnlineToolbar controller={controller} online={online} onGoOffline={() => setOnline(false)} onGoOnline={() => setOnline(true)} allowKeySwitch onModeChange={() => setErrors(controller.verify())} />
-      <div className="grid min-h-0 grid-cols-[250px_1fr]">
+      {/* minmax(0,1fr): the ladder's min-content width must not widen the page */}
+      <div className="grid min-h-0 min-w-0 grid-cols-[250px_minmax(0,1fr)]">
         <aside className="flex min-h-0 flex-col border-r border-edge bg-panel">
           <div className="flex h-8 shrink-0 items-center border-b border-edge px-2 text-[11px] font-semibold tracking-wide text-slate-400 uppercase">Controller Organizer</div>
           <ControllerOrganizer project={controller.project} selected={orgSel} onSelect={onOrganizer} errorRoutines={errorRoutines} className="flex-1" />
@@ -326,8 +349,8 @@ function Demo() {
             <TrainerControls runtime={runtime} />
           </div>
         </aside>
-        <main className="grid min-h-0 grid-rows-[1fr_minmax(180px,34%)]">
-          <div className="flex min-h-0 flex-col">{editor}</div>
+        <main className="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_minmax(180px,34%)]">
+          <div className="flex min-h-0 min-w-0 flex-col">{editor}</div>
           <TagMonitor
             key={tagScope}
             controller={controller}

@@ -176,7 +176,8 @@ export function OnlineToolbar({ controller, onModeChange, online = true, onGoOnl
     const out: MenuEntry[] = [
       { heading: `Controller ${controller.project.controllerName}` },
       { label: 'Run Mode', disabled: !online || running || faulted || !remote, hint: remote ? undefined : 'Key switch not in REM', onSelect: () => requestMode('RUN') },
-      { label: 'Program Mode', disabled: !online || (!running && !faulted) || !remote, onSelect: () => requestMode('PROG') },
+      // a faulted controller refuses mode changes until its major fault is cleared
+      { label: 'Program Mode', disabled: !online || !running || !remote, hint: faulted ? 'Clear Majors first' : remote ? undefined : 'Key switch not in REM', onSelect: () => requestMode('PROG') },
       { label: 'Test Mode', disabled: true, hint: 'Not emulated', onSelect: () => undefined },
     ];
     if (faulted) out.push('sep', { label: 'Clear Faults', onSelect: () => controller.clearMajorFault() });

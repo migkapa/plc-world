@@ -6,10 +6,9 @@
  */
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo } from 'react';
-import * as THREE from 'three';
 import type { PilotLightProps } from '../../contracts';
-import { Bezel800F, F800, LegendPlate800F, Rear800F, type BezelKind } from './parts800F';
-import { LENS_HEX, LIT_HEX, facetTexture, latheZ } from './shared';
+import { F800, LegendPrint800F, addBezel, addLegendPlate, addRear800F, rearKey, type BezelKind } from './parts800F';
+import { facetTexture, latheZ, lensTints, makeLensMaterial, partsGeo, uberMat } from './shared';
 
 export interface PilotLight800FProps extends PilotLightProps {
   bezel?: BezelKind;
@@ -47,39 +46,31 @@ export function PilotLight800F({
 }: PilotLight800FProps) {
   const mat = useMemo(() => {
     const tex = facetTexture();
-    return new THREE.MeshStandardMaterial({
-      color: LENS_HEX[color],
-      map: tex,
-      emissive: LIT_HEX[color],
-      emissiveMap: tex,
-      bumpMap: tex,
-      bumpScale: 0.6,
-      emissiveIntensity: 0,
-      roughness: 0.18,
-      metalness: 0,
-      toneMapped: false,
-    });
+    return makeLensMaterial(color, { map: tex, bumpMap: tex, bumpScale: 0.6, edge: 0.4 });
   }, [color]);
   useEffect(() => () => mat.dispose(), [mat]);
-  const tints = useMemo(
-    () => ({ lit: new THREE.Color(LIT_HEX[color]).multiplyScalar(0.8), unlit: new THREE.Color(LENS_HEX[color]).multiplyScalar(0.6) }),
-    [color],
-  );
+  const tints = useMemo(() => lensTints(color, 3), [color]);
   useFrame(({ clock }) => {
     let lit = getLit();
     if (lit && flash) lit = Math.floor(clock.elapsedTime * 2) % 2 === 0;
     if (mat.userData.lit === lit) return;
     mat.userData.lit = lit;
     mat.color.copy(lit ? tints.lit : tints.unlit);
-    mat.emissiveIntensity = lit ? 3 : 0;
+    mat.emissiveIntensity = lit ? tints.litE : tints.unlitE;
+  });
+  const hasLegend = legend !== undefined && legend !== '';
+  const pt = panelThickness ?? F800.panelT;
+  const staticGeo = partsGeo(`pilot800f:${hasLegend}:${bezel}:${rear ? rearKey([null, 'LED', null], pt, color) : '-'}`, (b) => {
+    if (hasLegend) addLegendPlate(b);
+    addBezel(b, bezel, false, 0.0114);
+    if (rear) addRear800F(b, [null, 'LED', null], pt, color);
   });
 
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      {legend !== undefined && legend !== '' && <LegendPlate800F lines={legend.split('\n')} />}
-      <Bezel800F kind={bezel} />
+      {hasLegend && <LegendPrint800F lines={legend.split('\n')} />}
+      <mesh geometry={staticGeo} material={uberMat()} castShadow receiveShadow />
       <mesh geometry={lensGeo()} material={mat} castShadow />
-      {rear && <Rear800F items={[null, 'LED', null]} panelThickness={panelThickness ?? F800.panelT} led={color} />}
     </group>
   );
 }

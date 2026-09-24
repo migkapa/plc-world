@@ -5,8 +5,8 @@
  */
 import { INSTRUCTION_DEFS, type OperandSpec } from '@/plc/instructions';
 import { ioKindOfPath } from '@/plc/catalog';
-import { parseOperandPath, type LogixTagDatabase, type OperandRef } from '@/plc/tags';
-import type { DataTypeName, InstructionInfo, PlcController, TagDatabase, TagInfo } from '@/plc/types';
+import { isValidTagName, parseOperandPath, type LogixTagDatabase, type OperandRef } from '@/plc/tags';
+import type { DataTypeName, InstructionInfo, PlcController, TagDatabase, TagDef, TagInfo } from '@/plc/types';
 import type { TagMeta, TagMetaLookup } from './layout';
 
 const lower = (s: string): string => s.toLowerCase();
@@ -259,6 +259,95 @@ export function forceInfo(controller: PlcController | undefined, operand: string
   if (path) out.path = path;
   if (forced !== undefined) out.forced = forced;
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// New tags (Studio 5000 "New Tag…" on an undefined operand)
+// ---------------------------------------------------------------------------
+
+export interface NewTagCandidate {
+  /** Base tag name to create ('Timer9' for 'Timer9.DN'). */
+  name: string;
+  /** Suggested data type. */
+  dataType: string;
+  /** Suggested array size (operand written as 'Arr[3]'). */
+  dims?: number;
+}
+
+const TIMER_MEMBERS = new Set(['PRE', 'ACC', 'EN', 'TT', 'DN']);
+const COUNTER_MEMBERS = new Set(['CU', 'CD', 'OV', 'UN']);
+
+/** Data type a new tag should get for an operand spec ('BOOL' for XIC, 'TIMER' for TON…). */
+export function tagTypeForSpec(spec: OperandSpec | undefined): string | undefined {
+  if (!spec) return 'DINT';
+  switch (spec.kind) {
+    case 'bit':
+    case 'bitDest':
+      return 'BOOL';
+    case 'struct':
+      return String(spec.types.find((t) => t !== 'IMMEDIATE') ?? 'DINT');
+    case 'array':
+      return String(spec.elem?.[0] ?? 'DINT');
+    case 'num':
+    case 'numDest':
+    case 'int':
+    case 'intDest':
+    case 'scalar':
+    case 'scalarDest':
+    case 'expr':
+    case 'any':
+      return spec.types.includes('REAL') && !spec.types.includes('ANY_NUM') && !spec.types.includes('DINT') ? 'REAL' : 'DINT';
+    default:
+      return undefined; // display / imm / routine / label: not a tag
+  }
+}
+
+/**
+ * The tag to create for an undefined operand, or undefined when the operand is not a tag reference, is
+ * not a valid Logix name, or its base tag already exists (in `program` scope or controller scope).
+ */
+export function newTagCandidate(controller: PlcController | undefined, operand: string, program: string | undefined, spec: OperandSpec | undefined): NewTagCandidate | undefined {
+  if (!controller) return undefined;
+  const text = operand.trim();
+  if (!text || text === '?' || /^[-+]?[\d.]/.test(text)) return undefined;
+  const specType = tagTypeForSpec(spec);
+  if (!specType) return undefined;
+  let p: ReturnType<typeof parseOperandPath>;
+  try {
+    p = parseOperandPath(text);
+  } catch {
+    return undefined;
+  }
+  if (!isValidTagName(p.base)) return undefined;
+  if (safe(() => controller.tags.getDef(p.base, program)) || safe(() => controller.tags.exists(p.base, program))) return undefined;
+  const rest = p.rest;
+  if (rest === '') return { name: p.base, dataType: specType };
+  const arr = /^\[(\d+)\]$/.exec(rest);
+  if (arr) return { name: p.base, dataType: specType, dims: Math.max(10, Number(arr[1]) + 1) };
+  if (/^\.\d+$/.test(rest)) return { name: p.base, dataType: 'DINT' };
+  const member = /^\.([A-Za-z]+)$/.exec(rest)?.[1]?.toUpperCase();
+  if (member && COUNTER_MEMBERS.has(member)) return { name: p.base, dataType: 'COUNTER' };
+  if (member && TIMER_MEMBERS.has(member)) return { name: p.base, dataType: 'TIMER' };
+  return { name: p.base, dataType: 'DINT' };
+}
+
+/**
+ * A tag definition with its Alias For changed (Tag editor). An alias has no storage of its own: it takes
+ * the target's data type and loses array size, initial value and the constant flag. An empty target
+ * turns the alias back into a base tag of the same type.
+ */
+export function withAliasTarget(def: TagDef, target: string, typeOf: (operand: string) => DataTypeName | undefined): TagDef {
+  const t = target.trim();
+  const { aliasFor: _alias, dims, initial, constant, ...rest } = def;
+  void _alias;
+  if (!t) return { ...rest, ...(dims !== undefined ? { dims } : {}), ...(initial !== undefined ? { initial } : {}), ...(constant !== undefined ? { constant } : {}) };
+  let type: DataTypeName | undefined;
+  try {
+    type = typeOf(t);
+  } catch {
+    type = undefined;
+  }
+  return { ...rest, aliasFor: t, dataType: type ?? def.dataType };
 }
 
 // ---------------------------------------------------------------------------

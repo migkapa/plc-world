@@ -13,7 +13,7 @@ import { Potentiometer } from './Potentiometer';
 import { PushButton800F } from './PushButton800F';
 import { PushButtonStation } from './PushButtonStation';
 import { SelectorSwitch800F } from './SelectorSwitch800F';
-import { StackLight855T } from './StackLight855T';
+import { StackLight856T } from './StackLight856T';
 import { ToggleSwitch } from './ToggleSwitch';
 
 const now = () => performance.now() / 1000;
@@ -120,20 +120,29 @@ function StackLights() {
   const phase = () => Math.floor(now() / 2) % 3;
   return (
     <group>
-      <StackLight855T
+      <StackLight856T
         position={[0, 0, 0]}
         tiers={tiers}
-        getTier={(i) => (i === 2 ? true : i === 1 ? phase() >= 1 : phase() === 2 || true)}
+        getTier={(i) => (i === 2 ? true : i === 1 ? phase() >= 1 : phase() === 2)}
         getFlashing={(i) => i === 1}
         getHorn={() => true}
       />
-      <StackLight855T
-        position={[0.12, 0, 0]}
-        tiers={['red', 'yellow', 'green', 'blue', 'white']}
-        getTier={(i) => i === 2 || i === 4}
-        mount="base"
-        housing="gray"
-      />
+      <StackLight856T position={[0.12, 0, 0]} tiers={['red', 'yellow', 'green', 'blue', 'white']} getTier={(i) => i === 2 || i === 4} mount="base" />
+      <mesh position={[0.06, -0.002, 0]} receiveShadow>
+        <boxGeometry args={[0.3, 0.004, 0.14]} />
+        <meshStandardMaterial color="#d6d8d6" roughness={0.6} metalness={0.15} />
+      </mesh>
+    </group>
+  );
+}
+
+/** Gamified sounder cue (showSoundFx) next to the legacy 855T look (series="855T", gray housing). */
+function StackLightVariants() {
+  const hornOn = () => now() % 3 < 2;
+  return (
+    <group>
+      <StackLight856T position={[0, 0, 0]} tiers={['red', 'green']} getTier={(i) => i === 0 && hornOn()} getHorn={hornOn} showSoundFx />
+      <StackLight856T position={[0.12, 0, 0]} series="855T" housing="gray" tiers={['red', 'amber', 'green']} getTier={(i) => i === 2} getHorn={() => false} mount="base" />
       <mesh position={[0.06, -0.002, 0]} receiveShadow>
         <boxGeometry args={[0.3, 0.004, 0.14]} />
         <meshStandardMaterial color="#d6d8d6" roughness={0.6} metalness={0.15} />
@@ -206,7 +215,12 @@ export const previews: Record<string, Preview> = {
   OP_StackLight3_Horn: {
     Component: StackLights,
     camera: { position: [0.42, 0.36, 0.78], target: [0.06, 0.19, 0] },
-    description: '855T 70 mm stack lights: pole mount R/A/G + sounder, surface base 5-tier',
+    description: '856T 70 mm Control Tower: pole mount R/A/G + top sounder, surface base 5-tier',
+  },
+  OP_StackLight_Variants: {
+    Component: StackLightVariants,
+    camera: { position: [0.3, 0.3, 0.6], target: [0.06, 0.16, 0] },
+    description: '856T with top sounder + showSoundFx cue (grille pulse, faint ring) and a legacy 855T (gray) for comparison',
   },
   OP_TrainerDevices: {
     Component: TrainerDevices,

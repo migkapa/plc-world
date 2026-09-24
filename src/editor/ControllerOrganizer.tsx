@@ -261,12 +261,32 @@ export function ControllerOrganizer({ project, selected, onSelect, className, er
     return out;
   }, [tree, collapsed]);
 
+  /** Parent of every node (visible or not), to recover focus from a node hidden by a collapse. */
+  const parentOf = useMemo(() => {
+    const m = new Map<string, string>();
+    const walk = (nodes: OrganizerNode[], parent?: string): void => {
+      for (const n of nodes) {
+        if (parent) m.set(n.id, parent);
+        if (n.children) walk(n.children, n.id);
+      }
+    };
+    walk(tree);
+    return m;
+  }, [tree]);
+  const visible = useMemo(() => new Set(flat.map((f) => f.n.id)), [flat]);
+  /** Nearest visible node for an id: itself, else its closest visible ancestor. */
+  const visibleFor = (id: string | null | undefined): string | undefined => {
+    for (let cur = id ?? undefined, guard = 0; cur && guard < 64; cur = parentOf.get(cur), guard++) if (visible.has(cur)) return cur;
+    return undefined;
+  };
+
   const selectedId = flat.find((f) => matches(f.n, selected))?.n.id;
-  const current = focusId ?? selectedId ?? flat[0]?.n.id;
+  // keyboard focus falls back to a visible node when a collapse hid the focused one
+  const current = visibleFor(focusId) ?? selectedId ?? flat[0]?.n.id;
 
   useEffect(() => {
     if (!focusId) return;
-    rootRef.current?.querySelector<HTMLElement>(`[data-node="${CSS.escape(focusId)}"]`)?.scrollIntoView({ block: 'nearest' });
+    rootRef.current?.querySelector<HTMLElement>(`[data-node="${CSS.escape(focusId)}"]`)?.scrollIntoView?.({ block: 'nearest' });
   }, [focusId]);
 
   const toggle = useCallback((id: string) => {

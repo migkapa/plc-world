@@ -14,7 +14,7 @@ import type { DataTypeName, PlcController, TagDef, TagInfo } from '@/plc/types';
 import { cn } from '@/ui/cn';
 import { toast } from '@/ui/toast';
 import { ContextMenu, type MenuEntry } from './EditorOverlays';
-import { createLiveReader, forceInfo, formatValue, parseUserValue, suggestOperands, type DisplayStyle } from './tagTools';
+import { createLiveReader, forceInfo, formatValue, parseUserValue, suggestOperands, withAliasTarget, type DisplayStyle } from './tagTools';
 import './ladder.css';
 
 export interface TagMonitorProps {
@@ -126,13 +126,19 @@ function EditableText({
 }
 
 /** Text input with tag autocomplete (alias targets). */
-function TagInput({
+/**
+ * Tag name input with autocomplete (alias targets…). Enter keeps what was typed unless a row was picked
+ * with ↑/↓ (then it is taken, or drilled into for structures); Tab completes to the first suggestion.
+ */
+export function TagInput({
   controller,
   program,
   value,
   onChange,
   placeholder,
   className,
+  ariaLabel,
+  autoFocus,
 }: {
   controller: PlcController;
   program?: string;
@@ -140,21 +146,29 @@ function TagInput({
   onChange(v: string): void;
   placeholder?: string;
   className?: string;
+  ariaLabel?: string;
+  autoFocus?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(-1);
   const items = useMemo(() => (open ? suggestOperands(controller, program, undefined, value, { limit: 12 }) : []), [open, controller, program, value]);
+  const pick = (it: (typeof items)[number]): void => {
+    onChange(it.expandable ? `${it.operand}.` : it.operand);
+    setActive(-1);
+  };
   return (
     <div className={cn('relative', className)}>
       <input
         value={value}
         placeholder={placeholder}
         spellCheck={false}
+        aria-label={ariaLabel ?? placeholder}
+        autoFocus={autoFocus}
         onFocus={() => setOpen(true)}
         onBlur={() => window.setTimeout(() => setOpen(false), 120)}
         onChange={(e) => {
           onChange(e.target.value);
-          setActive(0);
+          setActive(-1);
           setOpen(true);
         }}
         onKeyDown={(e) => {
@@ -167,8 +181,14 @@ function TagInput({
             setActive((a) => (a <= 0 ? items.length - 1 : a - 1));
           } else if (e.key === 'Enter' && items[active]) {
             e.preventDefault();
-            const it = items[active]!;
-            onChange(it.expandable ? `${it.operand}.` : it.operand);
+            pick(items[active]!);
+          } else if (e.key === 'Tab' && !e.shiftKey && value.trim() !== '') {
+            const q = value.trim().toLowerCase();
+            const c = items.find((it) => it.operand.toLowerCase().startsWith(q) && it.operand.toLowerCase() !== q);
+            if (c) {
+              e.preventDefault();
+              pick(c);
+            }
           } else if (e.key === 'Escape') setOpen(false);
         }}
         className="h-7 w-full rounded-md border border-edge bg-black/30 px-2 font-mono text-[12px] text-slate-100 outline-none placeholder:font-sans placeholder:text-slate-600 focus:border-sky-500/70"
@@ -180,10 +200,9 @@ function TagInput({
               key={it.operand}
               onMouseDown={(e) => {
                 e.preventDefault();
-                onChange(it.expandable ? `${it.operand}.` : it.operand);
+                pick(it);
               }}
-              onMouseEnter={() => setActive(i)}
-              className={cn('flex cursor-pointer items-center gap-2 px-2 py-0.5 text-[11.5px]', i === active && 'bg-sky-500/15')}
+              className={cn('flex cursor-pointer items-center gap-2 px-2 py-0.5 text-[11.5px] hover:bg-white/5', i === active && 'bg-sky-500/15 hover:bg-sky-500/15')}
             >
               <span className="truncate font-mono text-slate-100">{it.operand}</span>
               {it.expandable && <span className="text-slate-500">▸</span>}
@@ -299,6 +318,21 @@ export function TagMonitor({ controller, program, onTagsChanged, compact, classN
     }
   };
 
+  /**
+   * Force the physical point a row resolves to in the monitored scope. The controller's setForce /
+   * removeForce resolve names in controller scope first, so a program-scoped alias that shadows a
+   * controller tag must be forced by its canonical path.
+   */
+  const force = (row: Row, value: boolean | null): void => {
+    const path = forceInfo(controller, row.path, scopeProgram).path ?? row.path;
+    try {
+      if (value === null) controller.removeForce(path);
+      else controller.setForce(path, value);
+    } catch (e) {
+      toast({ tone: 'error', title: value === null ? `Cannot remove the force on ${row.path}` : `Cannot force ${row.path}`, body: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
   const valueMenu = (row: Row, x: number, y: number): void => {
     const fi = forceInfo(controller, row.path, scopeProgram);
     const isBool = row.type.toUpperCase() === 'BOOL';
@@ -306,10 +340,10 @@ export function TagMonitor({ controller, program, onTagsChanged, compact, classN
     if (isBool) entries.push({ label: 'Toggle Bit', onSelect: () => writeValue(row, reader.read(row.path) ? '0' : '1') });
     if (fi.forceable) {
       if (isBool) {
-        entries.push({ label: 'Force On', icon: <Zap size={12} className="text-amber-400" />, onSelect: () => controller.setForce(row.path, true) });
-        entries.push({ label: 'Force Off', icon: <Zap size={12} className="text-amber-400" />, onSelect: () => controller.setForce(row.path, false) });
+        entries.push({ label: 'Force On', icon: <Zap size={12} className="text-amber-400" />, onSelect: () => force(row, true) });
+        entries.push({ label: 'Force Off', icon: <Zap size={12} className="text-amber-400" />, onSelect: () => force(row, false) });
       }
-      entries.push({ label: 'Remove Force', disabled: fi.forced === undefined, onSelect: () => controller.removeForce(row.path) });
+      entries.push({ label: 'Remove Force', disabled: fi.forced === undefined, onSelect: () => force(row, null) });
     }
     if (entries.length > 1) setMenu({ x, y, entries });
   };
@@ -328,6 +362,7 @@ export function TagMonitor({ controller, program, onTagsChanged, compact, classN
     }
   };
   const typeOptions = useMemo(() => [...BASE_TYPES, ...(controller.project.dataTypes ?? []).map((d) => d.name)], [controller]);
+  const aliasEdit = (def: TagDef, text: string): TagDef => withAliasTarget(def, text, (op) => db.typeOf(op, scopeProgram));
 
   // ------------------------------------------------------------------ new tag form
   const [nName, setNName] = useState('');
@@ -524,7 +559,7 @@ export function TagMonitor({ controller, program, onTagsChanged, compact, classN
         {locked && <Lock size={10} className="shrink-0 text-slate-600" />}
       </div>,
       <div key="a" className="min-w-0">
-        <EditableText value={info.aliasFor ?? ''} mono disabled={locked} placeholder={locked ? '' : '—'} onCommit={(v) => def && upsert({ ...def, aliasFor: v.trim() || undefined, dataType: v.trim() ? (db.typeOf(v.trim(), scopeProgram) ?? def.dataType) : def.dataType })} />
+        <EditableText value={info.aliasFor ?? ''} mono disabled={locked} placeholder={locked ? '' : '—'} onCommit={(v) => def && upsert(aliasEdit(def, v))} />
       </div>,
       <div key="t" className="min-w-0">
         {locked || info.aliasFor ? (

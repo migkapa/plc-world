@@ -11,7 +11,9 @@ import {
   formatReal,
   formatValue,
   makeTagMeta,
+  newTagCandidate,
   parseUserValue,
+  withAliasTarget,
   specOf,
   suggestMnemonics,
   suggestOperands,
@@ -93,6 +95,53 @@ describe('controller helpers', () => {
     expect(forceInfo(c, 'Switch_0').forced).toBe(true);
     expect(forceInfo(c, 'Local:1:I.Data.0').forced).toBe(true);
     expect(forceInfo(undefined, 'Switch_0').forceable).toBe(false);
+  });
+
+  it('resolves program-scoped aliases to the physical point (force by canonical path)', () => {
+    const c = plc();
+    c.upsertTag({ name: 'Switch_0', dataType: 'BOOL', aliasFor: 'Local:1:I.Data.9' }, 'MainProgram');
+    const fi = forceInfo(c, 'Switch_0', 'MainProgram');
+    expect(fi.forceable).toBe(true);
+    expect(fi.path).toBe('Local:1:I.Data.9');
+    c.setForce(fi.path!, true);
+    expect(Object.keys(c.getForces())).toEqual(['Local:1:I.Data.9']);
+    expect(forceInfo(c, 'Switch_0', 'MainProgram').forced).toBe(true);
+    // the controller-scope alias of the same name is untouched
+    expect(forceInfo(c, 'Switch_0').forced).toBeUndefined();
+  });
+
+  it('turns a tag into an alias without keeping array size / initial value', () => {
+    const c = plc();
+    c.upsertTag({ name: 'Arr2', dataType: 'DINT', dims: 10, initial: [1, 2, 3], constant: true, description: 'kept' });
+    const def = c.tags.getDef('Arr2')!;
+    const alias = withAliasTarget(def, ' Light_1 ', (op) => c.tags.typeOf(op));
+    expect(alias).toEqual({ name: 'Arr2', dataType: 'BOOL', aliasFor: 'Light_1', description: 'kept' });
+    c.upsertTag(alias);
+    expect(c.tags.listAll().find((t) => t.name === 'Arr2')).toMatchObject({ dataType: 'BOOL', aliasFor: 'Light_1' });
+    expect(c.tags.listAll().find((t) => t.name === 'Arr2')?.dims).toBeUndefined();
+    // clearing the alias makes a base tag again
+    expect(withAliasTarget(alias, '', (op) => c.tags.typeOf(op))).toEqual({ name: 'Arr2', dataType: 'BOOL', description: 'kept' });
+  });
+
+  it('proposes new tags for undefined operands with a type from the operand spec', () => {
+    const c = plc();
+    expect(newTagCandidate(c, 'Start_PB', 'MainProgram', specOf('XIC', 0))).toEqual({ name: 'Start_PB', dataType: 'BOOL' });
+    expect(newTagCandidate(c, 'Delay', 'MainProgram', specOf('TON', 0))).toEqual({ name: 'Delay', dataType: 'TIMER' });
+    expect(newTagCandidate(c, 'Parts', 'MainProgram', specOf('CTU', 0))).toEqual({ name: 'Parts', dataType: 'COUNTER' });
+    expect(newTagCandidate(c, 'Total', 'MainProgram', specOf('ADD', 2))).toEqual({ name: 'Total', dataType: 'DINT' });
+    // member / bit / element forms create the base tag
+    expect(newTagCandidate(c, 'Timer9.DN', 'MainProgram', specOf('XIC', 0))).toEqual({ name: 'Timer9', dataType: 'TIMER' });
+    expect(newTagCandidate(c, 'Cnt9.CU', 'MainProgram', specOf('XIC', 0))).toEqual({ name: 'Cnt9', dataType: 'COUNTER' });
+    expect(newTagCandidate(c, 'Flags.3', 'MainProgram', specOf('XIC', 0))).toEqual({ name: 'Flags', dataType: 'DINT' });
+    expect(newTagCandidate(c, 'Bits[3]', 'MainProgram', specOf('XIC', 0))).toEqual({ name: 'Bits', dataType: 'BOOL', dims: 10 });
+    // existing tags, literals, I/O paths, invalid names, immediates: nothing to create
+    expect(newTagCandidate(c, 'Switch_0', 'MainProgram', specOf('XIC', 0))).toBeUndefined();
+    expect(newTagCandidate(c, 'T1.DN', 'MainProgram', specOf('XIC', 0))).toBeUndefined();
+    expect(newTagCandidate(c, '5000', 'MainProgram', specOf('TON', 1))).toBeUndefined();
+    expect(newTagCandidate(c, 'Local:9:I.Data.0', 'MainProgram', specOf('XIC', 0))).toBeUndefined();
+    expect(newTagCandidate(c, 'Bad__Name', 'MainProgram', specOf('XIC', 0))).toBeUndefined();
+    expect(newTagCandidate(c, 'X', 'MainProgram', specOf('TON', 1))).toBeUndefined();
+    expect(newTagCandidate(undefined, 'Start_PB', 'MainProgram', specOf('XIC', 0))).toBeUndefined();
   });
 
   it('suggests operands filtered by data type', () => {

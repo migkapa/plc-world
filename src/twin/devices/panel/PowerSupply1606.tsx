@@ -1,20 +1,24 @@
 /**
  * Bulletin 1606-XLS DIN-rail 24 V DC power supply (1606-XLS240E: 60 × 124 × 117 mm): natural
- * aluminum housing with ventilation slots, raised front label panel, black screw terminal rows
- * (input N / L / PE on top, output + + − − and DC-OK relay 13/14 at the bottom), green DC OK LED
- * and 24–28 V adjustment potentiometer.
+ * aluminum housing with ventilation slots, raised front label panel, quick-connect SPRING-CLAMP
+ * terminals (two per pole: wire opening + screwdriver release slot, no screws) — OUTPUT on TOP
+ * (+ + − − and the DC-OK relay contact 13/14), INPUT at the BOTTOM (N L PE) — green DC OK LED,
+ * red OVERLOAD LED and the 24–28 V adjustment potentiometer at the output end of the label.
  *
  * Origin: DIN clip plane on the rail centerline at the center of the unit.
+ * Performance: housing + terminals = one merged mesh, + label quad + 2 LEDs.
  */
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import type { Placement } from '../../contracts';
-import { LEGEND_FONT, LIT_HEX, NARROW_FONT, Screw, boxGeo, canvasTexture, cylZ, mats, mergedCopies, planeGeo, roundedBox, sharedMat } from '../operator/shared';
+import { F, LEGEND_FONT, LIT_HEX, NARROW_FONT, boxGeo, canvasTexture, cylZ, fitText, mats, partsGeo, planeGeo, roundedBox, sharedMat, uberMat, type Parts } from '../operator/shared';
 
 export interface PowerSupply1606Props extends Placement {
   /** DC OK LED state (default: always on). */
   getOk?: () => boolean;
+  /** Red OVERLOAD LED state (default: off). */
+  getOverload?: () => boolean;
   catalog?: string;
   /** Output rating text. */
   rating?: string;
@@ -24,30 +28,45 @@ export interface PowerSupply1606Props extends Placement {
 
 export const PSU = { h: 0.124, d: 0.117, recess: 0.03, frontDepth: 0.02 } as const;
 
+/** Label layout (fractions of the label height from the top / of the width from the left). */
+const LBL = { ledRow: 0.1, ledLabel: 0.175, ok: 0.2, ovl: 0.5, pot: 0.82 } as const;
+
 function labelTexture(catalog: string, rating: string, w: number) {
   const px = Math.round(w * 6000);
-  return canvasTexture(`1606-label:${catalog}:${rating}:${px}`, px, 380, (ctx, cw, ch) => {
+  return canvasTexture(`1606-label-v2:${catalog}:${rating}:${px}`, px, 380, (ctx, cw, ch) => {
     ctx.fillStyle = '#dcdedd';
     ctx.fillRect(0, 0, cw, ch);
-    ctx.fillStyle = '#2b2e31';
-    ctx.fillRect(0, 0, cw, 46);
-    ctx.fillStyle = '#f2f2ee';
+    ctx.fillStyle = '#1a1a1a';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `700 26px ${LEGEND_FONT}`;
-    ctx.fillText(catalog, cw / 2, 24);
+    // LED / pot legends (output end = top)
+    const small = Math.min(18, Math.floor(cw / 13));
+    ctx.font = `700 ${small}px ${NARROW_FONT}`;
+    ctx.fillText('DC OK', cw * LBL.ok, ch * LBL.ledLabel);
+    ctx.fillText('OVERLOAD', cw * LBL.ovl, ch * LBL.ledLabel);
+    ctx.fillText('24-28V', cw * LBL.pot, ch * LBL.ledLabel);
+    ctx.fillText('DC OUTPUT', cw / 2, ch * 0.03 + 6);
+    // catalog band
+    ctx.fillStyle = '#2b2e31';
+    ctx.fillRect(0, ch * 0.24, cw, 46);
+    ctx.fillStyle = '#f2f2ee';
+    const cpx = fitText(ctx, catalog, cw - 16, 26, 700);
+    ctx.font = `700 ${cpx}px ${LEGEND_FONT}`;
+    ctx.fillText(catalog, cw / 2, ch * 0.24 + 24);
     ctx.fillStyle = '#1a1a1a';
-    ctx.font = `700 40px ${LEGEND_FONT}`;
-    ctx.fillText(rating.split(' ').slice(0, 2).join(' '), cw / 2, 96);
+    const parts = rating.split(' ');
+    const r1 = parts.slice(0, 2).join(' ');
+    const rpx = fitText(ctx, r1, cw - 16, 40, 700);
+    ctx.font = `700 ${rpx}px ${LEGEND_FONT}`;
+    ctx.fillText(r1, cw / 2, ch * 0.46);
     ctx.font = `600 24px ${NARROW_FONT}`;
-    ctx.fillText(rating.split(' ').slice(2).join(' '), cw / 2, 134);
-    ctx.fillText('DC OK', cw * 0.3, 196);
-    ctx.fillText('24-28V', cw * 0.72, 196);
-    ctx.font = `600 20px ${NARROW_FONT}`;
-    ctx.fillText('INPUT 100-240V AC', cw / 2, 290);
-    ctx.fillText('50-60Hz', cw / 2, 316);
+    ctx.fillText(parts.slice(2).join(' '), cw / 2, ch * 0.555);
     ctx.fillStyle = '#6f7478';
-    ctx.fillRect(12, 344, cw - 24, 3);
+    ctx.fillRect(12, ch * 0.66, cw - 24, 3);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.font = `600 ${Math.min(20, Math.floor(cw / 9))}px ${NARROW_FONT}`;
+    ctx.fillText('INPUT 100-240V AC', cw / 2, ch * 0.78);
+    ctx.fillText('50-60Hz', cw / 2, ch * 0.85);
   });
 }
 
@@ -62,92 +81,112 @@ function terminalLabelTexture(labels: string[]) {
   });
 }
 
-function ventGeo(width: number) {
-  return mergedCopies(
-    `1606-vents:${width}`,
-    () => boxGeo(1, 1, 1).clone(),
-    () => {
-      const out: THREE.Matrix4[] = [];
-      const cols = Math.max(2, Math.floor((width - 0.01) / 0.0065));
-      const rows = 9;
-      for (let c = 0; c < cols; c++)
-        for (let r = 0; r < rows; r++)
-          out.push(
-            new THREE.Matrix4().compose(
-              new THREE.Vector3(-((cols - 1) * 0.0065) / 2 + c * 0.0065, 0, 0.012 + r * 0.0088),
-              new THREE.Quaternion(),
-              new THREE.Vector3(0.0036, 0.0004, 0.0062),
-            ),
-          );
-      return out;
-    },
-  );
-}
-
-function TerminalRow({ labels, y, z, up, width }: { labels: string[]; y: number; z: number; up: boolean; width: number }) {
-  const n = labels.length;
+/**
+ * Row of quick-connect spring-clamp terminals in a recessed zone. `up` = row at the top end
+ * (wire openings face up/out). Each pole: black body, square wire opening on the front near the
+ * outer end, narrow release slot next to it, orange release lever tip.
+ */
+function addTerminalRow(b: Parts, n: number, y: number, z: number, up: boolean, width: number) {
   const pitch = Math.min(0.0102, (width - 0.004) / n);
   const x0 = -((n - 1) * pitch) / 2;
   const s = up ? 1 : -1;
-  return (
-    <group position={[0, y, z]}>
-      {labels.map((_, i) => (
-        <group key={i} position={[x0 + i * pitch, 0, 0]}>
-          <mesh geometry={roundedBox(pitch - 0.0006, 0.022, 0.014, 0.0008, 1)} material={mats.matte('#1c1d1f', 0.55)} position={[0, 0, 0.007]} castShadow />
-          <mesh geometry={boxGeo(pitch - 0.0035, 0.0065, 0.0004)} material={mats.dark()} position={[0, -s * 0.0035, 0.0141]} />
-          <Screw position={[0, -s * 0.0035, 0.0128]} r={Math.min(0.0028, pitch * 0.3)} h={0.0013} />
-          {/* wire entry on the outer end face */}
-          <mesh geometry={boxGeo(pitch - 0.004, 0.0004, 0.0062)} material={mats.dark()} position={[0, s * 0.0111, 0.0078]} />
-        </group>
-      ))}
-      <mesh geometry={planeGeo(n * pitch, 0.0042)} material={mats.label(terminalLabelTexture(labels), true)} position={[0, s * 0.0068, 0.0142]} />
-    </group>
-  );
+  for (let i = 0; i < n; i++) {
+    b.at([x0 + i * pitch, y, z], undefined, (t) => {
+      t.add(roundedBox(pitch - 0.0006, 0.022, 0.014, 0.0008, 1), F.matte('#1c1d1f', 0.55), [0, 0, 0.007]);
+      // wire opening (toward the outer end) and screwdriver release slot (toward the label)
+      t.add(boxGeo(Math.min(0.0036, pitch * 0.45), 0.0036, 0.0006), F.hole, [0, s * 0.0052, 0.0139]);
+      t.add(boxGeo(Math.min(0.0016, pitch * 0.2), 0.0042, 0.0006), F.hole, [0, -s * 0.0012, 0.0139]);
+      t.add(boxGeo(Math.min(0.0024, pitch * 0.28), 0.0014, 0.0008), F.matte('#e0782a', 0.5), [0, -s * 0.0048, 0.0141]);
+      // wire entry on the outer end face
+      t.add(boxGeo(pitch - 0.004, 0.0004, 0.0062), F.hole, [0, s * 0.0111, 0.0078]);
+    });
+  }
 }
 
-export function PowerSupply1606({ getOk, catalog = '1606-XLS240E', rating = '24V DC 10A 240W', width = 0.06, position, rotation, scale }: PowerSupply1606Props) {
+function ventGeoAdd(b: Parts, width: number, y: number) {
+  const cols = Math.max(2, Math.floor((width - 0.01) / 0.0065));
+  const rows = 9;
+  for (let c = 0; c < cols; c++)
+    for (let r = 0; r < rows; r++) b.add(boxGeo(0.0036, 0.0004, 0.0062), F.hole, [-((cols - 1) * 0.0065) / 2 + c * 0.0065, y, 0.012 + r * 0.0088]);
+}
+
+export function PowerSupply1606({ getOk, getOverload, catalog = '1606-XLS240E', rating = '24V DC 10A 240W', width = 0.06, position, rotation, scale }: PowerSupply1606Props) {
   const W = width;
   const H = PSU.h;
   const D = PSU.d;
   const bodyD = D - PSU.frontDepth;
-  const alu = sharedMat('1606-alu', () => new THREE.MeshStandardMaterial({ color: '#c9cdd1', metalness: 0.62, roughness: 0.48, shadowSide: THREE.BackSide }));
-  const led = useMemo(() => new THREE.MeshStandardMaterial({ color: '#0b3a14', emissive: LIT_HEX.green, emissiveIntensity: 0, toneMapped: false, roughness: 0.3 }), []);
-  useEffect(() => () => led.dispose(), [led]);
+  const leds = useMemo(
+    () => ({
+      ok: new THREE.MeshStandardMaterial({ color: '#0b3a14', emissive: LIT_HEX.green, emissiveIntensity: 0, toneMapped: false, roughness: 0.3 }),
+      ovl: new THREE.MeshStandardMaterial({ color: '#3a0b0b', emissive: LIT_HEX.red, emissiveIntensity: 0, toneMapped: false, roughness: 0.3 }),
+    }),
+    [],
+  );
+  useEffect(() => () => {
+    leds.ok.dispose();
+    leds.ovl.dispose();
+  }, [leds]);
   useFrame(() => {
     const ok = getOk ? getOk() : true;
-    if (led.userData.ok === ok) return;
-    led.userData.ok = ok;
-    led.emissiveIntensity = ok ? 3.2 : 0;
-    led.color.set(ok ? '#3cff6a' : '#0b3a14');
+    if (leds.ok.userData.on !== ok) {
+      leds.ok.userData.on = ok;
+      leds.ok.emissiveIntensity = ok ? 3.2 : 0.03;
+      leds.ok.color.set(ok ? '#3cff6a' : '#1d6a2c');
+    }
+    const ov = getOverload ? getOverload() : false;
+    if (leds.ovl.userData.on !== ov) {
+      leds.ovl.userData.on = ov;
+      leds.ovl.emissiveIntensity = ov ? 3.2 : 0.03;
+      leds.ovl.color.set(ov ? '#ff4a4a' : '#6a1d1d');
+    }
   });
   const frontH = H - 2 * PSU.recess;
   const lblTex = labelTexture(catalog, rating, W);
   const labelH = frontH - 0.004;
+  const lblW = W - 0.006;
+  const at = (fx: number, fy: number): [number, number] => [-lblW / 2 + lblW * fx, labelH / 2 - labelH * fy];
+  const outLabels = W >= 0.05 ? ['+', '+', '−', '−', '13', '14'] : ['+', '+', '−', '−'];
+  const inLabels = ['N', 'L', 'PE'];
+  const staticGeo = partsGeo(`1606:${W}`, (b) => {
+    const alu = { color: '#c9cdd1', rough: 0.48, metal: 0.62 };
+    b.add(roundedBox(W, H, bodyD, 0.0025, 2), alu, [0, 0, bodyD / 2]);
+    // side grooves (extruded profile look)
+    for (const sx of [-1, 1]) for (const f of [0.3, 0.5, 0.7]) b.add(boxGeo(0.0004, H - 0.01, 0.0016), F.metal('#9ea3a8', 0.5), [sx * (W / 2 + 0.0001), 0, bodyD * f]);
+    // vents top & bottom
+    ventGeoAdd(b, W, H / 2 + 0.0001);
+    ventGeoAdd(b, W, -H / 2 - 0.0001);
+    // raised front panel
+    b.add(roundedBox(W - 0.002, frontH, PSU.frontDepth + 0.004, 0.002, 2), F.matte('#4a4e53', 0.5), [0, 0, bodyD + PSU.frontDepth / 2 - 0.002]);
+    // 24-28 V adjustment pot
+    const [px, py] = at(LBL.pot, LBL.ledRow);
+    b.add(cylZ(0.0026, 0.0026, 0.002, 20), F.matte('#2b2d30', 0.5), [px, py, D + 0.001]);
+    b.add(boxGeo(0.0036, 0.0006, 0.0006), F.hole, [px, py, D + 0.0021], [0, 0, 0.6]);
+    // LED bezels
+    for (const f of [LBL.ok, LBL.ovl]) {
+      const [lx, ly] = at(f, LBL.ledRow);
+      b.add(cylZ(0.0024, 0.0024, 0.0008, 16), F.matte('#2a2c2e', 0.5), [lx, ly, D + 0.0004]);
+    }
+    // terminals: output on top, input at the bottom
+    addTerminalRow(b, outLabels.length, H / 2 - PSU.recess / 2 + 0.002, bodyD, true, W);
+    addTerminalRow(b, inLabels.length, -H / 2 + PSU.recess / 2 - 0.002, bodyD, false, W);
+  });
+  const [okx, oky] = at(LBL.ok, LBL.ledRow);
+  const [ovx, ovy] = at(LBL.ovl, LBL.ledRow);
+  const outPitch = Math.min(0.0102, (W - 0.004) / outLabels.length);
+  const inPitch = Math.min(0.0102, (W - 0.004) / inLabels.length);
+  const tlMat = (labels: string[]) => sharedMat(`1606-tl:${labels.join('|')}`, () => {
+    const m = mats.label(terminalLabelTexture(labels), true).clone();
+    return m;
+  });
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      {/* aluminum housing */}
-      <mesh geometry={roundedBox(W, H, bodyD, 0.0025, 2)} material={alu} position={[0, 0, bodyD / 2]} castShadow receiveShadow />
-      {/* side grooves (extruded profile look) */}
-      {[-1, 1].map((s) =>
-        [0.3, 0.5, 0.7].map((f) => (
-          <mesh key={`${s}${f}`} geometry={boxGeo(0.0004, H - 0.01, 0.0016)} material={mats.metal('#9ea3a8', 0.5)} position={[s * (W / 2 + 0.0001), 0, bodyD * f]} />
-        )),
-      )}
-      {/* vents top & bottom */}
-      <mesh geometry={ventGeo(W)} material={mats.dark()} position={[0, H / 2 + 0.0001, 0]} />
-      <mesh geometry={ventGeo(W)} material={mats.dark()} position={[0, -H / 2 - 0.0001, 0]} />
-      {/* raised front panel with label */}
-      <mesh geometry={roundedBox(W - 0.002, frontH, PSU.frontDepth + 0.004, 0.002, 2)} material={mats.matte('#4a4e53', 0.5)} position={[0, 0, bodyD + PSU.frontDepth / 2 - 0.002]} castShadow />
-      <mesh geometry={planeGeo(W - 0.006, labelH)} material={mats.label(lblTex, false, 0.55)} position={[0, 0, D + 0.0001]} />
-      {/* DC OK LED + adjust pot (positions match the label print) */}
-      <mesh geometry={cylZ(0.0022, 0.0022, 0.0016, 16)} material={led} position={[-W / 2 + 0.003 + (W - 0.006) * 0.3, labelH / 2 - labelH * (160 / 380), D + 0.0008]} />
-      <group position={[-W / 2 + 0.003 + (W - 0.006) * 0.72, labelH / 2 - labelH * (160 / 380), D]}>
-        <mesh geometry={cylZ(0.0032, 0.0032, 0.002, 20)} material={mats.matte('#2b2d30', 0.5)} position={[0, 0, 0.001]} />
-        <mesh geometry={boxGeo(0.0044, 0.0007, 0.0006)} material={mats.dark()} position={[0, 0, 0.0021]} rotation={[0, 0, 0.6]} />
-      </group>
-      {/* terminal rows in the recessed zones */}
-      <TerminalRow labels={['N', 'L', 'PE']} y={H / 2 - PSU.recess / 2 + 0.002} z={bodyD} up width={W} />
-      <TerminalRow labels={W >= 0.05 ? ['+', '+', '−', '−', '13', '14'] : ['+', '+', '−', '−']} y={-H / 2 + PSU.recess / 2 - 0.002} z={bodyD} up={false} width={W} />
+      <mesh geometry={staticGeo} material={uberMat()} castShadow receiveShadow />
+      <mesh geometry={planeGeo(lblW, labelH)} material={mats.label(lblTex, false, 0.55)} position={[0, 0, D + 0.0001]} />
+      <mesh geometry={cylZ(0.0017, 0.0017, 0.0012, 16)} material={leds.ok} position={[okx, oky, D + 0.0008]} />
+      <mesh geometry={cylZ(0.0017, 0.0017, 0.0012, 16)} material={leds.ovl} position={[ovx, ovy, D + 0.0008]} />
+      {/* terminal markings printed on the terminal bodies, toward the label */}
+      <mesh geometry={planeGeo(outLabels.length * outPitch, 0.0042)} material={tlMat(outLabels)} position={[0, H / 2 - PSU.recess / 2 + 0.002 - 0.0078, bodyD + 0.0142]} />
+      <mesh geometry={planeGeo(inLabels.length * inPitch, 0.0042)} material={tlMat(inLabels)} position={[0, -H / 2 + PSU.recess / 2 - 0.002 + 0.0078, bodyD + 0.0142]} />
     </group>
   );
 }

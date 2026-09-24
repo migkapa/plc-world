@@ -9,7 +9,7 @@ import { useFrame } from '@react-three/fiber';
 import { useRef } from 'react';
 import * as THREE from 'three';
 import type { ToggleSwitchProps } from '../../contracts';
-import { LEGEND_FONT, canvasTexture, cylZ, damp, fitText, latheZ, mats, planeGeo, roundedBox, useClick } from './shared';
+import { F, HoverRing, LEGEND_FONT, canvasTexture, cylZ, damp, fitText, latheZ, mats, partsGeo, planeGeo, roundedBox, uberMat, useClick } from './shared';
 
 export interface ToggleSwitchExtProps extends ToggleSwitchProps {
   /** 'bat' = chrome bat-handle lever (default), 'boot' = with black rubber sealing boot. */
@@ -107,7 +107,7 @@ export function ToggleSwitch({
 }: ToggleSwitchExtProps) {
   const frame = useRef<THREE.Group>(null);
   const lever = useRef<THREE.Group>(null);
-  const { handlers } = useClick(onToggle ? () => onToggle() : undefined, frame);
+  const { hovered, handlers } = useClick(onToggle ? () => onToggle() : undefined, frame);
   useFrame((_, dt) => {
     const l = lever.current;
     if (!l) return;
@@ -117,36 +117,34 @@ export function ToggleSwitch({
   const plateW = 0.03;
   const plateH = 0.056;
   const plateCy = 0.0085;
+  const staticGeo = partsGeo(`toggle:${variant}:${rear ? panelThickness : '-'}`, (b) => {
+    b.add(roundedBox(plateW, plateH, 0.001, 0.0015, 2), F.metal('#1b1c1e', 0.45), [0, plateCy, 0.0005]);
+    // keyed washer + hex nut + threaded bushing
+    b.add(cylZ(0.0086, 0.0086, 0.0008, 40), F.satin, [0, 0, 0.0014]);
+    b.add(cylZ(0.0074, 0.0074, 0.0028, 6), F.chrome, [0, 0, 0.0032], [0, 0, Math.PI / 6]);
+    b.add(bushingGeo(), F.chrome, [0, 0, 0.0018]);
+    if (variant === 'boot') b.add(cylZ(0.0079, 0.0079, 0.0018, 32), F.rubber, [0, 0, PIVOT_Z - 0.0012]);
+    if (rear)
+      b.at([0, 0, -panelThickness], undefined, (r) => {
+        r.add(cylZ(0.0074, 0.0074, 0.0028, 6), F.chrome, [0, 0, -0.0014], [0, 0, Math.PI / 6]);
+        r.add(roundedBox(0.0135, 0.0135, 0.02, 0.001, 2), F.black, [0, 0, -0.013]);
+        for (const x of [-0.0045, 0, 0.0045]) r.add(roundedBox(0.0022, 0.0008, 0.008, 0.0002, 1), F.brass, [x, 0, -0.027]);
+      });
+  });
+  const leverGeo_ = partsGeo(`toggle-lever:${variant}`, (b) => {
+    if (variant === 'boot') b.add(bootGeo(), F.rubber, [0, 0, -0.001]);
+    else b.add(leverGeo(), F.chrome);
+  });
   return (
     <group position={position} rotation={rotation} scale={scale}>
       <group ref={frame}>
-        {/* legend plate */}
-        <mesh geometry={roundedBox(plateW, plateH, 0.001, 0.0015, 2)} material={mats.metal('#1b1c1e', 0.45)} position={[0, plateCy, 0.0005]} receiveShadow />
+        <mesh geometry={staticGeo} material={uberMat()} castShadow receiveShadow />
         <mesh geometry={planeGeo(plateW - 0.0012, plateH - 0.0012)} material={mats.label(tex, false, 0.45)} position={[0, plateCy, 0.00102]} />
-        <group {...handlers}>
-          {/* keyed washer + hex nut */}
-          <mesh geometry={cylZ(0.0086, 0.0086, 0.0008, 40)} material={mats.satinChrome()} position={[0, 0, 0.0014]} />
-          <mesh geometry={cylZ(0.0074, 0.0074, 0.0028, 6)} material={mats.chrome()} position={[0, 0, 0.0032]} rotation={[0, 0, Math.PI / 6]} castShadow />
-          <mesh geometry={bushingGeo()} material={mats.chrome()} position={[0, 0, 0.0018]} castShadow />
-          <group ref={lever} position={[0, 0, PIVOT_Z]}>
-            {variant === 'boot' ? (
-              <mesh geometry={bootGeo()} material={mats.rubber()} position={[0, 0, -0.001]} castShadow />
-            ) : (
-              <mesh geometry={leverGeo()} material={mats.chrome()} castShadow />
-            )}
-          </group>
-          {variant === 'boot' && <mesh geometry={cylZ(0.0079, 0.0079, 0.0018, 32)} material={mats.rubber()} position={[0, 0, PIVOT_Z - 0.0012]} />}
+        <HoverRing show={hovered} r={0.0092} z={0.0012} />
+        <group ref={lever} position={[0, 0, PIVOT_Z]} {...handlers}>
+          <mesh geometry={leverGeo_} material={uberMat()} castShadow />
         </group>
       </group>
-      {rear && (
-        <group position={[0, 0, -panelThickness]}>
-          <mesh geometry={cylZ(0.0074, 0.0074, 0.0028, 6)} material={mats.chrome()} position={[0, 0, -0.0014]} rotation={[0, 0, Math.PI / 6]} />
-          <mesh geometry={roundedBox(0.0135, 0.0135, 0.02, 0.001, 2)} material={mats.blackPlastic()} position={[0, 0, -0.013]} />
-          {[-0.0045, 0, 0.0045].map((x) => (
-            <mesh key={x} geometry={roundedBox(0.0022, 0.0008, 0.008, 0.0002, 1)} material={mats.brass()} position={[x, 0, -0.027]} />
-          ))}
-        </group>
-      )}
     </group>
   );
 }

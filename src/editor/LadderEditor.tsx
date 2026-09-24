@@ -10,8 +10,17 @@
  * → tag autocomplete, glyph/box title → mnemonic, rung number → neutral text, comment); right-click
  * opens the context menu; drag an instruction to move it; drop toolbar buttons on a wire.
  * Keyboard: arrows / Home / End / Tab navigate, Enter edits, typing starts ASCII quick entry
- * ("XIC Start_PB"), Del deletes, Ctrl+C/X/V, Ctrl+Z/Y, Ctrl+R (rung), Ctrl+T (toggle bit), Ctrl+D
- * (rung comment), Alt+arrows move, F1 help, Ctrl +/-/0 zoom.
+ * ("XIC Start_PB"), Del deletes, Ctrl+C/X/V, Ctrl+Z/Y, Ctrl+R (rung), Ctrl+T or Alt+T (toggle bit),
+ * Ctrl+W or Alt+W (new tag for an undefined operand), Ctrl+D (rung comment), Alt+arrows move, F1 help,
+ * Ctrl +/-/0 zoom. (Browsers reserve Ctrl+T / Ctrl+W for tabs, hence the Alt aliases.)
+ *
+ * Integration notes:
+ *  - Controlled: keep `rungs` in the host and apply `onChange`; pass `errors` computed from those rungs.
+ *  - Undo history, selection and open editors are reset when `program` / `routine` change.
+ *  - Give the editor a height-constrained parent (flex column + min-h-0). Its grid / flex track must be
+ *    allowed to shrink: use `minmax(0,1fr)` / `min-w-0`, otherwise the ladder's min-content width
+ *    widens the page. Long rungs wrap onto continuation lines at the available width.
+ *  - Mount `<Toaster/>` from @/ui once (the editor reports refusals with toasts).
  */
 import {
   ArrowDown,
@@ -20,6 +29,7 @@ import {
   ArrowUp,
   BookOpen,
   CheckCircle2,
+  Tag as TagIcon,
   ChevronRight,
   ClipboardPaste,
   Copy,
@@ -59,7 +69,7 @@ import {
   type ReactNode,
   type Ref,
 } from 'react';
-import { INSTRUCTION_DEFS } from '@/plc/instructions';
+import { INSTRUCTION_DEFS, operandCountIssue } from '@/plc/instructions';
 import { NeutralTextError, instructionsOf, parseRungText, serializeRung } from '@/plc/neutralText';
 import type { InstructionNode, PlcController, Rung, RungElement, VerifyError } from '@/plc/types';
 import { Modal } from '@/ui/Modal';
@@ -68,20 +78,22 @@ import { toast } from '@/ui/toast';
 import { AutocompleteInput, CommentEditor, ContextMenu, HoverCard, RungTextEditor, type AutoItem, type CommitHow, type MenuEntry } from './EditorOverlays';
 import { RoutineIcon } from './glyphs';
 import { InstructionHelp } from './InstructionHelp';
+import { NewTagDialog, type NewTagRequest } from './NewTagDialog';
 import { INSTR_DRAG_TYPE, InstructionToolbar, type ToolbarAction } from './InstructionToolbar';
 import { LD, layoutRung, nearestGap, type GapLayout, type InstrLayout, type RungLayout } from './layout';
 import {
   EditHistory,
-  addBranchLevel,
   addRung,
   addRungBefore,
   adjacentRung,
+  branchLevelTarget,
   clipboardFromText,
   clipboardToText,
   copyElements,
   deleteRung,
   duplicateRung,
   findRung,
+  getSeries,
   insertAt,
   insertBranch,
   insertPointFor,
@@ -111,11 +123,12 @@ import {
   type LadderSelection,
   type LegPath,
 } from './ops';
-import { EndRung, RungSvg, parseGapKey, type LiveFrame, type RungBinding, type RungSvgProps } from './RungSvg';
+import { EndRung, MarginPlate, RungMargin, RungSvg, parseGapKey, type LiveFrame, type RungBinding, type RungSvgProps } from './RungSvg';
 import {
   createLiveReader,
   forceInfo,
   makeTagMeta,
+  newTagCandidate,
   routinesOf,
   specOf,
   structureVersionOf,
@@ -159,6 +172,8 @@ export interface LadderEditorProps {
   zoom?: number;
   /** Extra content on the right of the header bar. */
   headerExtra?: ReactNode;
+  /** A tag was created from the ladder (New Tag…): re-verify. */
+  onTagsChanged?(): void;
   ref?: Ref<LadderEditorHandle>;
 }
 
@@ -183,6 +198,8 @@ export interface LadderEditorHandle {
   /** Open the context menu for the current selection. */
   openContextMenu(): void;
   showHelp(mnemonic?: string): void;
+  /** Open the New Tag dialog for the selected (undefined) operand. */
+  newTag(): void;
   setZoom(zoom: number): void;
   scrollToRung(index: number): void;
 }
@@ -192,7 +209,8 @@ export interface LadderEditorHandle {
 // ---------------------------------------------------------------------------
 
 type EditState =
-  | { kind: 'operand'; rungId: string; elementId: string; index: number; initial?: string }
+  /** `seq` makes every operand edit a fresh editor instance (Tab onto the same operand re-arms it). */
+  | { kind: 'operand'; rungId: string; elementId: string; index: number; initial?: string; seq: number }
   | { kind: 'quick'; rungId: string; point: InsertPoint; sel: LadderSelection; initial: string }
   | { kind: 'mnemonic'; rungId: string; elementId: string }
   | { kind: 'rungText'; rungId: string }
@@ -217,6 +235,60 @@ const ZOOM_MAX = 2;
 const LIVE_INTERVAL_MS = 38; // ≈ 26 Hz
 const OFFLINE_FRAME: LiveFrame = { online: false, running: false, elements: undefined, reader: undefined };
 const lower = (s: string): string => s.toLowerCase();
+let EDIT_SEQ = 0;
+
+function operandEdit(rungId: string, elementId: string, index: number, initial?: string): EditState {
+  EDIT_SEQ += 1;
+  return initial !== undefined ? { kind: 'operand', rungId, elementId, index, initial, seq: EDIT_SEQ } : { kind: 'operand', rungId, elementId, index, seq: EDIT_SEQ };
+}
+
+/** Character offsets of the instructions of a neutral-text rung (mnemonics outside operand lists). */
+function instructionPositions(text: string): number[] {
+  const out: number[] = [];
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && /[A-Za-z_]/.test(ch)) {
+      out.push(i);
+      while (i + 1 < text.length && /[A-Za-z0-9_]/.test(text[i + 1]!)) i++;
+    }
+  }
+  return out;
+}
+
+/**
+ * Validate a rung typed as neutral text like Studio's ASCII editor: syntax, known (and allowed)
+ * instructions, operand counts and empty operands. Undefined tags are accepted (they are verify errors).
+ */
+export function checkRungText(text: string, allowed?: ReadonlySet<string>): { message: string; position?: number } | null {
+  let els: RungElement[];
+  try {
+    els = parseRungText(text);
+  } catch (err) {
+    if (err instanceof NeutralTextError) return { message: err.message, position: err.position };
+    return { message: err instanceof Error ? err.message : String(err) };
+  }
+  const list = instructionsOf(els);
+  const pos = instructionPositions(text);
+  for (let k = 0; k < list.length; k++) {
+    const i = list[k]!;
+    const at = pos[k];
+    const where = at !== undefined ? { position: at } : {};
+    const def = INSTRUCTION_DEFS[i.op];
+    if (!def) return { message: `Unknown instruction '${i.op}'.`, ...where };
+    if (allowed && !allowed.has(i.op)) return { message: `${i.op} is locked in this mission.`, ...where };
+    const count = operandCountIssue(def, i.operands.length);
+    if (count) return { message: count, ...where };
+    const empty = i.operands.findIndex((o) => o.trim() === '');
+    if (empty >= 0) {
+      const name = specOf(i.op, empty, i.operands)?.name ?? `operand ${empty + 1}`;
+      return { message: `${i.op}: ${name} is empty (type ? for "not specified yet").`, ...where };
+    }
+  }
+  return null;
+}
 
 function hitTarget(target: EventTarget | null): HitTarget | null {
   if (!(target instanceof Element)) return null;
@@ -280,6 +352,8 @@ const RungRow = memo(function RungRow({ overlay, observe, ...svg }: RungRowProps
   const id = svg.rung.id;
   const h = Math.ceil(svg.layout.height * svg.zoom);
   const refCb = useCallback((el: HTMLDivElement | null) => (el ? observe(el, id) : undefined), [observe, id]);
+  const s = svg.selection;
+  const rungSelected = s !== undefined && !s.elementId && s.wireIndex === undefined && !s.legPath;
   return (
     <div
       ref={refCb}
@@ -287,7 +361,11 @@ const RungRow = memo(function RungRow({ overlay, observe, ...svg }: RungRowProps
       data-rung-row={id}
       style={{ height: h, containIntrinsicSize: `auto ${h}px`, ...(overlay ? { contentVisibility: 'visible', zIndex: 20 } : {}) }}
     >
-      <RungSvg {...svg} />
+      <RungSvg {...svg} separateMargin />
+      {/* rung number & verify marker, pinned to the left edge when the routine scrolls sideways */}
+      <div className="ld-margin-pin">
+        <RungMargin rungId={id} index={svg.index} layout={svg.layout} zoom={svg.zoom} selected={rungSelected} {...(svg.errors ? { errors: svg.errors } : {})} />
+      </div>
       {overlay}
     </div>
   );
@@ -352,7 +430,7 @@ function OperandOverlay({
   program: string;
   routines: string[];
   labels: string[];
-  onCommit(text: string, how: CommitHow): void;
+  onCommit(text: string, how: CommitHow, item?: AutoItem): void;
   onCancel(): void;
   /** Right-most left position that keeps the box inside the viewport. */
   maxLeft: number;
@@ -364,19 +442,32 @@ function OperandOverlay({
   const query = text === start && initial === undefined ? '' : text;
   const spec = specOf(instr.op, index, instr.operands);
   const o = node.operands.find((x) => x.index === index);
-  const items: AutoItem[] = useMemo(
-    () =>
-      suggestOperands(controller, program, spec, query, { routines, labels, limit: 60 }).map((s) => ({
-        key: s.operand,
-        value: s.operand,
-        primary: s.operand,
-        secondary: [s.description, s.aliasFor ? `→ ${s.aliasFor}` : undefined].filter(Boolean).join('  ·  ') || undefined,
-        right: s.dataType,
-        ...(s.expandable ? { expandable: true } : {}),
-        ...(s.scope && s.scope !== 'Controller' ? { badge: 'Local' } : {}),
-      })),
-    [controller, program, spec, query, routines, labels],
-  );
+  const items: AutoItem[] = useMemo(() => {
+    const list: AutoItem[] = suggestOperands(controller, program, spec, query, { routines, labels, limit: 60 }).map((s) => ({
+      key: s.operand,
+      value: s.operand,
+      primary: s.operand,
+      secondary: [s.description, s.aliasFor ? `→ ${s.aliasFor}` : undefined].filter(Boolean).join('  ·  ') || undefined,
+      right: s.dataType,
+      ...(s.expandable ? { expandable: true } : {}),
+      ...(s.scope && s.scope !== 'Controller' ? { badge: 'Local' } : {}),
+    }));
+    // a valid name that is not a tag yet: offer to create it (explicit choice, never a silent swap)
+    const typed = query.trim();
+    const cand = typed && !list.some((i) => lower(i.value) === lower(typed)) ? newTagCandidate(controller, typed, program, spec) : undefined;
+    if (cand) {
+      list.unshift({
+        key: '__newtag',
+        value: typed,
+        primary: `New tag '${cand.name}'…`,
+        secondary: `Use ${typed} here and create it`,
+        right: `${cand.dataType}${cand.dims ? `[${cand.dims}]` : ''}`,
+        action: 'newTag',
+        accent: true,
+      });
+    }
+    return list;
+  }, [controller, program, spec, query, routines, labels]);
   if (!o) return null;
   const width = Math.max(260, Math.min(360, o.hit.w * zoom + 90));
   const left = Math.min(o.anchor === 'middle' ? o.x * zoom - width / 2 : (o.hit.x + o.hit.w) * zoom - width + 26, maxLeft);
@@ -398,10 +489,10 @@ function OperandOverlay({
       }
       footer={
         <span>
-          <b>Enter</b> accept · <b>Tab</b> next operand · <b>Esc</b> cancel{items.some((i) => i.expandable) ? ' · ▸ has members (type “.”)' : ''}
+          <b>Enter</b> as typed · <b>Tab</b> complete · <b>↑↓</b> pick · <b>Esc</b> cancel{items.some((i) => i.expandable) ? ' · ▸ members: type “.”' : ''}
         </span>
       }
-      onCommit={(v, how) => onCommit(v, how)}
+      onCommit={(v, how, item) => onCommit(v, how, item)}
       onCancel={onCancel}
       ariaLabel={`${instr.op} ${spec?.name ?? 'operand'}`}
       style={{ left: Math.max(4, left), top: o.hit.y * zoom - 5, width }}
@@ -530,7 +621,8 @@ function QuickEntryOverlay({
         }
         const err = onCommit(v);
         if (err) {
-          setError(err);
+          const hint = ctx.mode === 'mnemonic' && items.some((i) => !i.disabled) && /Unknown instruction/.test(err) ? ' Press Tab to complete it.' : '';
+          setError(`${err}${hint}`);
           return false;
         }
         return undefined;
@@ -582,7 +674,7 @@ function MnemonicOverlay({ instr, style, allowed, onCommit, onCancel }: { instr:
         }
         const err = onCommit(v.trim().toUpperCase());
         if (err) {
-          setError(err);
+          setError(/Unknown instruction/.test(err) && items.some((i) => !i.disabled) ? `${err} Press Tab to complete, or pick from the list.` : err);
           return false;
         }
         return undefined;
@@ -633,6 +725,7 @@ export function LadderEditor(props: LadderEditorProps) {
   const [faulted, setFaulted] = useState(false);
   const [, setHistVersion] = useState(0);
   const [announce, setAnnounce] = useState('');
+  const [newTag, setNewTag] = useState<NewTagRequest | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const rungsRef = useRef(rungs);
@@ -643,6 +736,13 @@ export function LadderEditor(props: LadderEditorProps) {
   onChangeRef.current = props.onChange;
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
+  /** Current editor overlay (read by deferred callbacks — never trust a render-time closure there). */
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  const modalOpenRef = useRef(false);
+  modalOpenRef.current = newTag !== null || helpOp !== null;
+  const onTagsChangedRef = useRef(props.onTagsChanged);
+  onTagsChangedRef.current = props.onTagsChanged;
   const historyRef = useRef(new EditHistory<Rung[]>({ limit: 200 }));
   const registryRef = useRef(new Map<string, RungBinding>());
   const visibleRef = useRef(new Set<string>());
@@ -703,20 +803,19 @@ export function LadderEditor(props: LadderEditorProps) {
   const baseW = Math.floor(viewW / zoom);
   const layouts = useMemo(() => {
     const cache = cacheRef.current;
-    const make = (r: Rung, width: number): RungLayout => {
-      const key = `${width}|${showValues}|${tagVersion}`;
+    // every rung is laid out at the viewport width: long rungs wrap onto continuation lines (Studio
+    // 5000 style) instead of widening the whole routine; only an element wider than the viewport widens
+    // its own rung (the pinned margin keeps rung numbers visible then)
+    const key = `${baseW}|${showValues}|${tagVersion}`;
+    return rungs.map((r) => {
       const c = cache.get(r);
       if (c && c.key === key) return c.layout;
-      const layout = layoutRung(r, { width, ...(tagMeta ? { tagMeta } : {}), showValues });
+      const layout = layoutRung(r, { width: baseW, wrap: true, ...(tagMeta ? { tagMeta } : {}), showValues });
       cache.set(r, { key, layout });
       return layout;
-    };
-    let list = rungs.map((r) => make(r, baseW));
-    const widest = Math.max(baseW, ...list.map((l) => l.width));
-    if (widest > baseW) list = rungs.map((r) => make(r, widest));
-    return list;
+    });
   }, [rungs, baseW, showValues, tagVersion, tagMeta]);
-  const contentW = (layouts[0]?.width ?? baseW) * zoom;
+  const contentW = layouts.reduce((w, l) => Math.max(w, l.width), baseW) * zoom;
   const layoutById = useMemo(() => {
     const m = new Map<string, { layout: RungLayout; index: number }>();
     rungs.forEach((r, i) => m.set(r.id, { layout: layouts[i]!, index: i }));
@@ -847,6 +946,21 @@ export function LadderEditor(props: LadderEditorProps) {
     });
   }, [rungs]);
 
+  // another routine in the same editor instance: its undo history, selection and editors do not apply
+  const routineKey = `${program}\u0000${routine}`;
+  const routineKeyRef = useRef(routineKey);
+  useLayoutEffect(() => {
+    if (routineKeyRef.current === routineKey) return;
+    routineKeyRef.current = routineKey;
+    historyRef.current.clear();
+    setHistVersion((v) => v + 1);
+    setSel(null);
+    selRef.current = null;
+    setEditing(null);
+    setMenu(null);
+    setNewTag(null);
+  }, [routineKey]);
+
   const onSelectionChange = props.onSelectionChange;
   useEffect(() => {
     onSelectionChange?.(sel);
@@ -953,7 +1067,7 @@ export function LadderEditor(props: LadderEditorProps) {
       const next = insertAt(rs, point, ins);
       const firstMissing = ins.operands.findIndex((o) => o === '?');
       commit(next, { select: ins.operands.length > 0 ? { rungId: rung.id, elementId: ins.id, operandIndex: Math.max(0, firstMissing) } : { rungId: rung.id, elementId: ins.id } });
-      if (ins.operands.length > 0) setEditing({ kind: 'operand', rungId: rung.id, elementId: ins.id, index: Math.max(0, firstMissing) });
+      if (ins.operands.length > 0) setEditing(operandEdit(rung.id, ins.id, Math.max(0, firstMissing)));
     },
     [commit, ensureRung, isAllowed],
   );
@@ -1011,7 +1125,8 @@ export function LadderEditor(props: LadderEditorProps) {
       toast({ tone: 'info', title: 'Select a branch first', body: 'Click a branch rail or an instruction inside a branch, then add a level.' });
       return;
     }
-    const res = addBranchLevel(rs, rung.id, branchId, after);
+    // an existing empty level (e.g. the one "Branch" leaves) is used before adding another short
+    const res = branchLevelTarget(rs, rung.id, branchId, after);
     if (res.legPath) commit(res.rungs, { select: { rungId: rung.id, legPath: res.legPath, wireIndex: 0 } });
   }, [commit]);
 
@@ -1025,7 +1140,8 @@ export function LadderEditor(props: LadderEditorProps) {
     if (s.elementId) {
       const next = removeElement(rs, rung.id, s.elementId);
       commit(next, { select: selectionAfterRemoval(rung, s.elementId, next) });
-    } else if (s.legPath && s.wireIndex === undefined) {
+    } else if (s.legPath && (s.wireIndex === undefined || getSeries(rung.elements, s.legPath)?.length === 0)) {
+      // a selected level, or the wire of an empty level (a short): remove the level
       const next = removeLeg(rs, rung.id, s.legPath.branchId, s.legPath.leg);
       commit(next, { select: { rungId: rung.id } });
     } else if (s.wireIndex === undefined) {
@@ -1041,7 +1157,12 @@ export function LadderEditor(props: LadderEditorProps) {
     const rung = s && findRung(rungsRef.current, s.rungId);
     if (!s || !rung) return null;
     if (s.elementId) CLIPBOARD = { kind: 'elements', elements: copyElements(rung, [s.elementId]) };
-    else if (s.wireIndex === undefined && !s.legPath) CLIPBOARD = { kind: 'rungs', rungs: [structuredClone(rung)] };
+    else if (s.legPath && s.wireIndex === undefined) {
+      // a branch level: its logic
+      const leg = getSeries(rung.elements, s.legPath);
+      if (!leg || leg.length === 0) return null;
+      CLIPBOARD = { kind: 'elements', elements: structuredClone(leg) };
+    } else if (s.wireIndex === undefined && !s.legPath) CLIPBOARD = { kind: 'rungs', rungs: [structuredClone(rung)] };
     else return null;
     return CLIPBOARD;
   }, []);
@@ -1063,7 +1184,8 @@ export function LadderEditor(props: LadderEditorProps) {
         return;
       }
       const { rungs: base, rung } = ensureRung();
-      const point = insertPointFor(rung, s, clip.elements.every((e) => e.kind === 'instr' && INSTRUCTION_DEFS[e.op]?.kind === 'output') ? 'OTE' : undefined);
+      // like quick entry: inputs go before the rung's trailing outputs, outputs at the end
+      const point = insertPointFor(rung, s, clip.elements.every((e) => e.kind === 'instr' && INSTRUCTION_DEFS[e.op]?.kind === 'output') ? 'OTE' : 'XIC');
       const res = pasteElements(base, point, clip.elements);
       commit(res.rungs, { select: { rungId: rung.id, elementId: res.ids[res.ids.length - 1]! } });
     },
@@ -1103,9 +1225,12 @@ export function LadderEditor(props: LadderEditorProps) {
     (op: string, value: boolean | null) => {
       if (!controller) return;
       try {
-        if (value === null) controller.removeForce(op);
+        // force the physical point the operand resolves to in THIS program's scope (a program-scoped
+        // alias may shadow a controller tag of the same name; setForce resolves controller scope first)
+        const path = forceInfo(controller, op, program).path ?? op;
+        if (value === null) controller.removeForce(path);
         else {
-          controller.setForce(op, value);
+          controller.setForce(path, value);
           if (!controller.getStatus().forcesEnabled) {
             toast({ tone: 'warning', title: `Force installed on ${op}`, body: 'Forces are installed but DISABLED. Use Forces ▸ Enable All I/O Forces in the online toolbar to apply them.' });
           }
@@ -1115,8 +1240,35 @@ export function LadderEditor(props: LadderEditorProps) {
         toast({ tone: 'error', title: 'Cannot force', body: e instanceof Error ? e.message : String(e) });
       }
     },
-    [controller],
+    [controller, program],
   );
+
+  /** Studio 5000 "New Tag…" for an undefined operand of an instruction (the given one, else the first). */
+  const openNewTag = useCallback(
+    (rungId: string, elementId: string, operandIndex?: number): boolean => {
+      if (readOnlyRef.current || !controller) return false;
+      const instr = findInstr(rungsRef.current, rungId, elementId);
+      if (!instr) return false;
+      const indexes = operandIndex !== undefined ? [operandIndex] : instr.operands.map((_, i) => i);
+      for (const i of indexes) {
+        const text = instr.operands[i];
+        const cand = text ? newTagCandidate(controller, text, program, specOf(instr.op, i, instr.operands)) : undefined;
+        if (!cand) continue;
+        const ri = rungIndexOf(rungsRef.current, rungId);
+        setNewTag({ ...cand, usedBy: `${instr.op} on rung ${ri}` });
+        return true;
+      }
+      return false;
+    },
+    [controller, program],
+  );
+
+  const newTagForSelection = useCallback(() => {
+    const s = selRef.current;
+    if (!s?.elementId || !openNewTag(s.rungId, s.elementId, s.operandIndex)) {
+      toast({ tone: 'info', title: 'No undefined tag here', body: 'Select an instruction (or operand) whose tag does not exist yet, then use New Tag.' });
+    }
+  }, [openNewTag]);
 
   // ---------------------------------------------------------------- overlays
   const startOperandEdit = useCallback((rungId: string, elementId: string, index: number, initial?: string) => {
@@ -1124,7 +1276,7 @@ export function LadderEditor(props: LadderEditorProps) {
     const instr = findInstr(rungsRef.current, rungId, elementId);
     if (!instr || index >= Math.max(instr.operands.length, specOf(instr.op, index, instr.operands) ? index + 1 : 0)) return;
     setSel({ rungId, elementId, operandIndex: index });
-    setEditing(initial !== undefined ? { kind: 'operand', rungId, elementId, index, initial } : { kind: 'operand', rungId, elementId, index });
+    setEditing(operandEdit(rungId, elementId, index, initial));
   }, []);
 
   const startQuickEntry = useCallback(
@@ -1158,8 +1310,9 @@ export function LadderEditor(props: LadderEditorProps) {
   }, []);
 
   const closeEditing = useCallback(() => {
+    // focus synchronously (not in a frame): keys typed right after Enter must reach the ladder
+    focusEditor();
     setEditing(null);
-    requestAnimationFrame(() => focusEditor());
   }, [focusEditor]);
 
   const setZoom = useCallback((z: number) => setZoomState(Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) * 10) / 10), []);
@@ -1195,7 +1348,7 @@ export function LadderEditor(props: LadderEditorProps) {
         })());
         if (dataOp && isBool && controller) {
           out.push({ heading: dataOp });
-          out.push({ label: 'Toggle Bit', shortcut: 'Ctrl+T', icon: <ToggleRight size={14} />, disabled: !online, hint: online ? undefined : 'Go online to toggle bits', onSelect: () => toggleBit(dataOp) });
+          out.push({ label: 'Toggle Bit', shortcut: 'Ctrl/Alt+T', icon: <ToggleRight size={14} />, disabled: !online, hint: online ? undefined : 'Go online to toggle bits', onSelect: () => toggleBit(dataOp) });
           const fi = forceInfo(controller, dataOp, program);
           if (fi.forceable) {
             out.push({ label: 'Force On', icon: <Zap size={14} className="text-amber-400" />, disabled: !online, onSelect: () => applyForce(dataOp, true) });
@@ -1203,6 +1356,20 @@ export function LadderEditor(props: LadderEditorProps) {
             out.push({ label: 'Remove Force', icon: <XCircle size={14} />, disabled: !online || fi.forced === undefined, onSelect: () => applyForce(dataOp, null) });
           }
           out.push('sep');
+        }
+        // undefined tag → Studio 5000 "New Tag…"
+        const undefinedIdx = (opIndex !== undefined ? [opIndex] : instr.operands.map((_, i) => i)).find(
+          (i) => instr.operands[i] !== undefined && newTagCandidate(controller, instr.operands[i]!, program, specOf(instr.op, i, instr.operands)) !== undefined,
+        );
+        if (undefinedIdx !== undefined) {
+          const cand = newTagCandidate(controller, instr.operands[undefinedIdx]!, program, specOf(instr.op, undefinedIdx, instr.operands))!;
+          out.push({
+            label: `New Tag '${cand.name}'…`,
+            shortcut: 'Ctrl/Alt+W',
+            icon: <TagIcon size={14} className="text-sky-400" />,
+            disabled: ro,
+            onSelect: () => void openNewTag(rung.id, instr.id, undefinedIdx),
+          });
         }
         out.push({ label: 'Edit Operand', shortcut: 'Enter', icon: <Pencil size={14} />, disabled: ro || instr.operands.length === 0, onSelect: () => startOperandEdit(rung.id, instr.id, opIndex ?? 0) });
         out.push({ label: 'Change Instruction…', icon: <Replace size={14} />, disabled: ro, onSelect: () => setEditing({ kind: 'mnemonic', rungId: rung.id, elementId: instr.id }) });
@@ -1227,6 +1394,10 @@ export function LadderEditor(props: LadderEditorProps) {
         out.push({ label: 'Delete Branch', shortcut: 'Del', icon: <Trash2 size={14} />, danger: true, disabled: ro, onSelect: deleteSelection });
         out.push('sep');
       } else if (t.type === 'wire') {
+        if (t.legPath && getSeries(rung.elements, t.legPath)?.length === 0) {
+          out.push({ heading: 'Empty branch level (short)' });
+          out.push({ label: 'Delete Branch Level', shortcut: 'Del', icon: <Trash2 size={14} />, danger: true, disabled: ro, onSelect: deleteSelection });
+        }
         out.push({ label: 'Insert Instruction…', shortcut: 'type', icon: <Pencil size={14} />, disabled: ro, onSelect: () => startQuickEntry('') });
         out.push({ label: 'Paste', shortcut: 'Ctrl+V', icon: <ClipboardPaste size={14} />, disabled: ro || !CLIPBOARD, onSelect: () => pasteClip(CLIPBOARD) });
         out.push({ label: 'Add Branch Here', icon: <GitBranchPlus size={14} />, disabled: ro, onSelect: addBranch });
@@ -1266,7 +1437,7 @@ export function LadderEditor(props: LadderEditorProps) {
       } });
       return out;
     },
-    [controller, online, program, toggleBit, applyForce, startOperandEdit, cutSelection, copySelection, pasteClip, deleteSelection, addBranch, addLevel, commit, startQuickEntry, editComment, editRungText],
+    [controller, online, program, toggleBit, applyForce, openNewTag, startOperandEdit, cutSelection, copySelection, pasteClip, deleteSelection, addBranch, addLevel, commit, startQuickEntry, editComment, editRungText],
   );
 
   // ---------------------------------------------------------------- hover cards
@@ -1308,6 +1479,17 @@ export function LadderEditor(props: LadderEditorProps) {
           </div>
         );
       }
+      if (t.type === 'wire') {
+        if (!t.legPath || getSeries(rung.elements, t.legPath)?.length !== 0) return null;
+        return (
+          <div className="max-w-xs space-y-1 text-[12px] leading-snug">
+            <div className="flex items-center gap-1.5 font-semibold text-amber-400">
+              <TriangleAlert size={13} /> Empty branch level — a short
+            </div>
+            <div className="text-[var(--ld-ov-muted)]">Power always flows through an empty level, so the OR is always true. Click it and type an instruction, or press Del to remove the level.</div>
+          </div>
+        );
+      }
       if (t.type !== 'element' && t.type !== 'operand') return null;
       const instr = findInstr(rs, rung.id, t.elementId);
       if (!instr) return null;
@@ -1325,6 +1507,7 @@ export function LadderEditor(props: LadderEditorProps) {
         }
       })() : undefined;
       const fi = operand && controller ? forceInfo(controller, operand, program) : undefined;
+      const undefinedTag = operand && idx !== undefined ? newTagCandidate(controller, operand, program, specOf(instr.op, idx, instr.operands)) : undefined;
       const elErrs = errs.filter((e) => e.elementId === instr.id);
       return (
         <div className="space-y-1.5">
@@ -1350,6 +1533,12 @@ export function LadderEditor(props: LadderEditorProps) {
                 </div>
               )}
               {operand === '?' && <div className="text-[11px] text-red-400">Operand not set — double-click to enter a tag.</div>}
+              {undefinedTag && (
+                <div className="mt-0.5 text-[11px] text-sky-400">
+                  Tag not defined — right-click ▸ New Tag… (Ctrl/Alt+W) creates it as {undefinedTag.dataType}
+                  {undefinedTag.dims ? `[${undefinedTag.dims}]` : ''}.
+                </div>
+              )}
             </div>
           )}
           {def && <div className="text-[11.5px] leading-snug text-[var(--ld-ov-muted)]">{def.summary}</div>}
@@ -1424,6 +1613,8 @@ export function LadderEditor(props: LadderEditorProps) {
     if (e.button !== 0) return;
     const t = hitTarget(e.target);
     if (!t) return;
+    // keyboard focus must not depend on the clicked node surviving the re-render (typed entries)
+    focusEditor();
     // operand / quick / mnemonic / comment overlays resolve themselves on blur (commit or cancel)
     if (editing?.kind === 'rungText') setEditing(null);
     switch (t.type) {
@@ -1512,7 +1703,12 @@ export function LadderEditor(props: LadderEditorProps) {
   const onMouseMove = (e: ReactMouseEvent<HTMLDivElement>): void => {
     if (dragRef.current?.active || menu) return;
     const t = hitTarget(e.target);
-    const interesting = t && (t.type === 'element' || t.type === 'operand' || t.type === 'marker' || t.type === 'rungnum');
+    const emptyLeg = (x: HitTarget): boolean => {
+      if (x.type !== 'wire' || !x.legPath) return false;
+      const r = findRung(rungsRef.current, x.rungId);
+      return !!r && getSeries(r.elements, x.legPath)?.length === 0;
+    };
+    const interesting = t && (t.type === 'element' || t.type === 'operand' || t.type === 'marker' || t.type === 'rungnum' || emptyLeg(t));
     const key = interesting ? JSON.stringify(t) : '';
     if (key === hoverKey.current) {
       if (hover) setHover((h) => (h ? { ...h, x: e.clientX, y: e.clientY } : h));
@@ -1625,7 +1821,9 @@ export function LadderEditor(props: LadderEditorProps) {
     }
     if (ctrl && lowerKey === 'y') return handled(), redo();
     if (ctrl && lowerKey === 'r') return handled(), addRungAfterSel();
-    if (ctrl && lowerKey === 't') return handled(), toggleBit();
+    // Studio 5000: Ctrl+T toggle bit, Ctrl+W new tag (browsers keep those for tabs → Alt+T / Alt+W too)
+    if ((ctrl && lowerKey === 't') || (e.altKey && e.code === 'KeyT')) return handled(), toggleBit();
+    if ((ctrl && lowerKey === 'w') || (e.altKey && e.code === 'KeyW')) return handled(), newTagForSelection();
     if (ctrl && lowerKey === 'd') return handled(), editComment();
     if (ctrl && lowerKey === 'c') {
       copySelection();
@@ -1633,9 +1831,9 @@ export function LadderEditor(props: LadderEditorProps) {
     }
     if (ctrl && lowerKey === 'x') {
       if (readOnlyRef.current) return;
-      copySelection();
       pasteHandled.current = true;
-      deleteSelection();
+      // cut only what could be copied (never delete without filling the clipboard)
+      if (copySelection()) deleteSelection();
       return;
     }
     if (ctrl && lowerKey === 'v') {
@@ -1820,13 +2018,14 @@ export function LadderEditor(props: LadderEditorProps) {
         const instr = s?.elementId ? findInstr(rungsRef.current, s.rungId, s.elementId) : undefined;
         setHelpOp(m ?? instr?.op ?? 'XIC');
       },
+      newTag: newTagForSelection,
       setZoom,
       scrollToRung: (i) => {
         const r = rungsRef.current[i];
         if (r) setSel({ rungId: r.id });
       },
     }),
-    [focusEditor, insertInstruction, addRungAfterSel, addBranch, addLevel, undo, redo, deleteSelection, startQuickEntry, startOperandEdit, editRungText, editComment, openMenuAtSelection, setZoom],
+    [focusEditor, insertInstruction, addRungAfterSel, addBranch, addLevel, undo, redo, deleteSelection, startQuickEntry, startOperandEdit, editRungText, editComment, openMenuAtSelection, newTagForSelection, setZoom],
   );
 
   // ---------------------------------------------------------------- toolbar
@@ -1837,6 +2036,10 @@ export function LadderEditor(props: LadderEditorProps) {
       else if (a.type === 'branchLevel') addLevel();
       else insertInstruction(a.mnemonic);
       if (a.type !== 'instr') focusEditor();
+      // an instruction without operands (NOP, AFI…) opens no editor: give the ladder its keys back
+      else requestAnimationFrame(() => {
+        if (!editingRef.current && !modalOpenRef.current) focusEditor();
+      });
     },
     [addRungAfterSel, addBranch, addLevel, insertInstruction, focusEditor],
   );
@@ -1844,6 +2047,16 @@ export function LadderEditor(props: LadderEditorProps) {
   // ---------------------------------------------------------------- overlay rendering
   const routines = useMemo(() => routinesOf(controller, program), [controller, program, tagVersion]);
   const labels = useMemo(() => labelsOf(rungs), [rungs]);
+
+  const validateRungText = useCallback((text: string) => checkRungText(text, allowedSet), [allowedSet]);
+
+  const appendRung = useCallback(() => {
+    if (readOnlyRef.current) return;
+    const last = rungsRef.current[rungsRef.current.length - 1];
+    const res = addRung(rungsRef.current, last?.id);
+    commit(res.rungs, { select: { rungId: res.rung.id } });
+    focusEditor();
+  }, [commit, focusEditor]);
 
   const overlayFor = (rung: Rung, layout: RungLayout): ReactNode => {
     if (!editing || editing.rungId !== rung.id) return undefined;
@@ -1854,7 +2067,7 @@ export function LadderEditor(props: LadderEditorProps) {
         if (!instr || node?.kind !== 'instr') return undefined;
         return (
           <OperandOverlay
-            key={`${editing.elementId}:${editing.index}`}
+            key={`${editing.elementId}:${editing.index}:${editing.seq}`}
             instr={instr}
             node={node}
             index={editing.index}
@@ -1866,15 +2079,24 @@ export function LadderEditor(props: LadderEditorProps) {
             labels={labels}
             maxLeft={viewW - 372}
             onCancel={closeEditing}
-            onCommit={(text, how) => {
+            onCommit={(text, how, item) => {
               const value = text.trim() === '' ? '?' : text.trim();
               const next = setOperand(rungsRef.current, rung.id, instr.id, editing.index, value);
               commit(next);
+              if (item?.action === 'newTag') {
+                // use the typed name here, then create it (Studio: type the name, then New Tag…)
+                setSel({ rungId: rung.id, elementId: instr.id, operandIndex: editing.index });
+                setEditing(null);
+                const cand = newTagCandidate(controller, value, program, specOf(instr.op, editing.index, instr.operands));
+                if (cand) setNewTag({ ...cand, usedBy: `${instr.op} on rung ${rungIndexOf(rungsRef.current, rung.id)}` });
+                return;
+              }
               if (how === 'tab' || how === 'shift-tab') {
                 const after = nextOperand(next, { rungId: rung.id, elementId: instr.id, operandIndex: editing.index }, how === 'tab' ? 1 : -1);
-                if (after?.elementId && after.operandIndex !== undefined) {
+                // at the routine's first / last operand there is nowhere to go: accept and close
+                if (after?.elementId && after.operandIndex !== undefined && !(after.elementId === instr.id && after.operandIndex === editing.index)) {
                   setSel(after);
-                  setEditing({ kind: 'operand', rungId: after.rungId, elementId: after.elementId, index: after.operandIndex });
+                  setEditing(operandEdit(after.rungId, after.elementId, after.operandIndex));
                   return;
                 }
               }
@@ -1948,7 +2170,7 @@ export function LadderEditor(props: LadderEditorProps) {
               if (firstMissing) {
                 const idx = firstMissing.operands.indexOf('?');
                 commit(next, { select: { rungId: rung.id, elementId: firstMissing.id, operandIndex: idx } });
-                setEditing({ kind: 'operand', rungId: rung.id, elementId: firstMissing.id, index: idx });
+                setEditing(operandEdit(rung.id, firstMissing.id, idx));
               } else {
                 commit(next, { select: { rungId: rung.id, elementId: last.id } });
                 closeEditing();
@@ -1963,19 +2185,7 @@ export function LadderEditor(props: LadderEditorProps) {
           <RungTextEditor
             initial={serializeRung(rung)}
             style={{ left: Math.max(4, (layout.railL - 6) * zoom), top: 4, width: Math.max(420, (layout.railR - layout.railL + 12) * zoom) }}
-            validate={(text) => {
-              try {
-                const els = parseRungText(text);
-                const unknown = instructionsOf(els).find((i) => !INSTRUCTION_DEFS[i.op]);
-                if (unknown) return { message: `Unknown instruction '${unknown.op}'.` };
-                const bad = disallowedIn(els);
-                if (bad) return { message: `${bad} is locked in this mission.` };
-                return null;
-              } catch (err) {
-                if (err instanceof NeutralTextError) return { message: err.message, position: err.position };
-                return { message: err instanceof Error ? err.message : String(err) };
-              }
-            }}
+            validate={validateRungText}
             onCancel={closeEditing}
             onCommit={(text) => {
               const res = replaceRungFromText(rungsRef.current, rung.id, text);
@@ -2009,7 +2219,7 @@ export function LadderEditor(props: LadderEditorProps) {
   // ---------------------------------------------------------------- render
   const themeClass = `ld-theme-${theme}`;
   const allEmpty = rungs.every((r) => r.elements.length === 0);
-  const endRail = layouts[0] ?? { railL: LD.margin, railR: baseW - LD.rightPad, width: baseW };
+  const endRail = { railL: LD.margin, railR: baseW - LD.rightPad, width: baseW };
   const history = historyRef.current;
 
   return (
@@ -2139,22 +2349,15 @@ export function LadderEditor(props: LadderEditorProps) {
               />
             );
           })}
-          <div
-            className="group relative"
-            onDoubleClick={() => {
-              if (!readOnly) addRungAfterSel();
-            }}
-          >
-            <EndRung width={endRail.width} zoom={zoom} railL={endRail.railL} railR={endRail.railR} />
+          <div className="ld-row-end group relative" data-end-rung="" onDoubleClick={appendRung}>
+            <EndRung width={endRail.width} zoom={zoom} railL={endRail.railL} railR={endRail.railR} separateMargin />
+            <div className="ld-margin-pin">
+              <MarginPlate railL={endRail.railL} height={LD.endHeight} zoom={zoom} />
+            </div>
             {!readOnly && (
               <button
                 type="button"
-                onClick={() => {
-                  const last = rungsRef.current[rungsRef.current.length - 1];
-                  const res = addRung(rungsRef.current, last?.id);
-                  commit(res.rungs, { select: { rungId: res.rung.id } });
-                  focusEditor();
-                }}
+                onClick={appendRung}
                 className="absolute top-1/2 -translate-y-1/2 cursor-pointer rounded-md border border-dashed border-[var(--ld-chrome-border)] bg-[var(--ld-bg)] px-2 py-0.5 text-[11px] text-[var(--ld-chrome-muted)] opacity-0 transition-opacity group-hover:opacity-100 hover:border-[var(--ld-sel)] hover:text-[var(--ld-sel)] focus-visible:opacity-100"
                 style={{ left: (endRail.railL + 16) * zoom }}
               >
@@ -2176,19 +2379,31 @@ export function LadderEditor(props: LadderEditorProps) {
       <div className="flex h-7 shrink-0 items-center gap-3 border-t border-[var(--ld-chrome-border)] bg-[var(--ld-chrome)] px-3 text-[11px] text-[var(--ld-chrome-muted)]">
         <span className="min-w-0 flex-1 truncate font-mono text-[var(--ld-chrome-text)]">{selectionInfo}</span>
         <span className="hidden items-center gap-1 lg:flex">
-          <K>Enter</K> edit <K>type</K> insert <K>Del</K> delete <K>Ctrl+Z</K> undo {online && (<><K>Ctrl+T</K> toggle</>)} <K>F1</K> help
+          <K>Enter</K> edit <K>type</K> insert <K>Del</K> delete <K>Ctrl+Z</K> undo {online && (<><K>Alt+T</K> toggle</>)} <K>F1</K> help
         </span>
         <span className="font-mono">{rungs.length} rung{rungs.length === 1 ? '' : 's'}</span>
       </div>
       <div aria-live="polite" className="sr-only">
         {announce}
       </div>
-      {menu && <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} themeClass={themeClass} onClose={() => {
-        setMenu(null);
-        requestAnimationFrame(() => {
-          if (!editing) focusEditor();
-        });
-      }} />}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          entries={menu.entries}
+          themeClass={themeClass}
+          onClose={() => {
+            setMenu(null);
+            // give the ladder its focus back — unless the chosen action opened an editor / dialog that
+            // took it (read through refs: this runs after the action's state updates were rendered)
+            requestAnimationFrame(() => {
+              if (editingRef.current || modalOpenRef.current) return;
+              const a = document.activeElement;
+              if (!a || a === document.body || !a.isConnected) focusEditor();
+            });
+          }}
+        />
+      )}
       {hover && !menu && (
         <HoverCard x={hover.x} y={hover.y} themeClass={themeClass}>
           {hover.content}
@@ -2202,6 +2417,21 @@ export function LadderEditor(props: LadderEditorProps) {
       <Modal open={helpOp !== null} onClose={() => { setHelpOp(null); focusEditor(); }} title="Instruction help" size="lg">
         {helpOp && <InstructionHelp info={helpOp} theme={theme} />}
       </Modal>
+      {controller && (
+        <NewTagDialog
+          controller={controller}
+          program={program}
+          request={newTag}
+          onClose={() => {
+            setNewTag(null);
+            focusEditor();
+          }}
+          onCreated={() => {
+            setTagVersion((v) => v + 1);
+            onTagsChangedRef.current?.();
+          }}
+        />
+      )}
     </div>
   );
 }

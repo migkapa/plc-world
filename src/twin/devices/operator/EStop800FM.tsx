@@ -8,8 +8,9 @@ import { useFrame } from '@react-three/fiber';
 import { useRef } from 'react';
 import * as THREE from 'three';
 import type { EStopProps } from '../../contracts';
-import { Bezel800F, F800, Rear800F, RoundLegendPlate, type BezelKind } from './parts800F';
-import { CAP_HEX, arcPts, boxGeo, canvasTexture, circleGeo, damp, latheZ, mats, mergedCopies, sharedMat, useClick } from './shared';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { F800, RoundLegendPrint, addBezel, addRear800F, addRoundLegendPlate, rearKey, type BezelKind } from './parts800F';
+import { CAP_HEX, HoverRing, arcPts, canvasTexture, damp, latheZ, partsGeo, planarUVs, sharedGeo, sharedMat, uberMat, useClick } from './shared';
 
 export interface EStop800FMProps extends EStopProps {
   bezel?: BezelKind;
@@ -41,53 +42,55 @@ const HEAD_PROFILE: [number, number][] = [
   [0, TOP_Z],
 ];
 
+/**
+ * Mushroom head + knurl ribs as ONE geometry with planar (XY) UVs over the head radius, so the
+ * twist-arrow print on the top face comes from the same texture as the red body (one draw).
+ */
 function headGeo() {
-  return latheZ('estop-head-40', HEAD_PROFILE, 72);
-}
-
-function ribsGeo() {
-  const n = 40;
-  return mergedCopies(
-    'estop-ribs-40',
-    () => boxGeo(0.0013, 0.0009, 0.0046),
-    () => {
-      const out: THREE.Matrix4[] = [];
-      for (let i = 0; i < n; i++) {
-        const a = (i / n) * Math.PI * 2;
-        const m = new THREE.Matrix4().makeRotationZ(a);
-        m.multiply(new THREE.Matrix4().makeTranslation(0, HEAD_R + 0.0002, 0.0201));
-        out.push(m);
-      }
-      return out;
-    },
-  );
+  return sharedGeo('estop-head-40-merged', () => {
+    const head = latheZ('estop-head-40', HEAD_PROFILE, 72).clone();
+    // 90 fine knurl ribs sunk into the rim band: they bump only 0.15 mm so the silhouette stays round
+    const n = 90;
+    const rib = new THREE.BoxGeometry(0.0007, 0.0008, 0.0038);
+    const parts: THREE.BufferGeometry[] = [head];
+    for (let i = 0; i < n; i++) {
+      const m = new THREE.Matrix4().makeRotationZ((i / n) * Math.PI * 2);
+      m.multiply(new THREE.Matrix4().makeTranslation(0, HEAD_R - 0.00025, 0.02));
+      parts.push(rib.clone().applyMatrix4(m));
+    }
+    const g = mergeGeometries(parts, false) ?? head;
+    parts.forEach((p) => p !== g && p.dispose());
+    planarUVs(g, HEAD_R);
+    return g;
+  });
 }
 
 function arrowsTexture() {
-  return canvasTexture('estop-top-arrows', 256, 256, (ctx, w, h) => {
+  return canvasTexture('estop-head-arrows-v2', 512, 512, (ctx, w, h) => {
     ctx.fillStyle = CAP_HEX.red;
     ctx.fillRect(0, 0, w, h);
+    const px = w / (2 * HEAD_R); // texture spans [-HEAD_R, HEAD_R]
     const cx = w / 2;
     const cy = h / 2;
     ctx.strokeStyle = '#8e0d11';
     ctx.fillStyle = '#8e0d11';
-    ctx.lineWidth = 10;
+    ctx.lineWidth = 0.001 * px;
     ctx.lineCap = 'round';
-    const r = w * 0.3;
+    const r = 0.0079 * px;
+    const ah = 0.0022 * px;
     for (const base of [0, Math.PI]) {
       const a0 = base + Math.PI * 0.12;
       const a1 = base + Math.PI * 0.72;
       ctx.beginPath();
       ctx.arc(cx, cy, r, a0, a1);
       ctx.stroke();
-      // arrow head at a1 (clockwise)
       const hx = cx + r * Math.cos(a1);
       const hy = cy + r * Math.sin(a1);
       const tang = a1 + Math.PI / 2;
       ctx.beginPath();
-      ctx.moveTo(hx + 22 * Math.cos(tang), hy + 22 * Math.sin(tang));
-      ctx.lineTo(hx + 16 * Math.cos(a1), hy + 16 * Math.sin(a1));
-      ctx.lineTo(hx - 16 * Math.cos(a1), hy - 16 * Math.sin(a1));
+      ctx.moveTo(hx + ah * Math.cos(tang), hy + ah * Math.sin(tang));
+      ctx.lineTo(hx + ah * 0.72 * Math.cos(a1), hy + ah * 0.72 * Math.sin(a1));
+      ctx.lineTo(hx - ah * 0.72 * Math.cos(a1), hy - ah * 0.72 * Math.sin(a1));
       ctx.closePath();
       ctx.fill();
     }
@@ -109,7 +112,7 @@ export function EStop800FM({
   const frame = useRef<THREE.Group>(null);
   const head = useRef<THREE.Group>(null);
   const twist = useRef({ prev: false, t: 1 });
-  const { handlers } = useClick(onToggle ? () => onToggle() : undefined, frame);
+  const { hovered, handlers } = useClick(onToggle ? () => onToggle() : undefined, frame);
 
   useFrame((_, dtRaw) => {
     const dt = Math.min(dtRaw, 0.05);
@@ -126,23 +129,24 @@ export function EStop800FM({
     g.position.z = damp(g.position.z, target, engaged ? 40 : 18, dt);
   });
 
-  const topMat = sharedMat('estop-top', () => new THREE.MeshStandardMaterial({ map: arrowsTexture(), roughness: 0.28, metalness: 0.02 }));
-  const red = mats.gloss(CAP_HEX.red);
+  const headMat = sharedMat('estop-head-mat', () => new THREE.MeshStandardMaterial({ map: arrowsTexture(), roughness: 0.28, metalness: 0.02, shadowSide: THREE.BackSide }));
+  const pt = panelThickness ?? F800.panelT;
+  const staticGeo = partsGeo(`estop800f:${plateDiameter}:${bezel}:${rear ? rearKey(['NC', null, 'NC'], pt) : '-'}`, (b) => {
+    addRoundLegendPlate(b, plateDiameter);
+    addBezel(b, bezel, false, 0.0104);
+    if (rear) addRear800F(b, ['NC', null, 'NC'], pt);
+  });
 
   return (
     <group position={position} rotation={rotation} scale={scale}>
       <group ref={frame}>
-        <RoundLegendPlate text={legend} diameter={plateDiameter} />
-        <group {...handlers}>
-          <Bezel800F kind={bezel} />
-          <group ref={head}>
-            <mesh geometry={headGeo()} material={red} castShadow />
-            <mesh geometry={ribsGeo()} material={red} />
-            <mesh geometry={circleGeo(0.0131, 48)} material={topMat} position={[0, 0, TOP_Z + 0.00003]} />
-          </group>
+        <mesh geometry={staticGeo} material={uberMat()} castShadow receiveShadow />
+        <RoundLegendPrint text={legend} diameter={plateDiameter} />
+        <HoverRing show={hovered} r={HEAD_R + 0.0015} />
+        <group ref={head} {...handlers}>
+          <mesh geometry={headGeo()} material={headMat} castShadow />
         </group>
       </group>
-      {rear && <Rear800F items={['NC', null, 'NC']} panelThickness={panelThickness ?? F800.panelT} />}
     </group>
   );
 }

@@ -14,6 +14,11 @@
  * - Box instructions draw a box with the mnemonic + name header at the rung wire, one row per operand
  *   ("Timer  T1", "Preset  5000", "Accum  0") and status outputs (EN/DN/…) on the right edge.
  * - Branch legs stack vertically; each leg's wire y is below the previous leg's lowest extent.
+ * - Operand (tag) texts are never truncated (Logix names are up to 40 characters plus member paths);
+ *   cells grow to fit them. Only descriptions wrap / get an ellipsis.
+ * - With `wrap`, a main series wider than the available width continues on further lines (Studio 5000
+ *   wraps long rungs the same way): the line ends in a wrap marker ─▸ and the next one starts with ▸─,
+ *   so rails and right-justified outputs stay within the viewport.
  *
  * Every wire segment carries a `PowerRef` telling the renderer which live value energizes it
  * (element rung-condition-in/out), so online animation only toggles classes.
@@ -62,6 +67,10 @@ export const LD = {
   descMaxLines: 3,
   minHeight: 46,
   endHeight: 38,
+  /** Room for a wrap / continuation marker at the end / start of a wrapped rung line. */
+  wrapMark: 18,
+  /** Vertical gap between the lines of a wrapped rung. */
+  wrapGap: 14,
 } as const;
 
 /** Fonts used by the renderer; the layout measures with the same sizes. */
@@ -282,6 +291,8 @@ export interface BranchLayout {
   y: number;
   /** Wire y of every leg. */
   legYs: number[];
+  /** Indexes of the legs without any element (shorts: power always passes). */
+  emptyLegs: number[];
   top: number;
   bottom: number;
   legPath?: LegPath;
@@ -301,6 +312,16 @@ export interface GapLayout {
   x1: number;
 }
 
+/** Wrap marker of a rung continued on the next line ('out' ends a line, 'in' starts the next one). */
+export interface WrapMark {
+  side: 'out' | 'in';
+  /** Marker left x (the marker is LD.wrapMark wide) and wire y. */
+  x: number;
+  y: number;
+  /** 1-based number of the continuation (line k → line k+1 is continuation k). */
+  n: number;
+}
+
 export interface RungLayout {
   width: number;
   height: number;
@@ -315,6 +336,10 @@ export interface RungLayout {
   byId: Record<string, NodeLayout>;
   wires: WireSeg[];
   gaps: GapLayout[];
+  /** Wrap markers (empty unless the rung was wrapped onto several lines). */
+  wraps: WrapMark[];
+  /** Wire y of every line of a wrapped rung ([y] when not wrapped). */
+  lines: number[];
 }
 
 export interface TagMeta {
@@ -338,6 +363,11 @@ export interface LayoutOptions {
   showComment?: boolean;
   /** Left margin (default LD.margin). */
   margin?: number;
+  /**
+   * Wrap the main series onto continuation lines when it is wider than `width` (the editor does; static
+   * renderings don't). Default false: the rung widens instead.
+   */
+  wrap?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -436,9 +466,10 @@ const tw = (text: string, font: { family: string; size: number }): number => tex
 function measureContactCoil(el: InstructionNode, look: ReturnType<typeof glyphOf>, opts: LayoutOptions): MInstr {
   const def = INSTRUCTION_DEFS[el.op];
   const operand = el.operands[0];
-  const shown = operand !== undefined ? ellipsize(operand, 26) : undefined;
+  // the full operand is always drawn (Zone01 / Zone02 variants must stay distinguishable)
+  const shown = operand;
   const meta = operand && isTagOperand(operand) ? opts.tagMeta?.(operand) : undefined;
-  const alias = meta?.aliasFor ? ellipsize(`<${meta.aliasFor}>`, 30) : undefined;
+  const alias = meta?.aliasFor ? `<${meta.aliasFor}>` : undefined;
   const coil = look.display === 'coil';
   const multi = look.text !== undefined && look.text.length > 1;
   // half width of the glyph = where the lead wires attach (contact bars / coil arcs)
@@ -540,7 +571,7 @@ function measureBox(el: InstructionNode, look: ReturnType<typeof glyphOf>, opts:
       index: i,
       label: spec?.name ?? `Operand ${i}`,
       text,
-      shown: ellipsize(text, kind === 'expr' ? 34 : 26),
+      shown: text,
       ...(spec ? { spec } : {}),
       valueLine,
       ...(inline ? { inline } : {}),
@@ -700,35 +731,74 @@ function placeSeries(ms: MSeries, x0: number, x1: number, y: number, legPath: Le
     out.gaps.push(withLeg({ index: 0, x: (x0 + x1) / 2, y, x0, x1 }, legPath));
     return;
   }
-  const t = trailingOutputStart(ms.els);
+  placeRange(ms, 0, n, x0, x1, y, legPath, out, true);
+}
+
+/**
+ * Place items [from, to) of a series between x0 and x1 on wire y (one line of a wrapped rung, or the
+ * whole series). With `justify`, the series' trailing output group is right-justified against x1.
+ */
+function placeRange(ms: MSeries, from: number, to: number, x0: number, x1: number, y: number, legPath: LegPath | undefined, out: Out, justify: boolean): void {
+  const t = justify ? Math.max(from, trailingOutputStart(ms.els)) : to;
   const xs: number[] = [];
   let x = x0 + LD.gap;
-  for (let i = 0; i < t; i++) {
+  for (let i = from; i < t; i++) {
     xs.push(x);
     x += ms.items[i]!.w + LD.gap;
   }
-  if (t < n) {
+  if (t < to) {
     let groupW = 0;
-    for (let i = t; i < n; i++) groupW += ms.items[i]!.w + (i > t ? LD.gap : 0);
+    for (let i = t; i < to; i++) groupW += ms.items[i]!.w + (i > t ? LD.gap : 0);
     x = Math.max(x, x1 - LD.gap - groupW);
-    for (let i = t; i < n; i++) {
+    for (let i = t; i < to; i++) {
       xs.push(x);
       x += ms.items[i]!.w + LD.gap;
     }
   }
   let prev = x0;
-  for (let i = 0; i < n; i++) {
+  for (let i = from; i < to; i++) {
     const it = ms.items[i]!;
-    const ix = xs[i]!;
+    const ix = xs[i - from]!;
     out.wires.push({ x1: prev, y1: y, x2: ix, y2: y, power: { t: 'in', id: it.el.id }, gap: withLeg({ index: i }, legPath) });
     out.gaps.push(withLeg({ index: i, x: (prev + ix) / 2, y, x0: prev, x1: ix }, legPath));
     if (it.kind === 'instr') placeInstr(it, ix, y, legPath, i, out);
     else placeBranch(it, ix, y, legPath, i, out);
     prev = ix + it.w;
   }
-  const last = ms.items[n - 1]!;
-  out.wires.push({ x1: prev, y1: y, x2: x1, y2: y, power: { t: 'out', id: last.el.id }, gap: withLeg({ index: n }, legPath) });
-  out.gaps.push(withLeg({ index: n, x: (prev + x1) / 2, y, x0: prev, x1 }, legPath));
+  const last = ms.items[to - 1]!;
+  out.wires.push({ x1: prev, y1: y, x2: x1, y2: y, power: { t: 'out', id: last.el.id }, gap: withLeg({ index: to }, legPath) });
+  out.gaps.push(withLeg({ index: to, x: (prev + x1) / 2, y, x0: prev, x1 }, legPath));
+}
+
+/** Width a line of items [from, to) needs (wires included, wrap markers excluded). */
+function rangeWidth(ms: MSeries, from: number, to: number): number {
+  let w = LD.gap;
+  for (let i = from; i < to; i++) w += ms.items[i]!.w + LD.gap;
+  return w;
+}
+
+/**
+ * Split a main series into lines fitting `span` (rail to rail). Every line but the first starts with a
+ * continuation marker and every line but the last ends with a wrap marker; a line holds at least one item.
+ */
+function splitLines(ms: MSeries, span: number): Array<[number, number]> {
+  const n = ms.items.length;
+  const lines: Array<[number, number]> = [];
+  let a = 0;
+  while (a < n) {
+    let used = (a > 0 ? LD.wrapMark : 0) + LD.gap;
+    let b = a;
+    while (b < n) {
+      const add = ms.items[b]!.w + LD.gap;
+      const trail = b === n - 1 ? 0 : LD.wrapMark;
+      if (b > a && used + add + trail > span) break;
+      used += add;
+      b++;
+    }
+    lines.push([a, b]);
+    a = b;
+  }
+  return lines;
 }
 
 function placeInstr(m: MInstr, x: number, y: number, legPath: LegPath | undefined, index: number, out: Out): void {
@@ -752,7 +822,7 @@ function placeBranch(m: MBranch, x: number, y: number, legPath: LegPath | undefi
   const x2 = x + m.w;
   const legYs = m.offsets.map((o) => y + o);
   const node: BranchLayout = withLeg(
-    { kind: 'branch' as const, id, x, x2, y, legYs, top: y - m.top, bottom: y + m.bottom, index },
+    { kind: 'branch' as const, id, x, x2, y, legYs, emptyLegs: m.el.legs.flatMap((leg, k) => (leg.length === 0 ? [k] : [])), top: y - m.top, bottom: y + m.bottom, index },
     legPath,
   );
   out.nodes.push(node);
@@ -776,8 +846,17 @@ function placeBranch(m: MBranch, x: number, y: number, legPath: LegPath | undefi
 export function layoutRung(rung: Pick<Rung, 'elements' | 'comment'>, opts: LayoutOptions = {}): RungLayout {
   const margin = opts.margin ?? LD.margin;
   const main = measureSeries(rung.elements, opts);
-  const natural = margin + Math.max(main.w, 120) + LD.rightPad;
-  const width = Math.ceil(Math.max(opts.width ?? 0, natural));
+  let natural = margin + Math.max(main.w, 120) + LD.rightPad;
+  const avail = opts.width ?? 0;
+  const split = opts.wrap === true && avail > 0 && natural > avail && main.items.length > 1 ? splitLines(main, avail - margin - LD.rightPad) : undefined;
+  const lineRanges = split && split.length > 1 ? split : undefined;
+  if (lineRanges) {
+    const need = Math.max(
+      ...lineRanges.map(([a, b], k) => rangeWidth(main, a, b) + (k > 0 ? LD.wrapMark : 0) + (k < lineRanges.length - 1 ? LD.wrapMark : 0)),
+    );
+    natural = margin + need + LD.rightPad;
+  }
+  const width = Math.ceil(Math.max(avail, natural));
   const railL = margin;
   const railR = width - LD.rightPad;
 
@@ -791,13 +870,39 @@ export function layoutRung(rung: Pick<Rung, 'elements' | 'comment'>, opts: Layou
     cursor = comment.y + h;
   }
   const bodyTop = cursor;
+  const out: Out = { nodes: [], byId: {}, wires: [], gaps: [] };
+  if (lineRanges) {
+    const wraps: WrapMark[] = [];
+    const ys: number[] = [];
+    const last = lineRanges.length - 1;
+    let prevBottom = 0;
+    lineRanges.forEach(([a, b], k) => {
+      const items = main.items.slice(a, b);
+      const top = Math.max(16, ...items.map((i) => i.top));
+      const ly = k === 0 ? Math.round(bodyTop + LD.padTop + top) : Math.round(ys[k - 1]! + prevBottom + LD.wrapGap + top);
+      ys.push(ly);
+      prevBottom = Math.max(12, ...items.map((i) => i.bottom));
+      const x0 = k === 0 ? railL : railL + LD.wrapMark;
+      const x1 = k === last ? railR : railR - LD.wrapMark;
+      if (k > 0) {
+        wraps.push({ side: 'in', x: railL, y: ly, n: k });
+        // stub from the continuation marker to the line's first wire (lit like that wire)
+        out.wires.push({ x1: railL + 10, y1: ly, x2: x0, y2: ly, power: { t: 'in', id: main.items[a]!.el.id } });
+      }
+      placeRange(main, a, b, x0, x1, ly, undefined, out, k === last);
+      if (k < last) {
+        wraps.push({ side: 'out', x: x1, y: ly, n: k + 1 });
+        out.wires.push({ x1, y1: ly, x2: x1 + 6, y2: ly, power: { t: 'out', id: main.items[b - 1]!.el.id } });
+      }
+    });
+    const height = Math.max(LD.minHeight, Math.ceil(ys[last]! + prevBottom + LD.padBottom));
+    return { width, height, railL, railR, y: ys[0]!, bodyTop, ...(comment ? { comment } : {}), ...out, wraps, lines: ys };
+  }
   const top = Math.max(main.top, 16);
   const y = Math.round(bodyTop + LD.padTop + top);
   const height = Math.max(LD.minHeight, Math.ceil(y + Math.max(main.bottom, 12) + LD.padBottom));
-
-  const out: Out = { nodes: [], byId: {}, wires: [], gaps: [] };
   placeSeries(main, railL, railR, y, undefined, { t: 'rail' }, out);
-  return { width, height, railL, railR, y, bodyTop, ...(comment ? { comment } : {}), ...out };
+  return { width, height, railL, railR, y, bodyTop, ...(comment ? { comment } : {}), ...out, wraps: [], lines: [y] };
 }
 
 /** Insertion point nearest to (x, y) — for drag & drop and wire clicks. */

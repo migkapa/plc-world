@@ -5,7 +5,8 @@ import type { Preview } from '../../../dev/gallery';
 import { Boxes, BOX_SIZES, CardboardBox, type BoxState } from './Boxes';
 import { Conveyor, conveyorLayout } from './Conveyor';
 import { PneumaticCylinder } from './Cylinder';
-import { fm } from './shared';
+import { fm, JunctionBox, junctionBoxGlands, type CableRoute } from './shared';
+import type { Vec3 } from '../../contracts';
 import { LevelSwitch, LevelTransmitter, TempTransmitter } from './Instruments';
 import { Flange, PipeRun, SightGlass } from './Piping';
 import { OnNozzle, Tank, tankLayout } from './Tank';
@@ -95,13 +96,59 @@ function PhotoEyeCloseup() {
   return <PhotoEye42EF position={[0, 0.2, 0]} getBlocked={() => false} getOutput={() => true} beamLength={0} postLength={0.19} />;
 }
 
+/** Axis height of an 872C whose bracket foot stands on a surface at y = 0. */
+const proxAxis = (d: number) => 0.9 * d + 0.012 + 0.00125;
+
+function ProxTarget({ x, z, get }: { x: number; z: number; get: () => boolean }) {
+  const ref = useRef<THREE.Group>(null);
+  useFrame((_, dt) => {
+    const g = ref.current;
+    if (!g) return;
+    const target = get() ? 0 : 0.035;
+    g.position.x += (target - g.position.x) * Math.min(1, dt * 10);
+  });
+  return (
+    <group position={[x, 0, z]}>
+      <group ref={ref}>
+        <mesh material={fm.steel()} position={[0, 0.03, 0]} castShadow>
+          <boxGeometry args={[0.025, 0.035, 0.004]} />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
+const PROX_JB: Vec3 = [0, 0.19, -0.08];
+const PROX_GLANDS = junctionBoxGlands([0.16, 0.1, 0.07], 3);
+/** Cordset route from a sensor at x into gland i of the junction box (parent = preview coordinates). */
+function proxRoute(i: number, x: number): CableRoute {
+  const g = PROX_GLANDS[i]!;
+  const to: Vec3 = [PROX_JB[0] + g[0], PROX_JB[1] + g[1], PROX_JB[2] + g[2]];
+  return { to, via: [[x * 0.6 + to[0] * 0.4, to[1] - 0.075, to[2] + 0.02], [to[0], to[1] - 0.025, to[2]]] };
+}
+
 function ProxDemo() {
   const active = () => Math.floor(now() / 1.5) % 2 === 0;
+  const plateTop = 0.02;
   return (
     <group>
-      <ProxSensor872C position={[0, 0.06, 0]} getActive={active} />
-      <ProxSensor872C position={[0.07, 0.06, 0]} getActive={() => !active()} diameter={0.012} />
-      <ProxSensor872C position={[-0.08, 0.06, 0]} getActive={() => true} diameter={0.03} />
+      {/* aluminum machine plate */}
+      <mesh material={fm.anodized('#aeb4b9')} position={[0, plateTop / 2, -0.02]} castShadow receiveShadow>
+        <boxGeometry args={[0.3, plateTop, 0.12]} />
+      </mesh>
+      <ProxSensor872C position={[0, plateTop + proxAxis(0.018), 0]} getActive={active} cableTo={proxRoute(1, 0)} />
+      <ProxSensor872C position={[0.075, plateTop + proxAxis(0.012), 0]} getActive={() => !active()} diameter={0.012} cableTo={proxRoute(2, 0.075)} />
+      <ProxSensor872C position={[-0.085, plateTop + proxAxis(0.03), 0]} getActive={() => true} diameter={0.03} cableTo={proxRoute(0, -0.085)} />
+      {/* upright with the sensor junction box */}
+      <mesh material={fm.anodized('#aeb4b9')} position={[0, 0.14, -0.085]} castShadow receiveShadow>
+        <boxGeometry args={[0.3, 0.24, 0.01]} />
+      </mesh>
+      <JunctionBox position={PROX_JB} size={[0.16, 0.1, 0.07]} glands={3} label="JB-PX" />
+      <ProxTarget x={0} z={0.006} get={active} />
+      <ProxTarget x={0.075} z={0.004} get={() => !active()} />
+      <mesh material={fm.steel()} position={[-0.085, plateTop + proxAxis(0.03), 0.012]} castShadow>
+        <boxGeometry args={[0.045, 0.045, 0.004]} />
+      </mesh>
     </group>
   );
 }

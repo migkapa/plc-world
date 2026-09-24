@@ -10,7 +10,7 @@ import { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { LedColor } from '../../common';
 import type { Placement } from '../../contracts';
-import { LEGEND_FONT, LIT_HEX, boxGeo, canvasTexture, fitText, mats, planeGeo, roundedBox, sharedMat } from './shared';
+import { F, LEGEND_FONT, LIT_HEX, boxGeo, canvasTexture, fitText, mats, partsGeo, planeGeo, roundedBox, sharedMat, uberMat } from './shared';
 
 export interface LedBarGraphProps extends Placement {
   /** 0..100 %. */
@@ -101,15 +101,18 @@ export function LedBarGraph({ getValue, legend = '', segments = 10, panelThickne
   const winH = n * SEG.pitch + 0.003;
   const filter = sharedMat('bargraph-filter', () => new THREE.MeshStandardMaterial({ color: '#2a0b0b', transparent: true, opacity: 0.35, roughness: 0.08, metalness: 0.1, depthWrite: false }));
   const segX = SEG_X;
+  const staticGeo = partsGeo(`bargraph:${n}:${rear ? panelThickness : '-'}`, (b) => {
+    b.add(roundedBox(BODY.w, BODY.h, BODY.d, 0.0018, 2), F.black, [0, 0, BODY.d / 2]);
+    // recessed window
+    b.add(boxGeo(SEG.w + 0.003, winH, 0.0004), F.hole, [segX, 0, BODY.d + 0.00005]);
+    if (rear) b.add(roundedBox(BODY.w * 0.85, BODY.h * 0.9, 0.03, 0.002, 2), F.black, [0, 0, -panelThickness - 0.015]);
+  });
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      <mesh geometry={roundedBox(BODY.w, BODY.h, BODY.d, 0.0018, 2)} material={mats.blackPlastic()} position={[0, 0, BODY.d / 2]} castShadow />
+      <mesh geometry={staticGeo} material={uberMat()} castShadow receiveShadow />
       <mesh geometry={planeGeo(BODY.w - 0.001, BODY.h - 0.001)} material={mats.label(tex, false, 0.55)} position={[0, 0, BODY.d + 0.00002]} />
-      {/* recessed window */}
-      <mesh geometry={boxGeo(SEG.w + 0.003, winH, 0.0004)} material={mats.dark()} position={[segX, 0, BODY.d + 0.00005]} />
       <instancedMesh ref={inst} args={[boxGeo(SEG.w, SEG.h, 0.0006), mat, n]} position={[segX, 0, BODY.d + 0.0004]} />
       <mesh geometry={planeGeo(SEG.w + 0.003, winH)} material={filter} position={[segX, 0, BODY.d + 0.0009]} />
-      {rear && <mesh geometry={roundedBox(BODY.w * 0.85, BODY.h * 0.9, 0.03, 0.002, 2)} material={mats.blackPlastic()} position={[0, 0, -panelThickness - 0.015]} />}
     </group>
   );
 }

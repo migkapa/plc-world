@@ -9,7 +9,7 @@ import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { useCallback, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { PotentiometerProps } from '../../contracts';
-import { LEGEND_FONT, arcPts, boxGeo, canvasTexture, cylZ, damp, fitText, latheZ, mats, planeGeo, roundedBox, sharedGeo, useControlsLock, useHover } from './shared';
+import { F, HoverRing, LEGEND_FONT, arcPts, boxGeo, canvasTexture, cylZ, damp, fitText, latheZ, mats, partsGeo, planeGeo, roundedBox, sharedGeo, uberMat, useControlsLock, useHover } from './shared';
 
 export interface PotentiometerExtProps extends PotentiometerProps {
   panelThickness?: number;
@@ -105,7 +105,7 @@ export function Potentiometer({
   scale,
 }: PotentiometerExtProps) {
   const knob = useRef<THREE.Group>(null);
-  const { bind } = useHover(!!onChange);
+  const { hovered, bind } = useHover(!!onChange);
   const lock = useControlsLock();
   const drag = useRef<{ x: number; y: number; v: number } | null>(null);
   const cb = useRef({ onChange, getValue });
@@ -134,7 +134,7 @@ export function Potentiometer({
   );
   const onPointerDown = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
-      if (!onChange) return;
+      if (!onChange || e.button !== 0) return;
       e.stopPropagation();
       drag.current = { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY, v: getValue() };
       lock(true);
@@ -159,30 +159,32 @@ export function Potentiometer({
 
   const tex = dialTexture(legend);
   const plateCy = PLATE.top - PLATE.h / 2;
-  const knobMat = mats.gloss(knobColor);
-  const white = mats.matte('#f4f4ef', 0.5);
+  const staticGeo = partsGeo(`pot:${rear ? panelThickness : '-'}`, (b) => {
+    b.add(roundedBox(PLATE.w, PLATE.h, 0.001, 0.0016, 2), F.metal('#1b1c1e', 0.5), [0, plateCy, 0.0005]);
+    if (rear)
+      b.at([0, 0, -panelThickness], undefined, (r) => {
+        r.add(cylZ(0.006, 0.006, 0.002, 6), F.metal('#b9bcbf', 0.35), [0, 0, -0.001]);
+        r.add(cylZ(0.012, 0.012, 0.01, 32), F.metal('#8d9296', 0.4), [0, 0, -0.007]);
+        for (const x of [-0.005, 0, 0.005]) r.add(boxGeo(0.0018, 0.008, 0.0004), F.brass, [x, -0.014, -0.009]);
+      });
+  });
+  const knobGeo = partsGeo(`pot-knob:${knobColor}`, (b) => {
+    const body = F.gloss(knobColor);
+    const white = F.matte('#f4f4ef', 0.5);
+    b.add(skirtGeo(), body);
+    b.add(flutedGeo(), body);
+    b.add(cylZ(0.0082, 0.0082, 0.0006, 40), F.metal('#c4c8cb', 0.42), [0, 0, 0.0156]);
+    b.add(boxGeo(0.0011, 0.0068, 0.0003), white, [0, 0.0043, 0.0161]);
+    b.add(boxGeo(0.0012, 0.0024, 0.0006), white, [0, 0.0117, 0.0036]);
+  });
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      <mesh geometry={roundedBox(PLATE.w, PLATE.h, 0.001, 0.0016, 2)} material={mats.metal('#1b1c1e', 0.5)} position={[0, plateCy, 0.0005]} receiveShadow />
+      <mesh geometry={staticGeo} material={uberMat()} castShadow receiveShadow />
       <mesh geometry={planeGeo(PLATE.w - 0.001, PLATE.h - 0.001)} material={mats.label(tex, false, 0.5)} position={[0, plateCy, 0.00102]} />
+      <HoverRing show={hovered} r={0.0134} z={0.0012} />
       <group ref={knob} {...bind} onPointerDown={onPointerDown} onWheel={onWheel}>
-        <mesh geometry={skirtGeo()} material={knobMat} castShadow />
-        <mesh geometry={flutedGeo()} material={knobMat} castShadow />
-        {/* satin aluminum cap */}
-        <mesh geometry={cylZ(0.0082, 0.0082, 0.0006, 40)} material={mats.metal('#c4c8cb', 0.42)} position={[0, 0, 0.0156]} />
-        {/* pointer lines */}
-        <mesh geometry={boxGeo(0.0011, 0.0068, 0.0003)} material={white} position={[0, 0.0043, 0.0161]} />
-        <mesh geometry={boxGeo(0.0012, 0.0024, 0.0006)} material={white} position={[0, 0.0117, 0.0036]} />
+        <mesh geometry={knobGeo} material={uberMat()} castShadow />
       </group>
-      {rear && (
-        <group position={[0, 0, -panelThickness]}>
-          <mesh geometry={cylZ(0.006, 0.006, 0.002, 6)} material={mats.metal('#b9bcbf', 0.35)} position={[0, 0, -0.001]} />
-          <mesh geometry={cylZ(0.012, 0.012, 0.01, 32)} material={mats.metal('#8d9296', 0.4)} position={[0, 0, -0.007]} />
-          {[-0.005, 0, 0.005].map((x) => (
-            <mesh key={x} geometry={boxGeo(0.0018, 0.008, 0.0004)} material={mats.brass()} position={[x, -0.014, -0.009]} />
-          ))}
-        </group>
-      )}
     </group>
   );
 }

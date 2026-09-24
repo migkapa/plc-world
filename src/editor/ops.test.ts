@@ -8,6 +8,7 @@ import {
   addRung,
   addRungBefore,
   adjacentRung,
+  branchLevelTarget,
   clipboardFromText,
   clipboardToText,
   copyElements,
@@ -362,10 +363,53 @@ describe('navigation & selection', () => {
       sel = nextInstruction(rungs, sel, 1);
     }
     expect(seen).toEqual(['A', 'B', 'C', 'D', 'rung1', 'E', 'F']);
-    expect(nextInstruction(rungs, { rungId: r2.id, elementId: idOf(r2, 1) }, 1)).toEqual({ rungId: r2.id, elementId: idOf(r2, 1) });
+    // routine ends: nothing further (callers keep the selection)
+    expect(nextInstruction(rungs, { rungId: r2.id, elementId: idOf(r2, 1) }, 1)).toBeUndefined();
+    expect(nextInstruction(rungs, { rungId: r0.id, elementId: idOf(r0, 0) }, -1)).toBeUndefined();
     expect(nextInstruction(rungs, { rungId: r2.id, elementId: idOf(r2, 0) }, -1)).toEqual({ rungId: r1.id });
     expect(nextInstruction(rungs, { rungId: r0.id, elementId: branchOf(r0).id }, 1)).toEqual({ rungId: r0.id, elementId: idOf(r0, 1) });
     expect(nextInstruction(rungs, { rungId: r0.id, wireIndex: 1 }, 1)).toEqual({ rungId: r0.id, elementId: idOf(r0, 1) });
+  });
+
+  it('follows reading order from wires at branch-leg boundaries and on empty legs', () => {
+    const [a, b] = rungsOf('[XIC(A),XIC(B)]OTE(C);', 'XIC(D)OTE(E);') as [Rung, Rung];
+    const rs = [a, b];
+    const br = branchOf(a);
+    // end of leg 0 → first instruction of leg 1 (not the next rung)
+    expect(nextInstruction(rs, { rungId: a.id, legPath: { branchId: br.id, leg: 0 }, wireIndex: 1 }, 1)).toEqual({ rungId: a.id, elementId: idOf(a, 1) });
+    // end of the last leg → the instruction after the branch
+    expect(nextInstruction(rs, { rungId: a.id, legPath: { branchId: br.id, leg: 1 }, wireIndex: 1 }, 1)).toEqual({ rungId: a.id, elementId: idOf(a, 2) });
+    // start of leg 0 going left → nothing before the branch in this rung, nothing before rung 0
+    expect(nextInstruction(rs, { rungId: a.id, legPath: { branchId: br.id, leg: 0 }, wireIndex: 0 }, -1)).toBeUndefined();
+
+    const [s0, p] = rungsOf('XIC(E)OTE(F);', 'XIC(S)[XIC(A),XIC(B)]OTE(C);') as [Rung, Rung];
+    const bp = branchOf(p);
+    // start of leg 1 going left → last instruction of leg 0 (not the previous rung)
+    expect(nextInstruction([s0, p], { rungId: p.id, legPath: { branchId: bp.id, leg: 1 }, wireIndex: 0 }, -1)).toEqual({ rungId: p.id, elementId: idOf(p, 1) });
+    // start of leg 0 going left → the instruction before the branch
+    expect(nextInstruction([s0, p], { rungId: p.id, legPath: { branchId: bp.id, leg: 0 }, wireIndex: 0 }, -1)).toEqual({ rungId: p.id, elementId: idOf(p, 0) });
+
+    const [e, n] = rungsOf('[XIC(A),]OTE(C);', 'XIC(D)OTE(E);') as [Rung, Rung];
+    const be = branchOf(e);
+    // empty leg → the instruction after the branch / the last instruction of the leg above
+    expect(nextInstruction([e, n], { rungId: e.id, legPath: { branchId: be.id, leg: 1 }, wireIndex: 0 }, 1)).toEqual({ rungId: e.id, elementId: idOf(e, 1) });
+    expect(nextInstruction([e, n], { rungId: e.id, legPath: { branchId: be.id, leg: 1 }, wireIndex: 0 }, -1)).toEqual({ rungId: e.id, elementId: idOf(e, 0) });
+    // an adjacent branch without instructions is selected itself
+    const [x] = rungsOf('XIC(A)[,]OTE(B);') as [Rung];
+    expect(nextInstruction([x], { rungId: x.id, wireIndex: 1 }, 1)).toEqual({ rungId: x.id, elementId: branchOf(x).id });
+  });
+
+  it('stops Tab at the routine ends (no wrap onto the same operand)', () => {
+    const rs = rungsOf('XIC(A)OTE(B);', ';', 'XIC(C)OTE(D);');
+    const [a, , c] = rs as [Rung, Rung, Rung];
+    expect(nextOperand(rs, { rungId: c.id, elementId: idOf(c, 1), operandIndex: 0 }, 1)).toBeUndefined();
+    expect(nextOperand(rs, { rungId: a.id, elementId: idOf(a, 0), operandIndex: 0 }, -1)).toBeUndefined();
+    // empty rungs are skipped in both directions
+    expect(nextOperand(rs, { rungId: a.id, elementId: idOf(a, 1), operandIndex: 0 }, 1)).toEqual({ rungId: c.id, elementId: idOf(c, 0), operandIndex: 0 });
+    expect(nextOperand(rs, { rungId: c.id, elementId: idOf(c, 0), operandIndex: 0 }, -1)).toEqual({ rungId: a.id, elementId: idOf(a, 1), operandIndex: 0 });
+    // operand-less instructions are skipped; nothing after them either
+    const t = rungsOf('XIC(A)NOP();');
+    expect(nextOperand(t, { rungId: t[0]!.id, elementId: idOf(t[0]!, 0), operandIndex: 0 }, 1)).toBeUndefined();
   });
 
   it('moves between rungs and operands', () => {
@@ -392,6 +436,33 @@ describe('navigation & selection', () => {
     expect(normalizeSelection([], { rungId: r0.id })).toBeNull();
     const after = removeElement(rungs, r0.id, idOf(r0, 0));
     expect(selectionAfterRemoval(r0, idOf(r0, 0), after)).toEqual({ rungId: r0.id, elementId: branchOf(r0).id });
+  });
+});
+
+describe('branchLevelTarget (Branch → Level flow)', () => {
+  it('reuses the empty leg left by Branch instead of adding a short', () => {
+    const [r] = rungsOf('XIC(M)[XIC(S1),]OTE(L);') as [Rung];
+    const br = branchOf(r);
+    const res = branchLevelTarget([r], r.id, br.id, 0);
+    expect(res.reused).toBe(true);
+    expect(res.legPath).toEqual({ branchId: br.id, leg: 1 });
+    expect(res.rungs).toEqual([r]);
+  });
+
+  it('prefers an empty leg below the current one, else any empty leg', () => {
+    const [r] = rungsOf('[,XIC(A),,XIC(B)]OTE(L);') as [Rung];
+    const br = branchOf(r);
+    expect(branchLevelTarget([r], r.id, br.id, 1).legPath).toEqual({ branchId: br.id, leg: 2 });
+    expect(branchLevelTarget([r], r.id, br.id, 3).legPath).toEqual({ branchId: br.id, leg: 0 });
+  });
+
+  it('adds a leg when every leg has logic', () => {
+    const [r] = rungsOf('[XIC(A),XIC(B)]OTE(L);') as [Rung];
+    const br = branchOf(r);
+    const res = branchLevelTarget([r], r.id, br.id, 0);
+    expect(res.reused).toBe(false);
+    expect(res.legPath).toEqual({ branchId: br.id, leg: 1 });
+    expect(text(res.rungs[0])).toBe('[XIC(A),,XIC(B)]OTE(L);');
   });
 });
 

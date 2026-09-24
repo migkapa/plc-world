@@ -9,17 +9,18 @@ import { EStop800FM } from '../operator/EStop800FM';
 import { PilotLight800F } from '../operator/PilotLight800F';
 import { PushButton800F } from '../operator/PushButton800F';
 import { SelectorSwitch800F } from '../operator/SelectorSwitch800F';
-import { StackLight855T } from '../operator/StackLight855T';
+import { StackLight856T } from '../operator/StackLight856T';
 import { CircuitBreaker1489 } from './CircuitBreaker1489';
 import { C100 } from './Contactor100C';
 import { DIN, DinRail } from './DinRail';
-import { Enclosure } from './Enclosure';
+import { DOOR_SHEET, Enclosure, backplateFinish } from './Enclosure';
 import { MotorStarter } from './MotorStarter';
-import { PowerSupply1606 } from './PowerSupply1606';
+import { PSU, PowerSupply1606 } from './PowerSupply1606';
 import { J3, TB_COLORS, TerminalBlocks1492, terminalX } from './TerminalBlocks1492';
 import { WireBundle, Wires } from './Wire';
 import { WireDuct } from './WireDuct';
-import { boxGeo, mats } from '../operator/shared';
+import { F, boxGeo, partsGeo, uberMat } from '../operator/shared';
+import { MCB } from './CircuitBreaker1489';
 
 const now = () => performance.now() / 1000;
 
@@ -43,73 +44,116 @@ const BOT_DUCT_Y = -0.425;
 const SIDE_DUCT_X = 0.345;
 const PLC_ZONE = { x: 0, y: 0.012, w: 0.6, h: 0.23 };
 
-/** Dashed rectangle + label marking the reserved PLC rack area. */
+/** Dashed rectangle + label marking the reserved PLC rack area (dashes + studs = one merged mesh). */
 function PlcZone() {
   const { x, y, w, h } = PLC_ZONE;
-  const dash = 0.02;
-  const gap = 0.012;
-  const segs: { p: Vec3; s: [number, number] }[] = [];
-  for (let t = -w / 2; t < w / 2; t += dash + gap) {
-    const l = Math.min(dash, w / 2 - t);
-    segs.push({ p: [x + t + l / 2, y + h / 2, 0.0003], s: [l, 0.003] });
-    segs.push({ p: [x + t + l / 2, y - h / 2, 0.0003], s: [l, 0.003] });
-  }
-  for (let t = -h / 2; t < h / 2; t += dash + gap) {
-    const l = Math.min(dash, h / 2 - t);
-    segs.push({ p: [x - w / 2, y + t + l / 2, 0.0003], s: [0.003, l] });
-    segs.push({ p: [x + w / 2, y + t + l / 2, 0.0003], s: [0.003, l] });
-  }
-  const mat = mats.matte('#f5c400', 0.6);
+  const geo = partsGeo(`plc-zone:${x}:${y}:${w}:${h}`, (b) => {
+    const dash = 0.02;
+    const gap = 0.012;
+    const yellow = F.matte('#f5c400', 0.6);
+    for (let t = -w / 2; t < w / 2; t += dash + gap) {
+      const l = Math.min(dash, w / 2 - t);
+      b.add(boxGeo(l, 0.003, 0.0006), yellow, [x + t + l / 2, y + h / 2, 0.0003]);
+      b.add(boxGeo(l, 0.003, 0.0006), yellow, [x + t + l / 2, y - h / 2, 0.0003]);
+    }
+    for (let t = -h / 2; t < h / 2; t += dash + gap) {
+      const l = Math.min(dash, h / 2 - t);
+      b.add(boxGeo(0.003, l, 0.0006), yellow, [x - w / 2, y + t + l / 2, 0.0003]);
+      b.add(boxGeo(0.003, l, 0.0006), yellow, [x + w / 2, y + t + l / 2, 0.0003]);
+    }
+    // chassis mounting studs
+    for (const [sx, sy] of [
+      [-1, 1],
+      [1, 1],
+      [-1, -1],
+      [1, -1],
+    ] as [number, number][])
+      b.add(boxGeo(0.008, 0.008, 0.006), F.metal('#c9cdd0', 0.35), [x + sx * 0.184, y + sy * 0.07, 0.003]);
+  });
   return (
     <group>
-      {segs.map((sg, i) => (
-        <mesh key={i} geometry={boxGeo(sg.s[0], sg.s[1], 0.0006)} material={mat} position={sg.p} />
-      ))}
+      <mesh geometry={geo} material={uberMat()} receiveShadow />
       <Label
         lines={['RESERVED — PLC RACK', '1756-A7 chassis mounts here']}
         size={[0.26, 0.05]}
         width={1024}
         height={196}
-        color="#f5c400"
+        color="#b08a00"
         fontWeight={700}
         position={[x, y, 0.0008]}
       />
-      {/* chassis mounting studs */}
-      {[
-        [-1, 1],
-        [1, 1],
-        [-1, -1],
-        [1, -1],
-      ].map(([sx, sy], i) => (
-        <mesh key={i} geometry={boxGeo(0.008, 0.008, 0.006)} material={mats.metal('#c9cdd0', 0.35)} position={[x + sx! * 0.184, y + sy! * 0.07, 0.003]} />
-      ))}
     </group>
   );
 }
 
+/** Comb busbar (insulated, pin type) across the line side of the 1-pole breakers. */
+function Busbar({ x0, x1, y, z }: { x0: number; x1: number; y: number; z: number }) {
+  const geo = partsGeo(`busbar:${x0}:${x1}:${y}:${z}`, (b) => {
+    b.add(boxGeo(x1 - x0 + 0.008, 0.006, 0.004), F.matte('#6b6e70', 0.55), [(x0 + x1) / 2, y + 0.006, z]);
+    for (let x = x0; x <= x1 + 1e-6; x += MCB.pole) b.add(boxGeo(0.003, 0.008, 0.0016), F.metal('#c28a4e', 0.35), [x, y, z - 0.002]);
+  });
+  return <mesh geometry={geo} material={uberMat()} castShadow />;
+}
+
+/** Door hinge axis in BACKPLATE coordinates (0.8 × 1.0 × 0.3 cabinet): x = −W/2 − 4 mm, z = Db − plate stack. */
+const HINGE_X = -0.404;
+const HINGE_Z = 0.3 - 0.021 - (0.012 + 0.0015 + 0.003);
+/** The same axis in DOOR-local coordinates (x = −(W/2 + 4 mm), z = −DOOR_D). */
+const DOOR_HINGE: [number, number] = [-0.404, -0.021];
+const LOOP_Y = -0.25;
+
 function CabinetInterior() {
   const k1 = () => now() % 5 < 3.2;
-  const zEntry = DIN.height + 0.022;
+  // wire entry height of the MCB / contactor box clamps above the backplate
+  const zEntry = DIN.height + 0.03;
   const cbx = [-0.27, -0.236, -0.2185, -0.201, -0.1835];
   const tb1 = { count: 14, x: 0.04 };
   const tb2 = { count: 22, x: 0.13 };
   const tb1Colors = Array.from({ length: tb1.count }, (_, i) => (i < 6 ? TB_COLORS.gray : i < 11 ? TB_COLORS.blue : TB_COLORS.green));
   const tb2Colors = Array.from({ length: tb2.count }, (_, i) => (i >= 18 ? TB_COLORS.blue : TB_COLORS.gray));
+  const tb2Labels = Array.from({ length: tb2.count }, (_, i) => (i >= 20 ? 'PE' : String(i + 1)));
   const wireColors = ['#1f4fd1', '#1f4fd1', '#c62828', '#111111', '#eeeeee', '#1f4fd1', '#c62828', '#1f4fd1'];
+  const psuX = -0.12;
+  const psuTop = RAIL1_Y + PSU.h / 2 - PSU.recess / 2 + 0.002 + 0.0111; // output wire entries (top)
+  const psuBot = RAIL1_Y - PSU.h / 2 + PSU.recess / 2 - 0.002 - 0.0111; // input wire entries (bottom)
+  const psuZ = DIN.height + (PSU.d - PSU.frontDepth) + 0.0078;
   const wiring = useMemo(() => {
     const out: { points: Vec3[]; color: string; radius?: number }[] = [];
     const tbZ = DIN.height + 0.0115;
-    // breaker outputs down into the middle duct
+    // main 2-pole breaker: incoming L1 / N from the top duct into its line side
+    for (const [dx, c] of [
+      [-MCB.pole / 2, '#111111'],
+      [MCB.pole / 2, '#eeeeee'],
+    ] as [number, string][])
+      out.push({ color: c, radius: 0.0013, points: [[cbx[0]! + dx, RAIL1_Y + MCB.height / 2, zEntry], [cbx[0]! + dx, RAIL1_Y + MCB.height / 2 + 0.02, zEntry], [cbx[0]! + dx, TOP_DUCT_Y - DUCT_W / 2 - 0.002, 0.03], [cbx[0]! + dx, TOP_DUCT_Y, 0.03]] });
+    // branch breakers: line side fed by the comb busbar; busbar feed from the main breaker load side
+    out.push({
+      color: '#111111',
+      radius: 0.0013,
+      points: [
+        [cbx[0]! - MCB.pole / 2, RAIL1_Y - MCB.height / 2, zEntry],
+        [cbx[0]! - MCB.pole / 2, RAIL1_Y - MCB.height / 2 - 0.018, zEntry],
+        [cbx[0]! - MCB.pole / 2 - 0.016, RAIL1_Y - MCB.height / 2 - 0.018, zEntry + 0.012],
+        [cbx[0]! - MCB.pole / 2 - 0.016, RAIL1_Y + MCB.height / 2 + 0.016, zEntry + 0.012],
+        [cbx[1]! - 0.004, RAIL1_Y + MCB.height / 2 + 0.016, zEntry + 0.012],
+        [cbx[1]! - 0.004, RAIL1_Y + MCB.height / 2 + 0.009, DIN.height + MCB.shoulder + 0.004],
+      ],
+    });
+    // branch breaker load side down into the middle duct
     cbx.slice(1).forEach((x, i) =>
       out.push({
         color: i < 2 ? '#111111' : '#c62828',
         points: [
-          [x, RAIL1_Y - 0.045, zEntry],
-          [x, RAIL1_Y - 0.075, zEntry],
+          [x, RAIL1_Y - MCB.height / 2, zEntry],
+          [x, RAIL1_Y - MCB.height / 2 - 0.025, zEntry],
           [x + 0.004, MID_DUCT_Y + DUCT_W / 2 + 0.002, 0.03],
           [x + 0.004, MID_DUCT_Y, 0.03],
         ],
       }),
+    );
+    // 1606 input (bottom terminals N / L / PE) from the middle duct
+    [-0.0102, 0, 0.0102].forEach((dx, i) =>
+      out.push({ color: ['#eeeeee', '#111111', '#3f9a3a'][i]!, radius: 0.0011, points: [[psuX + dx, psuBot, psuZ], [psuX + dx, psuBot - 0.015, psuZ], [psuX + dx, MID_DUCT_Y + DUCT_W / 2 + 0.002, 0.035], [psuX + dx, MID_DUCT_Y, 0.03]] }),
     );
     // distribution terminals: up into the top duct, down into the middle duct
     for (let i = 0; i < tb1.count; i++) {
@@ -124,14 +168,16 @@ function CabinetInterior() {
         out.push({ color: '#111111', radius: 0.0013, points: [[sx + dx, RAIL2_Y + C100.h / 2, DIN.height + 0.047], [sx + dx, RAIL2_Y + C100.h / 2 + 0.02, DIN.height + 0.047], [sx + dx, LOW_DUCT_Y - DUCT_W / 2 - 0.002, 0.03], [sx + dx, LOW_DUCT_Y, 0.03]] });
         out.push({ color: '#111111', radius: 0.0013, points: [[sx + dx, RAIL2_Y - C100.h / 2 - 0.068, DIN.height + 0.047], [sx + dx, RAIL2_Y - C100.h / 2 - 0.085, DIN.height + 0.047], [sx + dx, BOT_DUCT_Y + DUCT_W / 2 + 0.002, 0.03], [sx + dx, BOT_DUCT_Y, 0.03]] });
       }
-    // coil wires A1/A2 (red = 120 VAC control)
-    for (const sx of [-0.255, -0.195])
+    // coil A1 (top-left) and aux 13 (top-right) up; A2 (bottom-left) down (red = 120 VAC control)
+    for (const sx of [-0.255, -0.195]) {
       for (const dx of [-0.0195, 0.0195])
         out.push({ color: '#c62828', radius: 0.0009, points: [[sx + dx, RAIL2_Y + C100.h / 2, DIN.height + 0.047], [sx + dx, RAIL2_Y + C100.h / 2 + 0.018, DIN.height + 0.047], [sx + dx * 0.6, LOW_DUCT_Y - DUCT_W / 2 - 0.002, 0.03], [sx + dx * 0.6, LOW_DUCT_Y, 0.03]] });
+      out.push({ color: '#eeeeee', radius: 0.0009, points: [[sx - 0.0195, RAIL2_Y - C100.h / 2, DIN.height + 0.047], [sx - 0.0195, RAIL2_Y - C100.h / 2 - 0.012, DIN.height + 0.047], [sx - 0.03, RAIL2_Y - C100.h / 2 - 0.02, DIN.height + 0.04], [sx - 0.03, BOT_DUCT_Y + DUCT_W / 2 + 0.002, 0.03], [sx - 0.03, BOT_DUCT_Y, 0.03]] });
+    }
     // field terminals
     for (let i = 0; i < tb2.count; i++) {
       const x = tb2.x + terminalX(i, tb2.count);
-      const color = i >= 18 ? '#1f4fd1' : i % 3 === 0 ? '#eeeeee' : '#1f4fd1';
+      const color = i >= 20 ? '#3f9a3a' : i >= 18 ? '#1f4fd1' : i % 3 === 0 ? '#eeeeee' : '#1f4fd1';
       out.push({ color, radius: 0.0009, points: [[x, RAIL2_Y + J3.length / 2, tbZ], [x, RAIL2_Y + J3.length / 2 + 0.02, tbZ], [x, LOW_DUCT_Y - DUCT_W / 2 - 0.002, 0.03], [x, LOW_DUCT_Y, 0.03]] });
       out.push({ color, radius: 0.0009, points: [[x, RAIL2_Y - J3.length / 2, tbZ], [x, RAIL2_Y - J3.length / 2 - 0.02, tbZ], [x, BOT_DUCT_Y + DUCT_W / 2 + 0.002, 0.03], [x, BOT_DUCT_Y, 0.03]] });
     }
@@ -153,9 +199,10 @@ function CabinetInterior() {
         {cbx.slice(1).map((x, i) => (
           <CircuitBreaker1489 key={x} poles={1} rating={['C6', 'C4', 'C2', 'C2'][i]} position={[x, 0, 0]} getOn={() => i !== 3} />
         ))}
-        <PowerSupply1606 position={[-0.12, 0, 0]} getOk={() => true} />
+        <PowerSupply1606 position={[psuX, 0, 0]} getOk={() => true} />
         <TerminalBlocks1492 count={tb1.count} colors={tb1Colors} labels={['L1', 'L1', 'L1', 'N', 'N', 'N', '+24', '+24', '+24', '+24', '+24', 'PE', 'PE', 'PE']} position={[tb1.x, 0, 0]} />
       </DinRail>
+      <Busbar x0={cbx[1]!} x1={cbx[4]!} y={RAIL1_Y + MCB.height / 2 - 0.0105} z={DIN.height + MCB.shoulder + 0.003} />
 
       {/* reserved PLC area */}
       <PlcZone />
@@ -164,18 +211,31 @@ function CabinetInterior() {
       <DinRail length={0.64} position={[0, RAIL2_Y, 0]}>
         <MotorStarter position={[-0.255, 0, 0]} getEnergized={k1} getTripped={() => false} contactorCatalog="100-C09" />
         <MotorStarter position={[-0.195, 0, 0]} getEnergized={() => false} getTripped={() => false} contactorCatalog="100-C09" />
-        <TerminalBlocks1492 count={tb2.count} colors={tb2Colors} position={[tb2.x, 0, 0]} />
+        <TerminalBlocks1492 count={tb2.count} colors={tb2Colors} labels={tb2Labels} position={[tb2.x, 0, 0]} />
       </DinRail>
 
-      {/* PSU output bundle */}
+      {/* 1606 DC output (top terminals + + − −) up into the top duct */}
       <WireBundle
-        colors={['#1f4fd1', '#1f4fd1', '#eeeeee', '#1f4fd1']}
+        colors={['#1f4fd1', '#1f4fd1', '#eeeeee', '#eeeeee']}
         points={[
-          [-0.12, RAIL1_Y - 0.062, 0.09],
-          [-0.12, RAIL1_Y - 0.085, 0.07],
-          [-0.12, MID_DUCT_Y + DUCT_W / 2 + 0.004, 0.035],
-          [-0.12, MID_DUCT_Y, 0.03],
+          [psuX - 0.01, psuTop, psuZ],
+          [psuX - 0.01, psuTop + 0.012, psuZ],
+          [psuX - 0.01, TOP_DUCT_Y - DUCT_W / 2 - 0.004, 0.04],
+          [psuX - 0.01, TOP_DUCT_Y, 0.03],
         ]}
+        tieSpacing={0.03}
+      />
+      {/* door harness: cabinet side of the hinge loop (meets the door side ON the hinge axis) */}
+      <WireBundle
+        colors={['#c62828', '#c62828', '#1f4fd1', '#1f4fd1', '#1f4fd1', '#eeeeee', '#1f4fd1', '#c62828']}
+        points={[
+          [HINGE_X, LOOP_Y, HINGE_Z],
+          [HINGE_X + 0.02, LOOP_Y - 0.03, HINGE_Z - 0.03],
+          [-0.3, LOOP_Y - 0.06, 0.11],
+          [-SIDE_DUCT_X + DUCT_W / 2 + 0.01, LOOP_Y - 0.08, 0.035],
+          [-SIDE_DUCT_X, LOOP_Y - 0.08, 0.03],
+        ]}
+        bendRadius={0.03}
         tieSpacing={0.05}
       />
       {/* all single conductors in one draw call */}
@@ -184,33 +244,54 @@ function CabinetInterior() {
   );
 }
 
+/** Door devices + harness (door-local coordinates). */
 function DoorDevices() {
   const run = () => now() % 5 < 3.2;
+  const pt = DOOR_SHEET;
+  // contact-block terminals: top clamp at y + 16 mm; wires run behind the block backs (z ≤ −0.050)
+  const zBack = -0.052;
+  const zClamp = -pt - 0.0115 - 0.0335 + 0.006;
+  const trunkY = 0.155;
+  const devs: { x: number; y: number; dx: number[]; color: string }[] = [
+    { x: -0.15, y: 0.2, dx: [0], color: '#c62828' },
+    { x: -0.09, y: 0.2, dx: [0], color: '#c62828' },
+    { x: -0.03, y: 0.2, dx: [0], color: '#c62828' },
+    { x: 0.03, y: 0.2, dx: [-0.0118, 0.0118], color: '#1f4fd1' },
+    { x: -0.15, y: 0.11, dx: [0], color: '#1f4fd1' },
+    { x: -0.09, y: 0.11, dx: [0], color: '#1f4fd1' },
+    { x: -0.03, y: 0.11, dx: [0], color: '#1f4fd1' },
+    { x: 0.1, y: 0.14, dx: [-0.0118, 0.0118], color: '#c62828' },
+  ];
+  const wires = devs.flatMap((d) =>
+    d.dx.map((dx) => {
+      const x = d.x + dx;
+      const top = d.y + 0.016;
+      const toTrunk: Vec3[] = d.y > trunkY ? [[x, top + 0.006, zBack], [x, trunkY + 0.012, zBack], [x, trunkY, zBack - 0.004]] : [[x, top + 0.006, zBack], [x, trunkY - 0.012, zBack], [x, trunkY, zBack - 0.004]];
+      return { color: d.color, radius: 0.0008, points: [[x, top, zClamp], [x, top + 0.006, zClamp], ...toTrunk] as Vec3[] };
+    }),
+  );
   return (
-    <group position={[0, 0.02, 0]}>
-      <PilotLight800F position={[-0.15, 0.18, 0]} color="white" legend="POWER" getLit={() => true} panelThickness={0.0015} />
-      <PilotLight800F position={[-0.09, 0.18, 0]} color="green" legend="RUN" getLit={run} panelThickness={0.0015} />
-      <PilotLight800F position={[-0.03, 0.18, 0]} color="red" legend="FAULT" getLit={() => false} panelThickness={0.0015} />
-      <SelectorSwitch800F position={[0.03, 0.18, 0]} positions={['HAND', 'OFF', 'AUTO']} getPosition={() => 2} panelThickness={0.0015} />
-      <PushButton800F position={[-0.15, 0.09, 0]} color="green" legend="START" getPressed={() => false} panelThickness={0.0015} />
-      <PushButton800F position={[-0.09, 0.09, 0]} color="red" style="extended" legend="STOP" contact="N.C." getPressed={() => false} panelThickness={0.0015} />
-      <PushButton800F position={[-0.03, 0.09, 0]} color="black" legend="JOG" getPressed={() => false} panelThickness={0.0015} />
-      <EStop800FM position={[0.1, 0.12, 0]} getEngaged={() => false} panelThickness={0.0015} />
-      {/* door harness: each device's contact block wired to a trunk that runs to the hinge side */}
-      <Wires
-        wires={[
-          ...[-0.15, -0.09, -0.03, 0.03].map((x, i) => ({ color: i === 3 ? '#1f4fd1' : '#c62828', radius: 0.0008, points: [[x, 0.165, -0.047], [x, 0.15, -0.047], [x, 0.135, -0.03]] as Vec3[] })),
-          ...[-0.15, -0.09, -0.03].map((x) => ({ color: '#1f4fd1', radius: 0.0008, points: [[x, 0.075, -0.047], [x, 0.09, -0.047], [x, 0.135, -0.03]] as Vec3[] })),
-          { color: '#c62828', radius: 0.0008, points: [[0.1, 0.105, -0.047], [0.1, 0.12, -0.047], [0.1, 0.135, -0.03]] as Vec3[] },
-        ]}
-      />
+    <group>
+      <PilotLight800F position={[-0.15, 0.2, 0]} color="white" legend="POWER" getLit={() => true} panelThickness={pt} />
+      <PilotLight800F position={[-0.09, 0.2, 0]} color="green" legend="RUN" getLit={run} panelThickness={pt} />
+      <PilotLight800F position={[-0.03, 0.2, 0]} color="red" legend="FAULT" getLit={() => false} panelThickness={pt} />
+      <SelectorSwitch800F position={[0.03, 0.2, 0]} positions={['HAND', 'OFF', 'AUTO']} getPosition={() => 2} panelThickness={pt} />
+      <PushButton800F position={[-0.15, 0.11, 0]} color="green" legend="START" getPressed={() => false} panelThickness={pt} />
+      <PushButton800F position={[-0.09, 0.11, 0]} color="red" style="extended" legend="STOP" contact="N.C." getPressed={() => false} panelThickness={pt} />
+      <PushButton800F position={[-0.03, 0.11, 0]} color="black" legend="JOG" getPressed={() => false} panelThickness={pt} />
+      <EStop800FM position={[0.1, 0.14, 0]} getEngaged={() => false} panelThickness={pt} />
+      <Wires wires={wires} />
+      {/* trunk along the door, down the hinge side, loop to the hinge axis */}
       <WireBundle
         colors={['#c62828', '#c62828', '#1f4fd1', '#1f4fd1', '#1f4fd1', '#eeeeee', '#1f4fd1', '#c62828']}
         points={[
-          [0.1, 0.135, -0.03],
-          [-0.35, 0.135, -0.03],
-          [-0.35, -0.32, -0.03],
+          [0.12, trunkY, zBack - 0.004],
+          [-0.33, trunkY, zBack - 0.004],
+          [-0.33, LOOP_Y + 0.04, zBack - 0.004],
+          [-0.37, LOOP_Y + 0.01, -0.035],
+          [DOOR_HINGE[0], LOOP_Y, DOOR_HINGE[1]],
         ]}
+        bendRadius={0.03}
         tieSpacing={0.07}
       />
     </group>
@@ -230,21 +311,26 @@ function CabinetDoorOpen() {
       >
         <CabinetInterior />
       </Enclosure>
-      <StackLight855T position={[0.26, 1.0, 0.1]} tiers={['red', 'amber', 'green']} getTier={(i) => i === 2 && now() % 5 < 3.2} mount="base" />
+      <StackLight856T position={[0.26, 1.0, 0.1]} tiers={['red', 'amber', 'green']} getTier={(i) => i === 2 && now() % 5 < 3.2} mount="base" />
     </group>
   );
 }
 
 // ---------------------------------------------------------------------------
 
+/** Plain galvanized mounting plate (no spangle), one merged mesh. */
+function Plate({ w, h }: { w: number; h: number }) {
+  return <mesh geometry={partsGeo(`bench-plate:${w}:${h}`, (b) => b.add(boxGeo(w, h, 0.003), backplateFinish('galvanized'), [0, 0, -0.0015]))} material={uberMat()} receiveShadow />;
+}
+
 function StarterBench({ tripped, energized }: { tripped: () => boolean; energized: () => boolean }) {
   const reset = useVal(false);
   return (
     <group>
-      <mesh geometry={boxGeo(0.34, 0.24, 0.003)} material={mats.metal('#b9bdc1', 0.45)} position={[0, 0, -0.0015]} receiveShadow />
+      <Plate w={0.34} h={0.24} />
       <DinRail length={0.3} position={[0, 0.03, 0]}>
         <MotorStarter position={[-0.07, 0, 0]} getEnergized={energized} getTripped={() => tripped() && !reset.get()} onReset={() => reset.set(true)} />
-        <MotorStarter position={[0.0, 0, 0]} getEnergized={() => false} getTripped={() => false} />
+        <MotorStarter position={[0.0, 0, 0]} getEnergized={() => false} getTripped={() => false} overloadVariant="E100-Advanced" />
         <CircuitBreaker1489 poles={3} rating="C10" position={[0.075, 0, 0]} />
       </DinRail>
     </group>
@@ -264,15 +350,20 @@ function DinComponents() {
   const on = useVal(true);
   return (
     <group>
-      <mesh geometry={boxGeo(0.5, 0.36, 0.003)} material={mats.metal('#b9bdc1', 0.45)} position={[0, 0, -0.0015]} receiveShadow />
+      <Plate w={0.5} h={0.36} />
       <WireDuct length={0.48} position={[0, 0.15, 0]} wires={['#1f4fd1', '#c62828', '#111111']} />
       <DinRail length={0.46} position={[0, 0.03, 0]}>
         <CircuitBreaker1489 poles={1} rating="C2" position={[-0.2, 0, 0]} getOn={on.get} onToggle={() => on.set(!on.get())} />
         <CircuitBreaker1489 poles={2} rating="C10" position={[-0.17, 0, 0]} />
         <CircuitBreaker1489 poles={3} rating="C16" position={[-0.12, 0, 0]} />
-        <PowerSupply1606 position={[-0.045, 0, 0]} />
+        <PowerSupply1606 position={[-0.045, 0, 0]} getOverload={() => now() % 6 > 4.5} />
         <PowerSupply1606 position={[0.015, 0, 0]} width={0.04} catalog="1606-XLS120E" rating="24V DC 5A 120W" />
-        <TerminalBlocks1492 count={16} position={[0.13, 0, 0]} colors={Array.from({ length: 16 }, (_, i) => (i > 12 ? TB_COLORS.green : i > 8 ? TB_COLORS.blue : TB_COLORS.gray))} />
+        <TerminalBlocks1492
+          count={16}
+          position={[0.13, 0, 0]}
+          colors={Array.from({ length: 16 }, (_, i) => (i > 8 ? TB_COLORS.blue : TB_COLORS.gray))}
+          labels={Array.from({ length: 16 }, (_, i) => (i > 12 ? 'PE' : String(i + 1)))}
+        />
       </DinRail>
       <WireDuct length={0.48} position={[0, -0.12, 0]} cover={false} wires={['#1f4fd1', '#1f4fd1', '#c62828', '#111111', '#eeeeee']} />
     </group>
@@ -283,21 +374,21 @@ export const previews: Record<string, Preview> = {
   PANEL_Cabinet_DoorOpen: {
     Component: CabinetDoorOpen,
     camera: { position: [0.55, 0.85, 1.75], target: [-0.05, 0.5, 0.12] },
-    description: 'RAL 7035 cabinet, door open: breakers, 1606 PSU, 1492 terminals, 100-C starters, ducts, wiring, reserved PLC zone',
+    description: 'RAL 7035 cabinet (white subpanel), door open: 1489 breakers + busbar, 1606 PSU, 1492 terminals, 100-C + E100 starters, ducts, wiring, reserved PLC zone',
   },
   PANEL_Contactor_Energized: {
     Component: ContactorEnergized,
     camera: { position: [0.06, 0.06, 0.32], target: [-0.03, -0.02, 0.05] },
-    description: '100-C09 + 193-E starters: left energized (armature pulled in, "I"), right de-energized',
+    description: '100-C09 + E100 (193-1EE / 193-1EF) starters: left energized (armature pulled in, "I"), right de-energized',
   },
   PANEL_Overload_Tripped: {
     Component: OverloadTripped,
     camera: { position: [0.02, -0.02, 0.26], target: [-0.035, -0.06, 0.06] },
-    description: '193-E overload tripped (orange flag, RESET popped out; click RESET) next to a healthy one',
+    description: 'E100 overload tripped (orange flag, TRIP/RESET popped out; click it) next to a healthy E100 Advanced',
   },
   PANEL_DinRail_Components: {
     Component: DinComponents,
     camera: { position: [0.12, 0.12, 0.55], target: [0, 0.02, 0.04] },
-    description: 'DIN rail: 1489-M 1/2/3-pole breakers, 1606-XLS supplies, 1492-J3 terminals, wire ducts',
+    description: 'DIN rail: 1489-M 1/2/3-pole breakers, 1606-XLS supplies (output top), 1492-J3 terminals incl. PE, wire ducts',
   },
 };

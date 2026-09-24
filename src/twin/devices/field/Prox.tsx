@@ -6,10 +6,10 @@
  * 360° amber LED ring → M12 micro QD with a yellow cordset.
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { ProxSensorProps } from '../../contracts';
-import { box, Cable, CABLE_YELLOW, clickable, cylZ, fm, hexGeo, latheZ, M12_CORDSET_LENGTH, M12Cordset, mat, PanScrew, TAU, torus } from './shared';
+import { CABLE_YELLOW, lBracketGeo, clickable, cylZ, fm, hexGeo, latheZ, M12_CORDSET_LENGTH, M12Cordset, mat, Merge, PanScrew, RoutedCable, TAU, torus, type CableRoute } from './shared';
 
 const LED_ON = new THREE.Color('#ffcf5a');
 const LED_OFF = new THREE.Color('#6b4a10');
@@ -19,10 +19,13 @@ export interface ProxExtraProps {
   bracket?: boolean;
   /** Non-flush (unshielded) sensing cap protrudes from the thread. Default true. */
   nonFlush?: boolean;
+  /** Where the yellow 889D cordset goes (parent coordinates); default: drops to a floor conduit stub. */
+  cableTo?: CableRoute;
   onClick?: () => void;
 }
 
-export function ProxSensor872C({ getActive, diameter = 0.018, bracket = true, nonFlush = true, onClick, position, rotation, scale }: ProxSensorProps & ProxExtraProps) {
+export function ProxSensor872C({ getActive, diameter = 0.018, bracket = true, nonFlush = true, cableTo, onClick, position, rotation, scale }: ProxSensorProps & ProxExtraProps) {
+  const root = useRef<THREE.Group>(null);
   const r = diameter / 2;
   const s = diameter / 0.018;
   const threadLen = diameter >= 0.03 ? 0.065 : diameter >= 0.018 ? 0.058 : 0.045;
@@ -36,6 +39,12 @@ export function ProxSensor872C({ getActive, diameter = 0.018, bracket = true, no
   const nut1 = zThreadFront - threadLen * 0.28;
   const nut2 = nut1 - 0.0035 * s - nutT;
   const plateZ = (nut1 + nut2) / 2;
+  /** Coupling face of the mated cordset: right behind the connector shoulder. */
+  const zCord = zQD - 0.0012;
+  // bracket: 2.5 mm sheet, 3 mm inner bend; foot bottom below the barrel
+  const BT = 0.0025;
+  const BR = 0.003;
+  const yTan = -diameter * 0.9 - 0.012 - BT / 2 + BT + BR;
 
   const ledMat = mat('f:proxLed', () => new THREE.MeshStandardMaterial({ color: '#6b4a10', roughness: 0.3, transparent: true, opacity: 0.9, emissive: new THREE.Color('#ffae00'), emissiveIntensity: 0, toneMapped: false }));
   // per-instance material state is set each frame: clone so sensors light independently
@@ -49,12 +58,8 @@ export function ProxSensor872C({ getActive, diameter = 0.018, bracket = true, no
   });
 
   return (
-    <group
-      position={position}
-      rotation={rotation}
-      scale={scale}
-      {...clickable(onClick)}
-    >
+    <group ref={root} position={position} rotation={rotation} scale={scale} {...clickable(onClick)}>
+      <Merge>
       {/* PBT sensing face */}
       <mesh
         geometry={latheZ(`proxCap:${diameter}:${nonFlush}`, [
@@ -83,28 +88,36 @@ export function ProxSensor872C({ getActive, diameter = 0.018, bracket = true, no
       <mesh geometry={cylZ(r * 0.92, 0.004, 32)} material={fm.nickel()} position={[0, 0, zThreadBack - 0.002]} />
       <mesh geometry={cylZ(r * 0.9, 0.0045, 32)} material={ledInst} position={[0, 0, zLed - 0.0012]} />
       <mesh geometry={cylZ(Math.min(r * 0.8, 0.0075), 0.004, 28)} material={fm.plastic('#2a2c30', 0.45)} position={[0, 0, zQD + 0.001]} />
+      {/* male M12 receptacle (thread hidden inside the mated coupling nut) */}
       <mesh geometry={cylZ(0.006, 0.008, 20)} material={fm.nickelThread()} position={[0, 0, zQD - 0.003]} />
-      <M12Cordset position={[0, 0, zQD - 0.001]} rotation={[0, Math.PI, 0]} />
-      <Cable
-        radius={0.0026}
-        color={CABLE_YELLOW}
-        points={[
-          [0, 0, zQD - 0.001 - M12_CORDSET_LENGTH],
-          [0, 0, zQD - M12_CORDSET_LENGTH - 0.04],
-          [0, -0.03, zQD - M12_CORDSET_LENGTH - 0.08],
-          [0, -0.09, zQD - M12_CORDSET_LENGTH - 0.1],
-        ]}
-      />
-      {/* stainless L bracket clamped between the nuts */}
+      {/* 889D straight female cordset: coupling nut screwed onto the receptacle, body & cable continue straight back */}
+      <M12Cordset position={[0, 0, zCord]} />
+      <RoutedCable rootRef={root} route={cableTo} from={[0, 0, zCord - M12_CORDSET_LENGTH + 0.001]} dir={[0, 0, -1]} radius={0.0026} color={CABLE_YELLOW} lead={0.05} />
+      {/* one-piece stainless L bracket (bent sheet) clamped between the jam nuts, slotted foot */}
       {bracket && (
-        <group position={[0, 0, plateZ]}>
-          <mesh geometry={box(diameter * 2.1, diameter * 1.4 + 0.012, 0.0025)} material={fm.stainless(0.35)} position={[0, -diameter * 0.2 - 0.006, 0]} castShadow />
-          <mesh geometry={box(diameter * 2.1, 0.0025, 0.035)} material={fm.stainless(0.35)} position={[0, -diameter * 0.9 - 0.012, -0.0163]} castShadow />
+        <group position={[0, yTan, plateZ]}>
+          <mesh
+            geometry={lBracketGeo(`prox:${diameter}`, {
+              w: diameter * 2.1,
+              up: diameter * 0.55 - yTan,
+              foot: 0.032,
+              t: BT,
+              r: BR,
+              holes: [[0, -yTan, diameter + 0.0008]],
+              slots: [
+                [-diameter * 0.6, 0.018, 0.009, 0.0045],
+                [diameter * 0.6, 0.018, 0.009, 0.0045],
+              ],
+            })}
+            material={fm.stainless(0.35)}
+            castShadow
+          />
           {[-1, 1].map((sx) => (
-            <PanScrew key={sx} d={0.004} position={[sx * diameter * 0.6, -diameter * 0.9 - 0.0108, -0.024]} rotation={[-Math.PI / 2, 0, 0]} />
+            <PanScrew key={sx} d={0.004} position={[sx * diameter * 0.6 + 0.0015, -BR, -(BT / 2 + BR) - 0.018]} rotation={[-Math.PI / 2, 0, 0]} />
           ))}
         </group>
       )}
+      </Merge>
     </group>
   );
 }

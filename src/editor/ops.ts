@@ -453,6 +453,26 @@ export function addBranchLevel(
   return { rungs: next, legPath: { branchId, leg: at } };
 }
 
+/**
+ * The editor's "Add Branch Level": when the branch already has an empty leg (e.g. the one left by
+ * "Branch"), that leg is the target (preferring one below `afterLeg`) instead of adding another — an
+ * extra empty leg would short the OR. Otherwise a new empty leg is added after `afterLeg`.
+ */
+export function branchLevelTarget(
+  rungs: Rung[],
+  rungId: string,
+  branchId: string,
+  afterLeg?: number,
+): { rungs: Rung[]; legPath?: LegPath; reused: boolean } {
+  const rung = findRung(rungs, rungId);
+  const loc = rung && locateElement(rung.elements, branchId);
+  if (!loc || loc.element.kind !== 'branch') return { rungs, reused: false };
+  const empty = loc.element.legs.flatMap((leg, k) => (leg.length === 0 ? [k] : []));
+  const pick = empty.find((k) => afterLeg === undefined || k > afterLeg) ?? empty[0];
+  if (pick !== undefined) return { rungs, legPath: { branchId, leg: pick }, reused: true };
+  return { ...addBranchLevel(rungs, rungId, branchId, afterLeg), reused: false };
+}
+
 /** The innermost branch containing an element (for "Add Branch Level" on a selected instruction). */
 export function enclosingBranch(rung: Rung, elementId: string): LegPath | undefined {
   return locateElement(rung.elements, elementId)?.legPath;
@@ -887,9 +907,40 @@ export function selectElement(rungId: string, elementId: string, operandIndex?: 
   return operandIndex === undefined ? { rungId, elementId } : { rungId, elementId, operandIndex };
 }
 
+/** Reading-order token of a rung: a wire (insertion) position or an instruction. */
+type ReadingToken = { t: 'wire'; legPath?: LegPath; index: number } | { t: 'instr'; id: string };
+
+/**
+ * Wire positions and instructions of a rung in reading order: for every series, the wire before each
+ * element, the element (a branch expands to its legs, top to bottom), then the wire after the last one.
+ */
+function readingTokens(elements: RungElement[], legPath?: LegPath, out: ReadingToken[] = []): ReadingToken[] {
+  elements.forEach((el, i) => {
+    out.push(legPath ? { t: 'wire', legPath, index: i } : { t: 'wire', index: i });
+    if (el.kind === 'instr') out.push({ t: 'instr', id: el.id });
+    else el.legs.forEach((leg, l) => readingTokens(leg, { branchId: el.id, leg: l }, out));
+  });
+  out.push(legPath ? { t: 'wire', legPath, index: elements.length } : { t: 'wire', index: elements.length });
+  return out;
+}
+
+/** The instruction after (+1) / before (-1) a wire position in reading order, within the rung. */
+function instructionFromWire(rung: Rung, legPath: LegPath | undefined, index: number, dir: 1 | -1): string | undefined {
+  const tokens = readingTokens(rung.elements);
+  const at = tokens.findIndex((k) => k.t === 'wire' && k.index === index && sameLegPath(k.legPath, legPath));
+  if (at < 0) return undefined;
+  for (let i = at + dir; i >= 0 && i < tokens.length; i += dir) {
+    const k = tokens[i]!;
+    if (k.t === 'instr') return k.id;
+  }
+  return undefined;
+}
+
 /**
  * Next (+1) / previous (-1) instruction in reading order, continuing into the neighbouring rungs.
  * From a rung selection, +1 selects its first instruction and -1 the previous rung's last one.
+ * From a wire position (also at a branch-leg boundary or on an empty leg) the reading order of the
+ * whole rung is followed before leaving it. Returns undefined at the start / end of the routine.
  */
 export function nextInstruction(rungs: readonly Rung[], sel: LadderSelection | null | undefined, dir: 1 | -1): LadderSelection | undefined {
   if (rungs.length === 0) return undefined;
@@ -923,12 +974,10 @@ export function nextInstruction(rungs: readonly Rung[], sel: LadderSelection | n
   } else if (sel.wireIndex !== undefined) {
     const series = getSeries(rung.elements, sel.legPath) ?? [];
     const neighbour = dir === 1 ? series[sel.wireIndex] : series[sel.wireIndex - 1];
-    if (neighbour) {
-      if (neighbour.kind === 'instr') return { rungId: rung.id, elementId: neighbour.id };
-      const inner = instructionsOf([neighbour]);
-      const pick = dir === 1 ? inner[0] : inner[inner.length - 1];
-      return pick ? { rungId: rung.id, elementId: pick.id } : { rungId: rung.id, elementId: neighbour.id };
-    }
+    // an adjacent branch without instructions is selected itself (so it can be deleted)
+    if (neighbour?.kind === 'branch' && instructionsOf([neighbour]).length === 0) return { rungId: rung.id, elementId: neighbour.id };
+    const id = instructionFromWire(rung, sel.legPath, sel.wireIndex, dir);
+    if (id) return { rungId: rung.id, elementId: id };
     pos = dir === 1 ? list.length : -1;
   } else {
     pos = dir === 1 ? 0 : -1;
@@ -936,7 +985,7 @@ export function nextInstruction(rungs: readonly Rung[], sel: LadderSelection | n
   if (pos >= 0 && pos < list.length) return { rungId: rung.id, elementId: list[pos]!.id };
   // continue into the neighbouring rung
   const nri = ri + dir;
-  if (nri < 0 || nri >= rungs.length) return sel;
+  if (nri < 0 || nri >= rungs.length) return undefined;
   const nr = rungs[nri]!;
   const nl = instructionOrder(nr);
   const pick = dir === 1 ? nl[0] : nl[nl.length - 1];
@@ -952,7 +1001,10 @@ export function adjacentRung(rungs: readonly Rung[], sel: LadderSelection | null
   return { rungId: rungs[j]!.id };
 }
 
-/** Next/previous operand of the selected instruction, continuing into neighbouring instructions (Tab). */
+/**
+ * Next/previous operand of the selected instruction, continuing into neighbouring instructions (Tab).
+ * Returns undefined past the last operand of the routine (or before its first one).
+ */
 export function nextOperand(rungs: readonly Rung[], sel: LadderSelection | null | undefined, dir: 1 | -1): LadderSelection | undefined {
   if (!sel?.elementId) return nextInstruction(rungs, sel, dir);
   const rung = findRung(rungs, sel.rungId);
@@ -963,10 +1015,10 @@ export function nextOperand(rungs: readonly Rung[], sel: LadderSelection | null 
   const j = cur + dir;
   if (j >= 0 && j < n) return { rungId: sel.rungId, elementId: sel.elementId, operandIndex: j };
   let next = nextInstruction(rungs, { rungId: sel.rungId, elementId: sel.elementId }, dir);
-  // skip operand-less instructions
-  for (let guard = 0; next?.elementId && guard < 1000; guard++) {
+  // skip operand-less instructions and empty rungs
+  for (let guard = 0; next && guard < 10000; guard++) {
     const r = findRung(rungs, next.rungId);
-    const l = r && locateElement(r.elements, next.elementId!);
+    const l = r && next.elementId ? locateElement(r.elements, next.elementId) : undefined;
     if (l?.element.kind === 'instr' && l.element.operands.length > 0) {
       return { ...next, operandIndex: dir === 1 ? 0 : l.element.operands.length - 1 };
     }
@@ -974,7 +1026,7 @@ export function nextOperand(rungs: readonly Rung[], sel: LadderSelection | null 
     if (!after || (after.rungId === next.rungId && after.elementId === next.elementId)) break;
     next = after;
   }
-  return sel;
+  return undefined;
 }
 
 /**

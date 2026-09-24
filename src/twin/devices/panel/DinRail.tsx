@@ -9,7 +9,7 @@
 import type { ReactNode } from 'react';
 import * as THREE from 'three';
 import type { Placement } from '../../contracts';
-import { Screw, boxGeo, roundedRectPath, sharedGeo, sharedMat } from '../operator/shared';
+import { F, addScrew, boxGeo, partsGeo, roundedRectPath, sharedGeo, sharedMat, uberMat } from '../operator/shared';
 
 export const DIN = {
   width: 0.035,
@@ -58,22 +58,24 @@ function webGeo(length: number, slotted: boolean) {
 }
 
 export function DinRail({ length, slotted = true, screws = true, children, position, rotation, scale }: DinRailProps) {
-  const m = railMaterial();
-  const sideY = DIN.web / 2 - DIN.t / 2;
-  const flangeW = (DIN.width - DIN.web) / 2 + DIN.t;
-  const n = Math.floor((length - 0.012) / DIN.slot.pitch);
-  const start = -((n - 1) * DIN.slot.pitch) / 2;
-  const screwXs = n >= 2 ? [start, start + (n - 1) * DIN.slot.pitch] : [];
+  // one merged mesh: web + side walls + flanges + fastening screws
+  const geo = partsGeo(`din-rail:${length.toFixed(4)}:${slotted}:${screws}`, (b) => {
+    const zinc = F.metal('#d2d6d9', 0.36);
+    zinc.metal = 0.7;
+    const sideY = DIN.web / 2 - DIN.t / 2;
+    const flangeW = (DIN.width - DIN.web) / 2 + DIN.t;
+    const n = Math.floor((length - 0.012) / DIN.slot.pitch);
+    const start = -((n - 1) * DIN.slot.pitch) / 2;
+    b.add(webGeo(length, slotted), zinc);
+    for (const s of [-1, 1]) {
+      b.add(boxGeo(length, DIN.t, DIN.height), zinc, [0, s * sideY, DIN.height / 2]);
+      b.add(boxGeo(length, flangeW, DIN.t), zinc, [0, s * (DIN.web / 2 + flangeW / 2 - DIN.t), DIN.height - DIN.t / 2]);
+    }
+    if (screws && slotted && n >= 2) for (const x of [start, start + (n - 1) * DIN.slot.pitch]) addScrew(b, [x, 0, DIN.t], 0.0034, 0.0018);
+  });
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      <mesh geometry={webGeo(length, slotted)} material={m} receiveShadow castShadow />
-      {[-1, 1].map((s) => (
-        <group key={s}>
-          <mesh geometry={boxGeo(length, DIN.t, DIN.height)} material={m} position={[0, s * sideY, DIN.height / 2]} castShadow />
-          <mesh geometry={boxGeo(length, flangeW, DIN.t)} material={m} position={[0, s * (DIN.web / 2 + flangeW / 2 - DIN.t), DIN.height - DIN.t / 2]} castShadow receiveShadow />
-        </group>
-      ))}
-      {screws && slotted && screwXs.map((x) => <Screw key={x} position={[x, 0, DIN.t]} r={0.0034} h={0.0018} />)}
+      <mesh geometry={geo} material={uberMat()} receiveShadow castShadow />
       {children && <group position={[0, 0, DIN.height]}>{children}</group>}
     </group>
   );

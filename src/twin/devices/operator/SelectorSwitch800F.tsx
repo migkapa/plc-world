@@ -9,8 +9,8 @@ import { useFrame } from '@react-three/fiber';
 import { useCallback, useRef } from 'react';
 import * as THREE from 'three';
 import type { SelectorSwitchProps } from '../../contracts';
-import { Bezel800F, F800, LegendPlate800F, Rear800F, type BezelKind, type RearItem } from './parts800F';
-import { CAP_HEX, arcPts, boxGeo, damp, latheZ, mats, roundedRectShape, sharedGeo, useClick } from './shared';
+import { F800, LegendPrint800F, addBezel, addLegendPlate, addRear800F, rearKey, type BezelKind, type RearItem } from './parts800F';
+import { CAP_HEX, F, HoverRing, arcPts, boxGeo, damp, latheZ, partsGeo, roundedRectShape, sharedGeo, uberMat, useClick } from './shared';
 
 export interface SelectorSwitch800FProps extends SelectorSwitchProps {
   bezel?: BezelKind;
@@ -91,7 +91,7 @@ export function SelectorSwitch800F({
     },
     [getPosition, n, onChange],
   );
-  const { handlers } = useClick(onChange ? step : undefined, frame);
+  const { hovered, handlers } = useClick(onChange ? step : undefined, frame);
 
   useFrame((_, dt) => {
     const k = knobRef.current;
@@ -102,29 +102,33 @@ export function SelectorSwitch800F({
 
   const depth = knob === 'standard' ? 0.0098 : 0.0088;
   const frontZ = BASE_Z - 0.0002 + depth + 0.0009;
-  const knobMat = mats.gloss(CAP_HEX[color]);
-  const markMat = color === 'white' || color === 'yellow' ? mats.matte('#111111', 0.5) : mats.matte('#f4f4f0', 0.5);
   const rearItems: [RearItem, RearItem, RearItem] = n >= 3 ? ['NO', null, 'NO'] : [null, 'NO', null];
+  const pt = panelThickness ?? F800.panelT;
+  const staticGeo = partsGeo(`sel800f:${bezel}:${rear ? rearKey(rearItems, pt) : '-'}`, (b) => {
+    addLegendPlate(b);
+    addBezel(b, bezel, false, 0.0114);
+    if (rear) addRear800F(b, rearItems, pt);
+  });
+  const knobGeo = partsGeo(`sel800f-knob:${knob}:${color}`, (b) => {
+    const body = color === 'black' ? { color: CAP_HEX.black, rough: 0.24, metal: 0.02 } : F.gloss(CAP_HEX[color]);
+    const mark = color === 'white' || color === 'yellow' ? F.matte('#111111', 0.5) : F.matte('#f4f4f0', 0.5);
+    b.add(knobBaseGeo(), body);
+    b.add(gripGeo(knob), body);
+    // white position indicator line on the grip
+    if (knob === 'standard') b.add(boxGeo(0.0012, 0.0092, 0.0003), mark, [0, 0.0058, frontZ + 0.00005]);
+    else b.add(boxGeo(0.0014, 0.017, 0.0003), mark, [0, 0.0135, frontZ + 0.00005]);
+  });
 
   return (
     <group position={position} rotation={rotation} scale={scale}>
       <group ref={frame}>
-        <LegendPlate800F lines={legend ? legend.split('\n') : []} positions={positions} />
-        <group {...handlers}>
-          <Bezel800F kind={bezel} />
-          <group ref={knobRef}>
-            <mesh geometry={knobBaseGeo()} material={knobMat} castShadow />
-            <mesh geometry={gripGeo(knob)} material={knobMat} castShadow />
-            {/* white position indicator line on the grip */}
-            {knob === 'standard' ? (
-              <mesh geometry={boxGeo(0.0012, 0.0092, 0.0003)} material={markMat} position={[0, 0.0058, frontZ + 0.00005]} />
-            ) : (
-              <mesh geometry={boxGeo(0.0014, 0.017, 0.0003)} material={markMat} position={[0, 0.0135, frontZ + 0.00005]} />
-            )}
-          </group>
+        <mesh geometry={staticGeo} material={uberMat()} castShadow receiveShadow />
+        <LegendPrint800F lines={legend ? legend.split('\n') : []} positions={positions} />
+        <HoverRing show={hovered} r={F800.bezelR + 0.0006} />
+        <group ref={knobRef} {...handlers}>
+          <mesh geometry={knobGeo} material={uberMat()} castShadow />
         </group>
       </group>
-      {rear && <Rear800F items={rearItems} panelThickness={panelThickness ?? F800.panelT} />}
     </group>
   );
 }

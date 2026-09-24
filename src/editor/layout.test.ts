@@ -254,6 +254,90 @@ describe('layoutRung', () => {
     expect(g0.index).toBe(0);
   });
 
+  it('never truncates operand texts (only descriptions)', () => {
+    const a = 'Infeed_Conveyor_Photoeye_Blocked_Zone01';
+    const b = 'Outfeed_Conveyor_Motor_Run_Cmd_Zone02';
+    const r = parseRung(`XIC(${a})MOV(${a}_Count_Value_Long_Name,${b}_Dest_Long_Name)OTE(${b});`);
+    const l = layoutRung(r, { width: 900, tagMeta: () => ({ description: 'A very long description that has to wrap over several lines and finally be cut' }) });
+    const c = instr(l, r, 0);
+    expect(c.operands[0]!.shown).toBe(a);
+    expect(c.w).toBeGreaterThanOrEqual(textWidth(a, 'mono', 11));
+    const box = instr(l, r, 1);
+    expect(box.operands.map((o) => o.shown)).toEqual([`${a}_Count_Value_Long_Name`, `${b}_Dest_Long_Name`]);
+    expect(box.sym.w).toBeGreaterThan(textWidth(`${a}_Count_Value_Long_Name`, 'mono', 11));
+    expect(instr(l, r, 2).operands[0]!.shown).toBe(b);
+    // descriptions are still capped
+    expect(c.texts.filter((t) => t.cls === 'desc').length).toBeLessThanOrEqual(LD.descMaxLines);
+  });
+
+  it('reports empty branch legs (shorts)', () => {
+    const r = parseRung('XIC(A)[XIC(B),,XIC(C)]OTE(D);');
+    const l = layoutRung(r, { width: 900 });
+    expect(branches(l)[0]!.emptyLegs).toEqual([1]);
+    expect(branches(layoutRung(parseRung('[XIC(A),XIC(B)]OTE(C);'), { width: 900 }))[0]!.emptyLegs).toEqual([]);
+  });
+
+  describe('wrapping (Studio-style continuation lines)', () => {
+    const long = parseRung(Array.from({ length: 13 }, (_, i) => `XIC(Contact_${i})`).join('') + 'TON(Blink_Timer,1000,0)OTE(Light_0);');
+
+    it('keeps a long rung within the available width on several lines', () => {
+      const l = layoutRung(long, { width: 900, wrap: true });
+      expect(l.width).toBe(900);
+      expect(l.lines.length).toBeGreaterThan(1);
+      for (let k = 1; k < l.lines.length; k++) expect(l.lines[k]!).toBeGreaterThan(l.lines[k - 1]!);
+      for (const n of l.nodes) {
+        expect(n.kind === 'instr' ? n.x + n.w : n.x2).toBeLessThanOrEqual(l.railR);
+        expect(n.x).toBeGreaterThanOrEqual(l.railL);
+      }
+      // one out + one in marker per break
+      const breaks = l.lines.length - 1;
+      expect(l.wraps.filter((w) => w.side === 'out')).toHaveLength(breaks);
+      expect(l.wraps.filter((w) => w.side === 'in')).toHaveLength(breaks);
+      // the output is right-justified against the right rail on the last line
+      const ote = instr(l, long, 14);
+      expect(ote.y).toBe(l.lines[l.lines.length - 1]);
+      expect(ote.x + ote.w).toBe(l.railR - LD.gap);
+      // the first line starts at the rail with the first instruction
+      expect(instr(l, long, 0).y).toBe(l.y);
+      expect(l.y).toBe(l.lines[0]);
+      expect(l.height).toBeGreaterThan(ote.bottom);
+    });
+
+    it('keeps every insertion point: the break index appears at the end of a line and the start of the next', () => {
+      const l = layoutRung(long, { width: 900, wrap: true });
+      const indexes = l.gaps.filter((g) => !g.legPath).map((g) => g.index);
+      for (let i = 0; i <= 15; i++) expect(indexes).toContain(i);
+      const out = l.wraps.find((w) => w.side === 'out')!;
+      const endOfLine = l.gaps.find((g) => g.y === out.y && g.x1 === out.x)!;
+      const nextLine = l.gaps.filter((g) => g.index === endOfLine.index);
+      expect(nextLine).toHaveLength(2);
+      expect(nextLine[1]!.y).toBe(l.lines[1]);
+      expect(nextLine[1]!.x0).toBe(l.railL + LD.wrapMark);
+      // the continuation wire carries the power of the last element of the previous line
+      const cont = l.wires.find((w) => w.gap?.index === endOfLine.index && w.y1 === l.lines[1])!;
+      const lastOfLine = l.nodes.find((n) => n.kind === 'instr' && n.y === l.lines[0] && n.index === endOfLine.index - 1)!;
+      expect(powerKey(cont.power)).toBe(`in:${instr(l, long, endOfLine.index).id}`);
+      expect(lastOfLine).toBeDefined();
+      expect(nearestGap(l, l.railL + LD.wrapMark + 4, l.lines[1]!)!.index).toBe(endOfLine.index);
+    });
+
+    it('does not wrap rungs that fit, or when wrap is off', () => {
+      const short = parseRung('XIC(A)OTE(B);');
+      expect(layoutRung(short, { width: 900, wrap: true }).lines).toHaveLength(1);
+      expect(layoutRung(short, { width: 900, wrap: true }).wraps).toEqual([]);
+      const off = layoutRung(long, { width: 900 });
+      expect(off.lines).toHaveLength(1);
+      expect(off.width).toBeGreaterThan(900);
+    });
+
+    it('widens only when a single element is wider than the viewport', () => {
+      const wide = parseRung(`XIC(A)[${Array.from({ length: 14 }, (_, i) => `XIC(Leg_Contact_${i})`).join('')},XIC(B)]OTE(C);`);
+      const l = layoutRung(wide, { width: 700, wrap: true });
+      expect(l.width).toBeGreaterThan(700);
+      for (const n of l.nodes) expect(n.kind === 'instr' ? n.x + n.w : n.x2).toBeLessThanOrEqual(l.railR);
+    });
+  });
+
   it('evaluates power refs', () => {
     const live = { a: { in: true, out: false }, b: { in: false, out: true } };
     expect(evalPower({ t: 'rail' }, live, true)).toBe(true);

@@ -1,7 +1,8 @@
 /**
  * Bulletin 100-C09 IEC contactor (45 × 81 × 85 mm): stepped gray housing, box-clamp terminals with
- * captive screws top (A1, 1/L1, 3/L2, 5/L3, A2) and bottom (13, 2/T1, 4/T2, 6/T3, 14), printed
- * terminal markings, front nameplate and a visible ARMATURE / contact-carrier indicator that pulls
+ * captive screws — line side (top) A1, 1/L1, 3/L2, 5/L3, 13 NO; load side (bottom) A2, 2/T1, 4/T2,
+ * 6/T3, 14 NO (EN 50012: the integral N.O. auxiliary is 13 directly above 14 in the same column) —
+ * printed terminal markings, front nameplate and a visible ARMATURE / contact-carrier indicator that pulls
  * in (moves ≈ 3.5 mm toward the backplate and turns from "O" to "I") when the coil is energized,
  * with a small "clack" shake at pull-in.
  *
@@ -11,7 +12,7 @@ import { useFrame } from '@react-three/fiber';
 import { useRef } from 'react';
 import * as THREE from 'three';
 import type { ContactorProps } from '../../contracts';
-import { LEGEND_FONT, NARROW_FONT, Screw, boxGeo, canvasTexture, damp, mats, planeGeo, roundedRectPath, roundedRectShape, sharedGeo } from '../operator/shared';
+import { F, LEGEND_FONT, NARROW_FONT, addScrew, boxGeo, canvasTexture, damp, mats, partsGeo, planeGeo, roundedRectPath, roundedRectShape, sharedGeo, uberMat } from '../operator/shared';
 
 export const C100 = { w: 0.045, h: 0.081, d: 0.085, shoulder: 0.058, body: 0.079 } as const;
 export const CONTACTOR_GRAY = '#80848a';
@@ -60,22 +61,26 @@ function padGeo() {
   });
 }
 
+/** Terminal designations: coil A1 (top-left) / A2 (bottom-left); aux 13 NO (top-right) above 14 NO. */
+export const CONTACTOR_TERMINALS = {
+  top: ['A1', '1/L1', '3/L2', '5/L3', '13'],
+  bottom: ['A2', '2/T1', '4/T2', '6/T3', '14'],
+} as const;
+
 function markingsTexture() {
-  return canvasTexture('100c-markings', 512, 560, (ctx, w, h) => {
+  return canvasTexture('100c-markings-v2', 512, 560, (ctx, w, h) => {
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = '#f2f2ee';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const cols = [0.07, 0.245, 0.5, 0.755, 0.93];
-    const top = ['A1', '1/L1', '3/L2', '5/L3', 'A2'];
-    const bot = ['13', '2/T1', '4/T2', '6/T3', '14'];
     ctx.font = `700 34px ${NARROW_FONT}`;
     cols.forEach((c, i) => {
-      ctx.fillText(top[i]!, c * w, 26);
-      ctx.fillText(bot[i]!, c * w, h - 26);
+      ctx.fillText(CONTACTOR_TERMINALS.top[i]!, c * w, 26);
+      ctx.fillText(CONTACTOR_TERMINALS.bottom[i]!, c * w, h - 26);
     });
     ctx.font = `600 22px ${NARROW_FONT}`;
-    ctx.fillText('NO', 0.07 * w, h - 58);
+    ctx.fillText('NO', 0.93 * w, 58);
     ctx.fillText('NO', 0.93 * w, h - 58);
   });
 }
@@ -137,45 +142,42 @@ export function Contactor100C({ getEnergized, catalog = '100-C09', position, rot
       } else if (r.position.x !== 0) r.position.set(0, 0, 0);
     }
   });
-  const housing = mats.matte(CONTACTOR_GRAY, 0.55);
-  const dark = mats.dark();
   const powerX = [-0.012, 0, 0.012];
   const smallX = [-0.0195, 0.0195];
   const ty = C100.h / 2 - 0.0068;
+  const staticGeo = partsGeo('100c09', (b) => {
+    const pad = F.matte('#3a3c3f', 0.7);
+    b.add(bodyGeo(), F.matte(CONTACTOR_GRAY, 0.55));
+    for (const sy of [-1, 1]) {
+      for (const x of powerX)
+        b.at([x, sy * ty, C100.shoulder], undefined, (t) => {
+          t.add(boxGeo(0.0078, 0.0078, 0.0002), pad, [0, 0, 0.0001]);
+          addScrew(t, [0, 0, 0.0001], 0.0031, 0.0014);
+          // box clamp wire opening on the end face
+          t.add(boxGeo(0.0072, 0.0004, 0.0065), F.hole, [0, sy * 0.0069, -0.012]);
+        });
+      for (const x of smallX)
+        b.at([x, sy * (ty + 0.0012), C100.shoulder], undefined, (t) => {
+          t.add(boxGeo(0.0056, 0.0056, 0.0002), pad, [0, 0, 0.0001]);
+          addScrew(t, [0, 0, 0.0001], 0.0022, 0.0011);
+          t.add(boxGeo(0.005, 0.0004, 0.005), F.hole, [0, sy * 0.0057, -0.011]);
+        });
+    }
+    // front raised pad (with a real window opening) + cavity behind the window
+    b.add(padGeo(), F.matte('#6e7277', 0.5), [0, 0, C100.body]);
+    b.add(boxGeo(0.0112, 0.0082, 0.0004), F.hole, [0, WIN_Y, C100.body + 0.0002]);
+  });
+  const carrierGeo = partsGeo('100c09-carrier', (b) => b.add(boxGeo(0.0096, 0.0068, 0.004), F.matte('#2c2e31', 0.6), [0, 0, C100.body + PAD_D - 0.0026]));
   return (
     <group position={position} rotation={rotation} scale={scale}>
       <group ref={root}>
-        <mesh geometry={bodyGeo()} material={housing} castShadow receiveShadow />
-        {/* terminals: top & bottom rows */}
-        {[-1, 1].map((sy) => (
-          <group key={sy}>
-            {powerX.map((x) => (
-              <group key={x} position={[x, sy * ty, C100.shoulder]}>
-                <mesh geometry={boxGeo(0.0078, 0.0078, 0.0002)} material={mats.matte('#3a3c3f', 0.7)} position={[0, 0, 0.0001]} />
-                <Screw position={[0, 0, 0.0001]} r={0.0031} h={0.0014} />
-                {/* box clamp wire opening on the end face */}
-                <mesh geometry={boxGeo(0.0072, 0.0004, 0.0065)} material={dark} position={[0, sy * 0.0069, -0.012]} />
-              </group>
-            ))}
-            {smallX.map((x) => (
-              <group key={x} position={[x, sy * (ty + 0.0012), C100.shoulder]}>
-                <mesh geometry={boxGeo(0.0056, 0.0056, 0.0002)} material={mats.matte('#3a3c3f', 0.7)} position={[0, 0, 0.0001]} />
-                <Screw position={[0, 0, 0.0001]} r={0.0022} h={0.0011} />
-                <mesh geometry={boxGeo(0.005, 0.0004, 0.005)} material={dark} position={[0, sy * 0.0057, -0.011]} />
-              </group>
-            ))}
-          </group>
-        ))}
+        <mesh geometry={staticGeo} material={uberMat()} castShadow receiveShadow />
         {/* terminal markings on the front body, printed white */}
         <mesh geometry={planeGeo(C100.w - 0.002, 0.049)} material={mats.label(markingsTexture(), true)} position={[0, 0, C100.body + 0.0003]} />
-        {/* front raised pad (with a real window opening) carrying the nameplate */}
-        <mesh geometry={padGeo()} material={mats.matte('#6e7277', 0.5)} position={[0, 0, C100.body]} castShadow />
         <mesh geometry={planeGeo(0.027, 0.0135)} material={mats.label(nameplateTexture(catalog), false, 0.6)} position={[0, 0.0062, C100.body + PAD_D + 0.0001]} />
-        {/* cavity behind the window */}
-        <mesh geometry={boxGeo(0.0112, 0.0082, 0.0004)} material={dark} position={[0, WIN_Y, C100.body + 0.0002]} />
         {/* armature / contact carrier: flush with the pad when open, pulled in when energized */}
         <group ref={carrier} position={[0, WIN_Y, 0]}>
-          <mesh geometry={boxGeo(0.0096, 0.0068, 0.004)} material={mats.matte('#2c2e31', 0.6)} position={[0, 0, C100.body + PAD_D - 0.0026]} />
+          <mesh geometry={carrierGeo} material={uberMat()} />
           <mesh ref={face} geometry={planeGeo(0.0094, 0.0066)} material={carrierMats.off()} position={[0, 0, C100.body + PAD_D - 0.0005]} />
         </group>
       </group>

@@ -50,6 +50,7 @@
   --ld-ov-text: #e2e8f0;
   --ld-ov-muted: #8494a7;
   --ld-ov-active: rgba(56, 189, 248, 0.16);
+  --ld-ov-hover: rgba(148, 163, 184, 0.08);
   --ld-ov-input: #0c1117;
   --ld-chrome: #10161d;
   --ld-chrome-2: #151c24;
@@ -107,6 +108,7 @@
   --ld-ov-text: #111111;
   --ld-ov-muted: #5f6570;
   --ld-ov-active: rgba(10, 91, 214, 0.12);
+  --ld-ov-hover: rgba(0, 0, 0, 0.05);
   --ld-ov-input: #ffffff;
   --ld-chrome: #eef0f3;
   --ld-chrome-2: #e4e7eb;
@@ -128,6 +130,29 @@
 .ld-row {
   position: relative;
   content-visibility: auto;
+  /* the rung SVG and the pinned margin share one grid cell */
+  display: grid;
+}
+.ld-row-end {
+  display: grid;
+}
+.ld-row > .ld-rung,
+.ld-row > .ld-margin-pin,
+.ld-row-end > .ld-rung,
+.ld-row-end > .ld-margin-pin {
+  grid-area: 1 / 1;
+}
+.ld-row > .ld-rung,
+.ld-row-end > .ld-rung {
+  justify-self: start;
+}
+/* rung numbers & verify markers stay visible when the routine scrolls sideways */
+.ld-margin-pin {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  justify-self: start;
+  width: max-content;
 }
 
 .ld-rung {
@@ -418,6 +443,22 @@
   stroke-width: 1.25;
   rx: 3;
 }
+/* decorations drawn over hit rectangles must never swallow clicks (a click on an already-selected
+   wire has to reach the wire's hit rect, not the caret) */
+.ld-caret,
+.ld-caret-seg,
+.ld-drop,
+.ld-drop-dot,
+.ld-brsel,
+.ld-errbox,
+.ld-warnbox,
+.ld-squiggle,
+.ld-short,
+.ld-wrap,
+.ld-selbox,
+.ld-opsel {
+  pointer-events: none;
+}
 .ld-caret {
   stroke: var(--ld-sel);
   stroke-width: 2.5;
@@ -457,6 +498,26 @@
 .ld-brhit {
   fill: transparent;
   cursor: pointer;
+}
+/* empty branch level = short circuit */
+.ld-short {
+  stroke: var(--ld-warn);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  opacity: 0.85;
+}
+.ld-short-warn {
+  stroke-width: 2;
+  opacity: 1;
+}
+/* wrapped rung markers */
+.ld-wrap path {
+  fill: var(--ld-ink);
+}
+.ld-wrap text {
+  fill: var(--ld-num);
+  font-size: 8.5px;
+  font-weight: 700;
 }
 .ld-brhit:hover {
   fill: color-mix(in srgb, var(--ld-sel) 25%, transparent);

@@ -9,7 +9,7 @@ import { useFrame } from '@react-three/fiber';
 import { useRef } from 'react';
 import * as THREE from 'three';
 import type { AnalogMeterProps } from '../../contracts';
-import { LEGEND_FONT, NARROW_FONT, boxGeo, canvasTexture, cylZ, fitText, mats, planeGeo, roundedBox, roundedRectShape, sharedGeo, sharedMat, Screw } from './shared';
+import { F, LEGEND_FONT, NARROW_FONT, addScrew, boxGeo, canvasTexture, cylZ, fitText, mats, partsGeo, planeGeo, roundedBox, roundedRectShape, sharedGeo, sharedMat, uberMat } from './shared';
 
 export interface AnalogMeterExtProps extends AnalogMeterProps {
   /** Front frame size (m): 0.072 (default) or 0.096. */
@@ -164,37 +164,39 @@ export function AnalogMeter({
     'meter-glass',
     () => new THREE.MeshStandardMaterial({ color: '#ffffff', transparent: true, opacity: 0.1, roughness: 0.04, metalness: 0.1, depthWrite: false }),
   );
+  const staticGeo = partsGeo(`meter:${size}:${rear ? panelThickness : '-'}`, (b) => {
+    b.add(frameGeo(size), F.black);
+    b.add(cylZ(0.0032 * k, 0.0036 * k, 0.0024, 24), F.black, [0, pivotY, 0.0024]);
+    // zero adjust screw
+    b.at([0, -size / 2 + size * 0.045, FRAME_D + 0.0001], undefined, (z) => {
+      z.add(cylZ(0.0024, 0.0024, 0.0006, 20), F.black);
+      z.add(boxGeo(0.0036, 0.0005, 0.0003), F.hole, [0, 0, 0.00035], [0, 0, 0.4]);
+    });
+    if (rear)
+      b.at([0, 0, -panelThickness], undefined, (r) => {
+        r.add(roundedBox(size * 0.92, size * 0.92, 0.052, 0.003, 2), F.black, [0, 0, -0.026]);
+        for (const x of [-0.014, 0.014]) {
+          r.add(cylZ(0.0024, 0.0024, 0.009, 16), F.brass, [x * k, 0, -0.052 - 0.0045]);
+          r.add(cylZ(0.0045, 0.0045, 0.0022, 6), F.brass, [x * k, 0, -0.052 - 0.004]);
+        }
+        addScrew(r, [0, size * 0.36, -0.0521], 0.002, 0.0012, [0, Math.PI, 0]);
+      });
+  });
+  const needleParts = partsGeo('meter-needle-parts', (b) => {
+    b.add(needleGeo(), F.matte('#101010', 0.4));
+    b.add(boxGeo(0.004, 0.0022, 0.0012), F.matte('#101010', 0.4), [0, -0.006, 0.0002]);
+  });
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      {/* bezel frame */}
-      <mesh geometry={frameGeo(size)} material={mats.blackPlastic()} castShadow receiveShadow />
-      {/* inner black back + scale plate */}
+      <mesh geometry={staticGeo} material={uberMat()} castShadow receiveShadow />
+      {/* printed scale plate */}
       <mesh geometry={planeGeo(winW, winH)} material={mats.label(tex, false, 0.65)} position={[0, winCy, 0.0012]} />
       {/* needle */}
       <group ref={needle} position={[0, pivotY, 0.0022]} scale={[k, k, 1]}>
-        <mesh geometry={needleGeo()} material={mats.matte('#101010', 0.4)} castShadow />
-        <mesh geometry={boxGeo(0.004, 0.0022, 0.0012)} material={mats.matte('#101010', 0.4)} position={[0, -0.006, 0.0002]} />
+        <mesh geometry={needleParts} material={uberMat()} />
       </group>
-      <mesh geometry={cylZ(0.0032 * k, 0.0036 * k, 0.0024, 24)} material={mats.blackPlastic()} position={[0, pivotY, 0.0024]} />
       {/* glass */}
       <mesh geometry={planeGeo(winW, winH)} material={glassMat} position={[0, winCy, FRAME_D - 0.0012]} />
-      {/* zero adjust screw */}
-      <group position={[0, -size / 2 + size * 0.045, FRAME_D + 0.0001]}>
-        <mesh geometry={cylZ(0.0024, 0.0024, 0.0006, 20)} material={mats.blackPlastic()} />
-        <mesh geometry={boxGeo(0.0036, 0.0005, 0.0003)} material={mats.dark()} position={[0, 0, 0.00035]} rotation={[0, 0, 0.4]} />
-      </group>
-      {rear && (
-        <group position={[0, 0, -panelThickness]}>
-          <mesh geometry={roundedBox(size * 0.92, size * 0.92, 0.052, 0.003, 2)} material={mats.blackPlastic()} position={[0, 0, -0.026]} castShadow />
-          {[-0.014, 0.014].map((x) => (
-            <group key={x} position={[x * k, 0, -0.052]}>
-              <mesh geometry={cylZ(0.0024, 0.0024, 0.009, 16)} material={mats.brass()} position={[0, 0, -0.0045]} />
-              <mesh geometry={cylZ(0.0045, 0.0045, 0.0022, 6)} material={mats.brass()} position={[0, 0, -0.004]} />
-            </group>
-          ))}
-          <Screw position={[0, size * 0.36, -0.0521]} rotation={[0, Math.PI, 0]} r={0.002} />
-        </group>
-      )}
     </group>
   );
 }

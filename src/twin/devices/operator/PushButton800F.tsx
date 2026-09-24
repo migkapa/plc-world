@@ -9,8 +9,8 @@ import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { PushButtonProps } from '../../contracts';
-import { Bezel800F, F800, LegendPlate800F, Rear800F, type BezelKind, type RearItem } from './parts800F';
-import { CAP_HEX, LENS_HEX, LIT_HEX, arcPts, damp, fresnelTexture, latheZ, mats, operatorToLed, useMomentary } from './shared';
+import { F800, LegendPrint800F, addBezel, addLegendPlate, addRear800F, rearKey, type BezelKind, type RearItem } from './parts800F';
+import { CAP_HEX, F, HoverRing, arcPts, damp, fresnelTexture, latheZ, lensTints, makeLensMaterial, operatorToLed, partsGeo, uberMat, useMomentary } from './shared';
 
 export interface PushButton800FProps extends PushButtonProps {
   /** 'metal' = chrome 800FM bezel (default), 'plastic' = black 800FP bezel. */
@@ -84,29 +84,17 @@ export function PushButton800F({
   scale,
 }: PushButton800FProps) {
   const capRef = useRef<THREE.Group>(null);
-  const { handlers } = useMomentary(onPress, onRelease);
+  const { hovered, handlers } = useMomentary(onPress, onRelease);
   const illuminated = !!getLit;
   const led = operatorToLed(color);
 
   const lensMat = useMemo(() => {
     if (!illuminated) return null;
     const fres = fresnelTexture();
-    return new THREE.MeshStandardMaterial({
-      color: LENS_HEX[led],
-      map: fres,
-      emissive: LIT_HEX[led],
-      emissiveMap: fres,
-      emissiveIntensity: 0,
-      roughness: 0.22,
-      metalness: 0,
-      toneMapped: false,
-    });
+    return makeLensMaterial(led, { map: fres, edge: 0.45 });
   }, [illuminated, led]);
   useEffect(() => () => lensMat?.dispose(), [lensMat]);
-  const tints = useMemo(
-    () => ({ lit: new THREE.Color(LIT_HEX[led]).multiplyScalar(0.75), unlit: new THREE.Color(LENS_HEX[led]).multiplyScalar(0.62) }),
-    [led],
-  );
+  const tints = useMemo(() => lensTints(led, 2.6), [led]);
 
   const travel = TRAVEL[style];
   useFrame((_, dt) => {
@@ -117,25 +105,34 @@ export function PushButton800F({
       if (lensMat.userData.lit !== lit) {
         lensMat.userData.lit = lit;
         lensMat.color.copy(lit ? tints.lit : tints.unlit);
-        lensMat.emissiveIntensity = lit ? 2.6 : 0;
+        lensMat.emissiveIntensity = lit ? tints.litE : tints.unlitE;
       }
     }
   });
 
   const contactItem: RearItem = contact === 'N.C.' ? 'NC' : 'NO';
   const rearItems: [RearItem, RearItem, RearItem] = illuminated ? [contactItem, 'LED', null] : [null, contactItem, null];
-  const capMat = lensMat ?? mats.gloss(CAP_HEX[color]);
+  const hasLegend = legend !== undefined && legend !== '';
+  const lift = style === 'mushroom' ? 0.0068 : 0;
+  const useGuard = guard && style !== 'mushroom';
+  const pt = panelThickness ?? F800.panelT;
+  // one merged mesh for everything static: legend plate + bezel + latch + contact blocks
+  const staticGeo = partsGeo(`pb800f:${hasLegend}:${lift}:${bezel}:${useGuard}:${rear ? rearKey(rearItems, pt, led) : '-'}:${style === 'mushroom' ? 0.0104 : F800.capR}`, (b) => {
+    if (hasLegend) addLegendPlate(b, lift);
+    addBezel(b, bezel, useGuard, style === 'mushroom' ? 0.0104 : F800.capR);
+    if (rear) addRear800F(b, rearItems, pt, led);
+  });
+  const capGeo = capGeometry(style);
+  const molded = partsGeo(`pb800f-cap:${style}:${color}`, (b) => b.add(capGeo, color === 'black' ? { color: CAP_HEX.black, rough: 0.22, metal: 0.02 } : F.gloss(CAP_HEX[color])));
 
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      {legend !== undefined && legend !== '' && <LegendPlate800F lines={legend.split('\n')} lift={style === 'mushroom' ? 0.0068 : 0} />}
-      <group {...handlers}>
-        <Bezel800F kind={bezel} guard={guard && style !== 'mushroom'} />
-        <group ref={capRef}>
-          <mesh geometry={capGeometry(style)} material={capMat} castShadow />
-        </group>
+      {hasLegend && <LegendPrint800F lines={legend.split('\n')} lift={lift} />}
+      <mesh geometry={staticGeo} material={uberMat()} castShadow receiveShadow />
+      <HoverRing show={hovered} r={style === 'mushroom' ? 0.0205 : F800.bezelR + 0.0006} z={style === 'mushroom' ? 0.0175 : undefined} />
+      <group ref={capRef} {...handlers}>
+        {lensMat ? <mesh geometry={capGeo} material={lensMat} castShadow /> : <mesh geometry={molded} material={uberMat()} castShadow />}
       </group>
-      {rear && <Rear800F items={rearItems} panelThickness={panelThickness} led={led} />}
     </group>
   );
 }

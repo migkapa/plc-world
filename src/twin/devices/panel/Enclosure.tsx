@@ -2,19 +2,21 @@
  * Wall-mount sheet-steel control cabinet (RAL 7035 powder coat, AE-style): rounded body edges,
  * front return flange, hinged door (left hinges) with folded edges, inner lips and black foamed-in
  * gasket, quarter-turn latches or a swing handle, engraved nameplate, hazard label, document
- * pocket, mounting backplate (galvanized with spangle, orange or white) on standoffs, wall-mount
- * lugs and bottom cable glands.
+ * pocket, mounting backplate (white powder-coat like a standard Hoffman subpanel by default, or plain
+ * matte galvanized / orange) on standoffs, wall-mount lugs and bottom cable glands.
  *
  * Origin: center of the BACK face at the bottom edge. Size = outer [width, height, depth].
  *  - `children` are placed in BACKPLATE coords: origin = backplate center on its front surface, +Z out.
- *  - `doorChildren` are placed in DOOR coords: origin = door center on its front surface, +Z out
- *    (the door's inner sheet is at z ≈ −0.003; rear assemblies of 22.5 mm devices poke inside).
+ *  - `doorChildren` are placed in DOOR coords: origin = door center on its front surface, +Z out.
+ *    The door front sheet is DOOR_SHEET = 2 mm thick (inner face at z = −0.002), which is the
+ *    default `panelThickness` of the 22.5 mm devices, so their rear assemblies start at the inner face.
+ *  - Performance: body + backplate = one merged mesh, door = one merged mesh + 2 printed labels.
  */
-import { useFrame } from '@react-three/fiber';
+import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { EnclosureProps } from '../../contracts';
-import { LEGEND_FONT, boxGeo, canvasTexture, cylZ, latheZ, mats, planeGeo, roundedBox, sharedGeo, sharedMat, useHover } from '../operator/shared';
+import { CLICK_SLOP_PX, F, LEGEND_FONT, boxGeo, canvasTexture, cylZ, latheZ, mats, partsGeo, planeGeo, roundedBox, roundedRectShape, sharedGeo, uberMat, useHover, type Finish, type Parts } from '../operator/shared';
 
 export interface EnclosureExtProps extends EnclosureProps {
   backplate?: 'galvanized' | 'orange' | 'white';
@@ -38,6 +40,8 @@ const DOOR_D = 0.021; // door depth (front sheet to gasket)
 const FLANGE = 0.02; // body front return flange width
 const PLATE_T = 0.003;
 const STANDOFF = 0.012;
+/** Door front sheet thickness (m) — use as `panelThickness` for door-mounted 22.5 mm devices. */
+export const DOOR_SHEET = 0.002;
 
 export const ENCLOSURE_RAL7035 = '#d4d6d1';
 
@@ -46,42 +50,12 @@ export function backplateSize(size: [number, number, number]): [number, number] 
   return [size[0] - 0.06, size[1] - 0.06];
 }
 
-function spangleTexture() {
-  return canvasTexture('galv-spangle', 512, 512, (ctx, w, h) => {
-    ctx.fillStyle = '#b7bcc0';
-    ctx.fillRect(0, 0, w, h);
-    let s = 987654321;
-    const rnd = () => ((s = (s * 48271) % 2147483647) / 2147483647);
-    for (let i = 0; i < 520; i++) {
-      const x = rnd() * w;
-      const y = rnd() * h;
-      const r = 8 + rnd() * 26;
-      const g = 160 + Math.floor(rnd() * 60);
-      ctx.fillStyle = `rgba(${g},${g + 4},${g + 8},0.45)`;
-      ctx.beginPath();
-      const k = 5 + Math.floor(rnd() * 3);
-      for (let j = 0; j < k; j++) {
-        const a = (j / k) * Math.PI * 2 + rnd() * 0.6;
-        const rr = r * (0.6 + rnd() * 0.5);
-        if (j === 0) ctx.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
-        else ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
-      }
-      ctx.closePath();
-      ctx.fill();
-    }
-  });
-}
-
-function backplateMat(kind: 'galvanized' | 'orange' | 'white') {
-  if (kind === 'orange') return mats.matte('#e2702b', 0.5);
-  if (kind === 'white') return mats.matte('#eeeeea', 0.5);
-  return sharedMat('galv-plate', () => {
-    const t = spangleTexture().clone();
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.repeat.set(2, 2);
-    t.needsUpdate = true;
-    return new THREE.MeshStandardMaterial({ map: t, color: '#f4f6f8', metalness: 0.45, roughness: 0.5, shadowSide: THREE.BackSide });
-  });
+/** Backplate finishes: plain surfaces (no spangle pattern) so mounted devices read clearly. */
+export function backplateFinish(kind: 'galvanized' | 'orange' | 'white'): Finish {
+  if (kind === 'orange') return { color: '#e2702b', rough: 0.5, metal: 0.05 };
+  if (kind === 'white') return { color: '#efefeb', rough: 0.55, metal: 0.03 };
+  // sendzimir galvanized: uniform matte silver-gray
+  return { color: '#b8bdc1', rough: 0.45, metal: 0.5 };
 }
 
 function nameplateTexture(text: string) {
@@ -145,11 +119,12 @@ function warningTexture() {
   });
 }
 
-function filletGeo(len: number) {
-  return sharedGeo(`encl-fillet:${len.toFixed(4)}`, () => {
-    const g = new THREE.CylinderGeometry(R, R, len, 8, 1, true, 0, Math.PI / 2);
-    g.rotateX(Math.PI / 2); // axis -> Z
-    return g;
+/** Extruded rounded-rectangle ring (outer w×h radius r, wall t) from z = 0 to `depth`. */
+function ringPrism(key: string, w: number, h: number, r: number, t: number, depth: number) {
+  return sharedGeo(`encl-ring:${key}:${w}:${h}:${r}:${t}:${depth}`, () => {
+    const s = roundedRectShape(w, h, r);
+    s.holes.push(roundedRectShape(w - 2 * t, h - 2 * t, Math.max(0.0005, r - t)));
+    return new THREE.ExtrudeGeometry(s, { depth, bevelEnabled: false, curveSegments: 6 });
   });
 }
 
@@ -171,24 +146,20 @@ function glandGeo() {
   );
 }
 
-function QuarterTurn({ position }: { position: [number, number, number] }) {
-  return (
-    <group position={position}>
-      <mesh geometry={cylZ(0.0095, 0.0098, 0.004, 32)} material={mats.matte('#1a1a1a', 0.45)} position={[0, 0, 0.002]} castShadow />
-      <mesh geometry={boxGeo(0.0028, 0.012, 0.0014)} material={mats.dark()} position={[0, 0, 0.0036]} />
-    </group>
-  );
+function addQuarterTurn(b: Parts, p: [number, number, number]) {
+  b.at(p, undefined, (q) => {
+    q.add(cylZ(0.0095, 0.0098, 0.004, 32), F.matte('#1a1a1a', 0.45), [0, 0, 0.002]);
+    q.add(boxGeo(0.0028, 0.012, 0.0014), F.hole, [0, 0, 0.0036]);
+  });
 }
 
-function SwingHandle({ position }: { position: [number, number, number] }) {
-  return (
-    <group position={position}>
-      <mesh geometry={roundedBox(0.034, 0.14, 0.007, 0.004, 2)} material={mats.matte('#1c1c1c', 0.45)} position={[0, 0, 0.0035]} castShadow />
-      <mesh geometry={roundedBox(0.022, 0.11, 0.012, 0.006, 3)} material={mats.gloss('#202020')} position={[0, -0.008, 0.012]} castShadow />
-      <mesh geometry={cylZ(0.0065, 0.0065, 0.004, 24)} material={mats.chrome()} position={[0, 0.052, 0.009]} />
-      <mesh geometry={boxGeo(0.0012, 0.006, 0.001)} material={mats.dark()} position={[0, 0.052, 0.0112]} />
-    </group>
-  );
+function addSwingHandle(b: Parts, p: [number, number, number]) {
+  b.at(p, undefined, (h) => {
+    h.add(roundedBox(0.034, 0.14, 0.007, 0.004, 2), F.matte('#1c1c1c', 0.45), [0, 0, 0.0035]);
+    h.add(roundedBox(0.022, 0.11, 0.012, 0.006, 3), F.gloss('#202020'), [0, -0.008, 0.012]);
+    h.add(cylZ(0.0065, 0.0065, 0.004, 24), F.chrome, [0, 0.052, 0.009]);
+    h.add(boxGeo(0.0012, 0.006, 0.001), F.hole, [0, 0.052, 0.0112]);
+  });
 }
 
 export function Enclosure({
@@ -198,7 +169,7 @@ export function Enclosure({
   children,
   doorChildren,
   nameplate,
-  backplate = 'galvanized',
+  backplate = 'white',
   latch = 'auto',
   onDoorToggle,
   animateDoor = true,
@@ -211,8 +182,6 @@ export function Enclosure({
 }: EnclosureExtProps) {
   const [W, H, D] = size;
   const Db = D - DOOR_D;
-  const paint = mats.matte(color, 0.5);
-  const paintDS = sharedMat(`encl-paint-ds:${color}`, () => new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.15, side: THREE.DoubleSide }));
   const door = useRef<THREE.Group>(null);
   const initialAngle = useRef(doorAngle);
   const { bind } = useHover(!!onDoorToggle);
@@ -227,152 +196,134 @@ export function Enclosure({
   const pocket = docPocket ?? (W >= 0.4 && H >= 0.5);
   const npW = Math.min(0.3, W * 0.45);
   const npH = npW * (128 / 768) * (nameplate && nameplate.includes('\n') ? 1.4 : 1.1);
-  const onToggle = onDoorToggle
-    ? (e: { stopPropagation: () => void }) => {
+  // door toggles on a CLICK (primary button, < CLICK_SLOP_PX travel) so camera drags never slam it
+  const onDoorClick = onDoorToggle
+    ? (e: ThreeEvent<MouseEvent>) => {
+        if (e.button !== 0 || e.delta > CLICK_SLOP_PX) return;
         e.stopPropagation();
         onDoorToggle();
       }
     : undefined;
   const glandXs = useMemo(() => Array.from({ length: glands }, (_, i) => (i - (glands - 1) / 2) * Math.min(0.06, (W - 0.1) / Math.max(1, glands))), [glands, W]);
+  const paintF = F.matte(color, 0.5);
+
+  // ---------------- body + backplate: one merged mesh ----------------
+  const bodyGeo = partsGeo(`encl-body:${W}:${H}:${D}:${color}:${backplate}:${glandXs.join(',')}`, (b) => {
+    // back panel + side walls with rounded long edges
+    b.add(sharedGeo(`encl-back:${W}:${H}`, () => new THREE.ExtrudeGeometry(roundedRectShape(W, H, R), { depth: T, bevelEnabled: false, curveSegments: 6 })), paintF, [0, H / 2, 0]);
+    b.add(ringPrism('shell', W, H, R, T, Db), paintF, [0, H / 2, 0]);
+    // front return flange
+    b.add(ringPrism('flange', W - 2 * T, H - 2 * T, 0.001, FLANGE, T), paintF, [0, H / 2, Db - T]);
+    // raised sealing edge on the flange
+    b.add(ringPrism('seal', W - 2 * T - 0.012, H - 2 * T - 0.012, 0.001, 0.0015, 0.004), paintF, [0, H / 2, Db]);
+    // wall-mount lugs
+    for (const [sx, sy] of [
+      [-1, 1],
+      [1, 1],
+      [-1, -1],
+      [1, -1],
+    ] as [number, number][]) {
+      b.at([sx * (W / 2 - 0.03), sy > 0 ? H + 0.012 : -0.012, 0.004], undefined, (l) => {
+        l.add(roundedBox(0.03, 0.028, 0.003, 0.004, 2), F.metal('#c9ccce', 0.4));
+        l.add(cylZ(0.0035, 0.0035, 0.0034, 16), F.hole, [0, sy * 0.004, 0]);
+      });
+    }
+    // hinges
+    for (const f of [0.12, 0.88]) {
+      b.at([-W / 2 - 0.004, H * f, Db + 0.004], undefined, (h) => {
+        h.add(sharedGeo('encl-hinge', () => new THREE.CylinderGeometry(0.0055, 0.0055, 0.05, 16)), F.matte('#2a2a2a', 0.45));
+        h.add(sharedGeo('encl-hinge-cap', () => new THREE.SphereGeometry(0.0055, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2)), F.matte('#2a2a2a', 0.45), [0, 0.025, 0]);
+      });
+    }
+    // bottom cable glands with cable stubs
+    for (const x of glandXs) {
+      b.at([x, 0, Db * 0.5], [Math.PI / 2, 0, 0], (g) => {
+        g.add(sharedGeo('encl-gland-hex', () => new THREE.CylinderGeometry(0.0165, 0.0165, 0.006, 6).rotateX(Math.PI / 2)), F.matte('#8d9093', 0.5), [0, 0, 0.003]);
+        g.add(glandGeo(), F.matte('#8d9093', 0.5), [0, 0, 0.006]);
+        g.add(cylZ(0.0058, 0.0058, 0.08, 16), F.matte('#3b3d3f', 0.7), [0, 0, 0.056]);
+      });
+    }
+    // backplate on standoffs
+    for (const [sx, sy] of [
+      [-1, -1],
+      [1, -1],
+      [-1, 1],
+      [1, 1],
+    ] as [number, number][]) {
+      b.at([sx * (pw / 2 - 0.012), H / 2 + sy * (ph / 2 - 0.012), 0], undefined, (so) => {
+        so.add(cylZ(0.004, 0.004, STANDOFF, 12), F.metal('#b9bdc0', 0.4), [0, 0, STANDOFF / 2 + T]);
+        so.add(cylZ(0.0065, 0.0065, 0.004, 6), F.metal('#c9cdd0', 0.35), [0, 0, STANDOFF + T + PLATE_T + 0.002]);
+      });
+    }
+    b.add(boxGeo(pw, ph, PLATE_T), backplateFinish(backplate), [0, H / 2, STANDOFF + T + PLATE_T / 2]);
+  });
+
+  // ---------------- door: one merged mesh ----------------
+  const doorGeo = partsGeo(`encl-door:${W}:${H}:${color}:${useHandle}:${pocket}:${nameplate ? `${npW}:${npH}` : '-'}`, (b) => {
+    const foldD = DOOR_D - 0.006;
+    const foldZ = -DOOR_SHEET - foldD / 2;
+    // 2 mm front sheet with rounded edge
+    b.add(roundedBox(W, H, DOOR_SHEET, 0.001, 2), paintF, [0, 0, -DOOR_SHEET / 2]);
+    // folded edges (carry the door depth) + inner lips
+    b.add(ringPrism('door-fold', W, H, 0.001, T, foldD), paintF, [0, 0, foldZ - foldD / 2]);
+    b.add(ringPrism('door-lip', W - 2 * T, H - 2 * T, 0.001, 0.012, T), paintF, [0, 0, -DOOR_D + 0.004]);
+    // foamed-in gasket
+    b.add(ringPrism('door-gasket', W - 0.012, H - 0.012, 0.004, 0.008, 0.004), F.rubber, [0, 0, -DOOR_D]);
+    // latches / handle
+    if (useHandle) addSwingHandle(b, [W / 2 - 0.035, 0, 0]);
+    else {
+      addQuarterTurn(b, [W / 2 - 0.028, H * 0.3, 0]);
+      addQuarterTurn(b, [W / 2 - 0.028, -H * 0.3, 0]);
+    }
+    // nameplate body + chrome rivets
+    if (nameplate)
+      b.at([0, H / 2 - 0.02 - npH / 2, 0.0003], undefined, (n) => {
+        n.add(roundedBox(npW, npH, 0.0016, 0.0015, 2), F.gloss('#151515'), [0, 0, 0.0008]);
+        for (const sx of [-1, 1]) n.add(cylZ(0.0018, 0.0018, 0.001, 12), F.chrome, [sx * (npW / 2 - 0.005), 0, 0.0019]);
+      });
+    // document pocket on the inside
+    if (pocket)
+      b.at([0, -H * 0.18, -DOOR_SHEET - 0.0035], undefined, (p) => {
+        const pw2 = Math.min(0.26, W * 0.45);
+        const ph2 = Math.min(0.3, H * 0.32);
+        p.add(roundedBox(pw2, ph2, 0.007, 0.003, 2), F.matte('#8e9295', 0.6), [0, 0, -0.0035], [0, Math.PI, 0]);
+        p.add(boxGeo(pw2 * 0.86, 0.03, 0.003), F.matte('#f3f1ea', 0.8), [0, ph2 / 2, -0.004]);
+      });
+  });
+  const warnW = Math.min(0.1, W * 0.22);
+  const warnH = Math.min(0.05, W * 0.11);
 
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      {/* ---------------- body ---------------- */}
-      <mesh geometry={boxGeo(W - 2 * R, H - 2 * R, T)} material={paint} position={[0, H / 2, T / 2]} receiveShadow />
-      <mesh geometry={boxGeo(T, H - 2 * R, Db)} material={paint} position={[-W / 2 + T / 2, H / 2, Db / 2]} castShadow receiveShadow />
-      <mesh geometry={boxGeo(T, H - 2 * R, Db)} material={paint} position={[W / 2 - T / 2, H / 2, Db / 2]} castShadow receiveShadow />
-      <mesh geometry={boxGeo(W - 2 * R, T, Db)} material={paint} position={[0, H - T / 2, Db / 2]} castShadow receiveShadow />
-      <mesh geometry={boxGeo(W - 2 * R, T, Db)} material={paint} position={[0, T / 2, Db / 2]} castShadow receiveShadow />
-      {/* back panel edges (so the back corners look closed) */}
-      <mesh geometry={boxGeo(W, H, T)} material={paint} position={[0, H / 2, T / 2]} />
-      {/* rounded long edges */}
-      {[
-        [W / 2 - R, H - R, Math.PI / 2],
-        [-W / 2 + R, H - R, Math.PI],
-        [-W / 2 + R, R, -Math.PI / 2],
-        [W / 2 - R, R, 0],
-      ].map(([x, y, rz], i) => (
-        <mesh key={i} geometry={filletGeo(Db)} material={paintDS} position={[x!, y!, Db / 2]} rotation={[0, 0, rz!]} castShadow />
-      ))}
-      {/* front return flange */}
-      <mesh geometry={boxGeo(W - 2 * R, FLANGE, T)} material={paint} position={[0, H - T - FLANGE / 2, Db - T / 2]} />
-      <mesh geometry={boxGeo(W - 2 * R, FLANGE, T)} material={paint} position={[0, T + FLANGE / 2, Db - T / 2]} />
-      <mesh geometry={boxGeo(FLANGE, H - 2 * T - 2 * FLANGE, T)} material={paint} position={[-W / 2 + T + FLANGE / 2, H / 2, Db - T / 2]} />
-      <mesh geometry={boxGeo(FLANGE, H - 2 * T - 2 * FLANGE, T)} material={paint} position={[W / 2 - T - FLANGE / 2, H / 2, Db - T / 2]} />
-      {/* raised sealing edge on the flange */}
-      <mesh geometry={boxGeo(W - 2 * T - 0.012, 0.0015, 0.004)} material={paint} position={[0, H - T - 0.006, Db + 0.002]} />
-      <mesh geometry={boxGeo(W - 2 * T - 0.012, 0.0015, 0.004)} material={paint} position={[0, T + 0.006, Db + 0.002]} />
-      <mesh geometry={boxGeo(0.0015, H - 2 * T - 0.012, 0.004)} material={paint} position={[-W / 2 + T + 0.006, H / 2, Db + 0.002]} />
-      <mesh geometry={boxGeo(0.0015, H - 2 * T - 0.012, 0.004)} material={paint} position={[W / 2 - T - 0.006, H / 2, Db + 0.002]} />
-      {/* wall-mount lugs */}
-      {[
-        [-1, 1],
-        [1, 1],
-        [-1, -1],
-        [1, -1],
-      ].map(([sx, sy], i) => (
-        <group key={i} position={[sx! * (W / 2 - 0.03), sy! > 0 ? H + 0.012 : -0.012, 0.004]}>
-          <mesh geometry={roundedBox(0.03, 0.028, 0.003, 0.004, 2)} material={mats.metal('#c9ccce', 0.4)} castShadow />
-          <mesh geometry={cylZ(0.0035, 0.0035, 0.0034, 16)} material={mats.dark()} position={[0, sy! * 0.004, 0]} />
-        </group>
-      ))}
-      {/* hinges */}
-      {[0.12, 0.88].map((f) => (
-        <group key={f} position={[-W / 2 - 0.004, H * f, Db + 0.004]}>
-          <mesh geometry={sharedGeo('encl-hinge', () => new THREE.CylinderGeometry(0.0055, 0.0055, 0.05, 16))} material={mats.matte('#2a2a2a', 0.45)} castShadow />
-          <mesh geometry={sharedGeo('encl-hinge-cap', () => new THREE.SphereGeometry(0.0055, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2))} material={mats.matte('#2a2a2a', 0.45)} position={[0, 0.025, 0]} />
-        </group>
-      ))}
-      {/* bottom cable glands */}
-      {glandXs.map((x) => (
-        <group key={x} position={[x, 0, Db * 0.5]} rotation={[Math.PI / 2, 0, 0]}>
-          <mesh geometry={sharedGeo('encl-gland-hex', () => new THREE.CylinderGeometry(0.0165, 0.0165, 0.006, 6).rotateX(Math.PI / 2))} material={mats.matte('#8d9093', 0.5)} position={[0, 0, 0.003]} />
-          <mesh geometry={glandGeo()} material={mats.matte('#8d9093', 0.5)} position={[0, 0, 0.006]} castShadow />
-          <mesh geometry={cylZ(0.0058, 0.0058, 0.08, 16)} material={mats.matte('#3b3d3f', 0.7)} position={[0, 0, 0.056]} />
-        </group>
-      ))}
-
-      {/* ---------------- backplate ---------------- */}
-      {[
-        [-1, -1],
-        [1, -1],
-        [-1, 1],
-        [1, 1],
-      ].map(([sx, sy], i) => (
-        <group key={i} position={[sx! * (pw / 2 - 0.012), H / 2 + sy! * (ph / 2 - 0.012), 0]}>
-          <mesh geometry={cylZ(0.004, 0.004, STANDOFF, 12)} material={mats.metal('#b9bdc0', 0.4)} position={[0, 0, STANDOFF / 2 + T]} />
-          <mesh geometry={cylZ(0.0065, 0.0065, 0.004, 6)} material={mats.metal('#c9cdd0', 0.35)} position={[0, 0, STANDOFF + T + PLATE_T + 0.002]} />
-        </group>
-      ))}
-      <mesh geometry={boxGeo(pw, ph, PLATE_T)} material={backplateMat(backplate)} position={[0, H / 2, STANDOFF + T + PLATE_T / 2]} receiveShadow castShadow />
+      <mesh geometry={bodyGeo} material={uberMat()} castShadow receiveShadow />
       <group position={[0, H / 2, STANDOFF + T + PLATE_T]}>{children}</group>
 
-      {/* ---------------- door ---------------- */}
+      {/* ---------------- door (hinges on the left) ---------------- */}
       <group position={[-W / 2 - 0.004, 0, Db]}>
         <group ref={door} rotation={[0, animateDoor ? -initialAngle.current : -doorAngle, 0]}>
           <group position={[W / 2 + 0.004, H / 2, DOOR_D]}>
-            <group onPointerDown={onToggle} {...(onDoorToggle ? bind : {})}>
-            {/* front sheet with rounded edge */}
-            <mesh geometry={roundedBox(W, H, 0.006, 0.003, 3)} material={paint} position={[0, 0, -0.003]} castShadow receiveShadow />
-            {/* folded edges */}
-            <mesh geometry={boxGeo(W - 0.004, T, DOOR_D - 0.009)} material={paint} position={[0, H / 2 - T / 2, -0.0045 - (DOOR_D - 0.009) / 2]} />
-            <mesh geometry={boxGeo(W - 0.004, T, DOOR_D - 0.009)} material={paint} position={[0, -H / 2 + T / 2, -0.0045 - (DOOR_D - 0.009) / 2]} />
-            <mesh geometry={boxGeo(T, H - 0.004, DOOR_D - 0.009)} material={paint} position={[-W / 2 + T / 2, 0, -0.0045 - (DOOR_D - 0.009) / 2]} />
-            <mesh geometry={boxGeo(T, H - 0.004, DOOR_D - 0.009)} material={paint} position={[W / 2 - T / 2, 0, -0.0045 - (DOOR_D - 0.009) / 2]} />
-            {/* inner lips */}
-            <mesh geometry={boxGeo(W - 0.004, 0.012, T)} material={paint} position={[0, H / 2 - 0.006, -DOOR_D + 0.0045]} />
-            <mesh geometry={boxGeo(W - 0.004, 0.012, T)} material={paint} position={[0, -H / 2 + 0.006, -DOOR_D + 0.0045]} />
-            <mesh geometry={boxGeo(0.012, H - 0.028, T)} material={paint} position={[-W / 2 + 0.006, 0, -DOOR_D + 0.0045]} />
-            <mesh geometry={boxGeo(0.012, H - 0.028, T)} material={paint} position={[W / 2 - 0.006, 0, -DOOR_D + 0.0045]} />
-            {/* foamed-in gasket */}
-            <mesh geometry={boxGeo(W - 0.02, 0.008, 0.004)} material={mats.rubber()} position={[0, H / 2 - 0.009, -DOOR_D + 0.002]} />
-            <mesh geometry={boxGeo(W - 0.02, 0.008, 0.004)} material={mats.rubber()} position={[0, -H / 2 + 0.009, -DOOR_D + 0.002]} />
-            <mesh geometry={boxGeo(0.008, H - 0.026, 0.004)} material={mats.rubber()} position={[-W / 2 + 0.009, 0, -DOOR_D + 0.002]} />
-            <mesh geometry={boxGeo(0.008, H - 0.026, 0.004)} material={mats.rubber()} position={[W / 2 - 0.009, 0, -DOOR_D + 0.002]} />
-            {/* latches / handle */}
-            {useHandle ? (
-              <SwingHandle position={[W / 2 - 0.035, 0, 0]} />
-            ) : (
-              <>
-                <QuarterTurn position={[W / 2 - 0.028, H * 0.3, 0]} />
-                <QuarterTurn position={[W / 2 - 0.028, -H * 0.3, 0]} />
-              </>
-            )}
-            {/* nameplate */}
-            {nameplate && (
-              <group position={[0, H / 2 - 0.02 - npH / 2, 0.0003]}>
-                <mesh geometry={roundedBox(npW, npH, 0.0016, 0.0015, 2)} material={mats.gloss('#151515')} position={[0, 0, 0.0008]} />
-                <mesh geometry={planeGeo(npW - 0.003, npH - 0.003)} material={mats.label(nameplateTexture(nameplate), false, 0.35)} position={[0, 0, 0.0017]} />
-                {[-1, 1].map((s) => (
-                  <mesh key={s} geometry={cylZ(0.0018, 0.0018, 0.001, 12)} material={mats.chrome()} position={[s * (npW / 2 - 0.005), 0, 0.0019]} />
-                ))}
-              </group>
-            )}
-            {warningLabel && (
-              <mesh
-                geometry={planeGeo(Math.min(0.1, W * 0.22), Math.min(0.05, W * 0.11))}
-                material={mats.label(warningTexture(), false, 0.5)}
-                position={[W / 2 - 0.04 - Math.min(0.1, W * 0.22) / 2, H / 2 - 0.02 - npH - 0.02 - Math.min(0.05, W * 0.11) / 2, 0.0003]}
-              />
-            )}
-            {/* document pocket on the inside */}
-            {pocket && (
-              <group position={[0, -H * 0.18, -0.0065]}>
-                <mesh geometry={roundedBox(Math.min(0.26, W * 0.45), Math.min(0.3, H * 0.32), 0.007, 0.003, 2)} material={mats.matte('#8e9295', 0.6)} castShadow />
+            <group onClick={onDoorClick} {...(onDoorToggle ? bind : {})}>
+              <mesh geometry={doorGeo} material={uberMat()} castShadow receiveShadow />
+              {nameplate && (
                 <mesh
-                  geometry={boxGeo(Math.min(0.26, W * 0.45) * 0.86, 0.03, 0.003)}
-                  material={mats.matte('#f3f1ea', 0.8)}
-                  position={[0, Math.min(0.3, H * 0.32) / 2, 0.001]}
+                  geometry={planeGeo(npW - 0.003, npH - 0.003)}
+                  material={mats.label(nameplateTexture(nameplate), false, 0.35)}
+                  position={[0, H / 2 - 0.02 - npH / 2, 0.002]}
                 />
-              </group>
-            )}
+              )}
+              {warningLabel && (
+                <mesh
+                  geometry={planeGeo(warnW, warnH)}
+                  material={mats.label(warningTexture(), false, 0.5)}
+                  position={[W / 2 - 0.04 - warnW / 2, H / 2 - 0.02 - npH - 0.02 - warnH / 2, 0.0003]}
+                />
+              )}
             </group>
             {/* door-mounted devices (their own pointer handlers; clicks don't toggle the door) */}
             <group>{doorChildren}</group>
           </group>
         </group>
       </group>
-
     </group>
   );
 }

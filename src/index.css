@@ -1,0 +1,30 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/600.css';
+
+@theme {
+  --font-sans: 'Inter Variable', Inter, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --color-ab-red: #e0252b;
+  --color-safety: #f5c400;
+  --color-led: #22c55e;
+  --color-panel: #0f1419;
+  --color-panel-2: #151b22;
+  --color-panel-3: #1c242d;
+  --color-edge: #2a3441;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0b0f14;
+  color: #e5e7eb;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}

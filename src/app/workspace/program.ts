@@ -4,7 +4,7 @@
  * as editor-friendly VerifyErrors. No React / DOM.
  */
 import { serializeRung } from '../../plc/neutralText';
-import type { Project, Rung, TagDef, VerifyError } from '../../plc/types';
+import type { Project, Rung, RungElement, TagDef, VerifyError } from '../../plc/types';
 import { MAIN_PROGRAM, MAIN_ROUTINE } from '../../sim/project';
 
 /** A program as it is saved / exported / validated: neutral-text rungs, rung comments, player tags. */
@@ -99,6 +99,31 @@ export function countChangedRungs(prev: ReadonlyArray<Rung>, next: ReadonlyArray
   }
   for (const id of before.keys()) if (!ids.has(id)) n++;
   return n;
+}
+
+function hasEmptyLeg(series: ReadonlyArray<RungElement>): boolean {
+  for (const el of series) {
+    if (el.kind !== 'branch') continue;
+    if (el.legs.some((l) => l.length === 0)) return true;
+    if (el.legs.some((l) => hasEmptyLeg(l))) return true;
+  }
+  return false;
+}
+
+/**
+ * Indices of the rungs of `next` that contain a branch leg without instructions (a shorted branch —
+ * typically a branch the player is still building) and that are not already running unchanged in
+ * `running`. Such an edit must not be applied online: the empty leg shorts the contacts around it
+ * and would energize the output by itself (Studio 5000 only warns "Shorted branch detected").
+ */
+export function newShortedRungs(next: ReadonlyArray<Rung>, running: ReadonlyArray<Rung>): number[] {
+  const live = new Set<string>();
+  for (const r of running) if (hasEmptyLeg(r.elements)) live.add(serializeRung(r));
+  const out: number[] = [];
+  next.forEach((r, i) => {
+    if (hasEmptyLeg(r.elements) && !live.has(serializeRung(r))) out.push(i);
+  });
+  return out;
 }
 
 /**

@@ -101,6 +101,10 @@ export interface SceneDefinition<S = unknown> {
   cameras: Array<{ id: string; label: string; position: [number, number, number]; target: [number, number, number] }>;
   /** Thumbnail accent colour for cards. */
   accent?: string;
+  /** Stage lighting preset (see src/twin/Stage.tsx); default 'hall'. */
+  environment?: 'hall' | 'street' | 'studio';
+  /** Optional demo program (neutral text rungs) that makes the plant come alive in previews/showroom. */
+  demoRungs?: string[];
 }
 
 /**

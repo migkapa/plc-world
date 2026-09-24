@@ -499,16 +499,15 @@
   fill: transparent;
   cursor: pointer;
 }
-/* empty branch level = short circuit */
+/* empty branch level = short circuit: a bold amber dash over the wire */
 .ld-short {
   stroke: var(--ld-warn);
-  stroke-width: 1.5;
-  stroke-dasharray: 5 4;
-  opacity: 0.85;
+  stroke-width: 2.5;
+  stroke-dasharray: 7 4;
+  stroke-linecap: butt;
 }
 .ld-short-warn {
-  stroke-width: 2;
-  opacity: 1;
+  stroke-width: 3;
 }
 /* wrapped rung markers */
 .ld-wrap path {

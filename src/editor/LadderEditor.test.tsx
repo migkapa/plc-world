@@ -283,6 +283,32 @@ describe('operand autocomplete', () => {
   });
 });
 
+describe('ASCII quick entry', () => {
+  it('Enter inserts the typed operand literally (no swap for a longer tag)', async () => {
+    const c = trainerController(['XIC(Motor_Run)OTE(Light_0);'], [{ name: 'Motor_Run', dataType: 'BOOL' }]);
+    const rs = c.project.programs[0]!.routines[0]!.rungs;
+    const m = mount(rs, { controller: c });
+    act(() => m.ref.current!.setSelection({ rungId: rs[0]!.id, wireIndex: 1 }));
+    act(() => m.ref.current!.startQuickEntry('XIC Motor'));
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'ASCII instruction entry' }), { key: 'Enter' });
+    await wait();
+    expect(texts(m.state.rungs)).toEqual(['XIC(Motor_Run)XIC(Motor)OTE(Light_0);']);
+  });
+
+  it('an unknown mnemonic is reported with a Tab hint; Tab completes the token', () => {
+    const r = parseRung('XIC(A)OTE(B);');
+    const m = mount([r]);
+    act(() => m.ref.current!.setSelection({ rungId: r.id }));
+    act(() => m.ref.current!.startQuickEntry('OT'));
+    const input = screen.getByRole('textbox', { name: 'ASCII instruction entry' }) as HTMLInputElement;
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByText(/Unknown instruction 'OT'.*Press Tab to complete it/)).toBeTruthy();
+    expect(m.onChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Tab' });
+    expect(input.value).toMatch(/^OT[ELU] $/);
+  });
+});
+
 describe('New Tag from the ladder', () => {
   it('offers New Tag for an undefined operand and creates it with the instruction type', async () => {
     const c = trainerController(['XIC(Start_PB)TON(Delay_T,2000,0);']);

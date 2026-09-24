@@ -68,7 +68,7 @@ const BUILDINGS: BuildingSpec[] = [
   { x0: -34, x1: -20, z0: -26, z1: 4, floors: 4, facade: 'office', hvac: 2 },
   { x0: -34, x1: -18, z0: 8, z1: 30, floors: 2, facade: 'brickDark', hvac: 2 },
   { x0: 20, x1: 36, z0: -28, z1: -4, floors: 2, facade: 'precast', ground: 'precast', groundH: 3.2, hvac: 1 },
-  { x0: 19, x1: 34, z0: 2, z1: 30, floors: 3, facade: 'stucco', hvac: 2 },
+  { x0: 21, x1: 34, z0: -1, z1: 13, floors: 2, facade: 'stucco', hvac: 2 },
   { x0: -18, x1: 18, z0: -44, z1: -26, floors: 3, facade: 'brickDark', ground: 'brickDark', groundH: 3.3, hvac: 3 },
   // across the street
   { x0: -30, x1: -8, z0: 45, z1: 58, floors: 2, facade: 'stucco', hvac: 2 },
@@ -166,7 +166,7 @@ function Stripes({ rects, color }: { rects: [number, number, number, number][]; 
 const concreteMat = () => kmat('pg:precast', () => new THREE.MeshStandardMaterial({ map: roadMats.curb().map, color: '#d6d1c6', roughness: 0.85 }));
 const yellowCurbMat = () => kmat('pg:yellowCurb', () => new THREE.MeshStandardMaterial({ color: '#e7b416', roughness: 0.6 }));
 const steelMat = () => kmat('pg:steel', () => new THREE.MeshStandardMaterial({ color: '#40505e', roughness: 0.45, metalness: 0.6 }));
-const roofSteelMat = () => kmat('pg:roofSteel', () => new THREE.MeshStandardMaterial({ color: '#d9dcde', roughness: 0.5, metalness: 0.4 }));
+const roofSteelMat = () => kmat('pg:roofSteel', () => new THREE.MeshStandardMaterial({ color: '#7d858c', roughness: 0.55, metalness: 0.45 }));
 
 function box(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): InstXf {
   return { p: [(x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2], s: [x1 - x0, y1 - y0, z1 - z0] };

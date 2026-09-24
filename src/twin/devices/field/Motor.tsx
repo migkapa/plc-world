@@ -159,14 +159,14 @@ function finnedFrameGeo(frame: MotorFrame, feet: boolean) {
     const s = MOTOR_FRAMES[frame];
     const R = s.bodyR;
     const fins = finAngles(frame, feet);
-    const baseHalf = (R * 0.08) / 2 / R;
+    const baseHalf = (R * 0.095) / 2 / R;
     const pts: THREE.Vector2[] = [];
     const P = (r: number, a: number) => pts.push(new THREE.Vector2(r * Math.cos(a), r * Math.sin(a)));
     let prev = fins[fins.length - 1]! - TAU + baseHalf;
     for (const a of fins) {
       const tip = motorFinTip(frame, a);
       const h = tip - R;
-      const tipHalf = (R * 0.036) / 2 / tip;
+      const tipHalf = (R * 0.045) / 2 / tip;
       const start = a - baseHalf;
       const span = start - prev;
       const steps = Math.max(1, Math.ceil(span / 0.07));
@@ -298,9 +298,9 @@ function OverheatSmoke({ get, position, spread }: { get: () => boolean; position
         age * 0.32,
         Math.cos(seed * 2.3) * spread * 1.6 + age * 0.04,
       );
-      const sz = 0.03 + age * 0.13;
+      const sz = 0.025 + age * 0.1;
       sp.scale.set(sz, sz, 1);
-      mats[i]!.opacity = lv * 0.3 * Math.sin(Math.PI * Math.min(1, age * 1.15)) * (1 - age * 0.5);
+      mats[i]!.opacity = lv * 0.26 * Math.sin(Math.PI * Math.min(1, age * 1.15)) * (1 - age * 0.5);
     }
   });
   return (

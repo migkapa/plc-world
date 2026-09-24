@@ -776,7 +776,7 @@ function mergeable(o: THREE.Object3D): o is THREE.Mesh {
 
 function collectMergeable(o: THREE.Object3D, out: THREE.Mesh[]) {
   for (const c of o.children) {
-    if (!c.visible || c.userData.noMerge || c.userData.__merged) continue;
+    if (!c.visible || c.userData.noMerge || c.userData.__merged || c.userData.__mergeRoot) continue;
     if (mergeable(c)) out.push(c);
     collectMergeable(c, out);
   }
@@ -891,7 +891,7 @@ export function Merge({ children, position, rotation, scale }: { children: React
   useEffect(() => () => teardown(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <group ref={root} position={position} rotation={rotation} scale={scale}>
+    <group ref={root} position={position} rotation={rotation} scale={scale} userData={{ __mergeRoot: true }}>
       {children}
     </group>
   );
@@ -918,9 +918,9 @@ const _ws = new THREE.Vector3();
 
 /** Floor conduit stub-up (zinc EMT + liquid-tight connector + floor flange); origin at the top, axis +Y. */
 export const STUB_TOP = 0.14;
-function ConduitStub({ stubRef }: { stubRef: RefObject<THREE.Group | null> }) {
+export function ConduitStub({ stubRef, position, visible = false }: { stubRef?: RefObject<THREE.Group | null>; position?: Vec3; visible?: boolean }) {
   return (
-    <group ref={stubRef} visible={false}>
+    <group ref={stubRef} visible={visible} position={position}>
       <mesh geometry={cylY(0.011, STUB_TOP - 0.02, 16)} material={fm.zinc()} position={[0, -(STUB_TOP - 0.02) / 2 - 0.02, 0]} castShadow />
       <mesh geometry={hexGeo(0.028, 0.01)} material={fm.zinc()} position={[0, -0.018, 0]} rotation={[Math.PI / 2, 0, 0]} />
       <mesh geometry={cylY(0.0105, 0.016, 16, 0.008)} material={fm.plastic('#1e1f22', 0.6)} position={[0, -0.004, 0]} />

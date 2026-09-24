@@ -44,6 +44,8 @@ import { verifyProject } from './verify';
 export interface LogixController extends PlcController {
   readonly tags: LogixTagDatabase;
   getForce(operand: string, program?: string): boolean | number | undefined;
+  /** The real field state of an input point (what the module sees before input forces are applied). */
+  readInputFromField(operand: string): boolean | number;
   /** Clear the minor fault log. */
   clearMinorFaults(): void;
   /** Reset every tag to its initial value (like re-downloading) without changing the mode. */
@@ -671,7 +673,8 @@ class LogixControllerImpl implements LogixController {
       const f = this.forces.get(ref.path);
       if (f) return bool ? f.value === true || f.value === 1 : Number(f.value);
     }
-    if (!this.isRunning()) return bool ? false : 0;
+    // Outputs hold their Program-mode state (off) until the prescan and first scan have run.
+    if (!this.isRunning() || this.needsPrescan) return bool ? false : 0;
     try {
       return bool ? ref.readB() : ref.readN();
     } catch {

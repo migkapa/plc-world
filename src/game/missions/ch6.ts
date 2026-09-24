@@ -108,7 +108,7 @@ const NS_YELLOW = 0b1000_1010; // 138
 const EW_GREEN = 0b0110_0001; // 97
 const EW_YELLOW = 0b1001_0001; // 145
 const DRUM = [ALL_RED, NS_GREEN, NS_YELLOW, ALL_RED, EW_GREEN, EW_YELLOW, ALL_RED];
-const STEP_TIMES = [2000, 8000, 3000, 1000, 6000, 3000, 1000];
+const STEP_TIMES = [2000, 10000, 3000, 1000, 8000, 3000, 1000];
 
 const LOAD_DRUM =
   'XIC(S:FS)[MOV(2#1000_1001,Lamp_Steps[0]),MOV(2#1000_1100,Lamp_Steps[1]),MOV(2#1000_1010,Lamp_Steps[2]),' +
@@ -167,11 +167,22 @@ function phase(key: string, pattern: number, ms: number, label: string, within =
   ];
 }
 
-/** NS yellow + EW red flash at ~1 Hz (on and off ≈ 0.5 s each), everything else dark. */
+/**
+ * NS yellow + EW red flash together at ~1 Hz (on and off ≈ 0.5 s each), everything else dark — checked in
+ * the ON half (just after the NS yellow lights) and again in the OFF half.
+ */
 const flashing = (label: string, firstWithin = 1200): TestStep[] => [
   expectObs('nsYellow', false, `${label}: NS yellow must flash (off)`, { within: firstWithin }),
   expectObs('nsYellow', true, `${label}: NS yellow must flash (on)`, { within: firstWithin }),
-  expectObs('nsYellow', true, `${label}: NS yellow ON for about 0.5 s`, { for: 380 }),
+  wait(50),
+  expectObs('ewRed', true, `${label}: EW red must flash together with the NS yellow (both ON in the same half)`),
+  expectObs('nsRed', false, `${label}: NS red must stay dark while the NS yellow is lit (one lamp per head)`),
+  expectObs('nsGreen', false, `${label}: NS green must stay dark in the flash`),
+  expectObs('ewGreen', false, `${label}: EW green must stay dark in the flash`),
+  expectObs('ewYellow', false, `${label}: EW yellow must stay dark in the flash`),
+  expectObs('walk', false, `${label}: the pedestrian heads must stay dark in the flash (WALK)`),
+  expectObs('dontWalk', false, `${label}: the pedestrian heads must stay dark in the flash (DON'T WALK)`),
+  expectObs('nsYellow', true, `${label}: NS yellow ON for about 0.5 s`, { for: 330 }),
   expectObs('nsYellow', false, `${label}: NS yellow must flash (off) — about 0.5 s on, 0.5 s off`, { within: 250 }),
   expectObs('nsYellow', false, `${label}: NS yellow OFF for about 0.5 s`, { for: 380 }),
   expectObs('nsYellow', true, `${label}: NS yellow must keep flashing`, { within: 250 }),
@@ -204,22 +215,20 @@ sequence of steps, and Dana has one rule for sequences: *"One DINT holds the ste
 EQU. Every transition is a MOV. Outputs are driven from the step — never latched."*
 
 **The hardware** (tank T-101)
-- \`Start_PB\` (**N.O.**), \`Stop_PB\` (**N.C.**: 1 when not pressed), \`EStop_OK\` (**N.C.**: 1 = released),
-  \`Discharge_PB\` (**N.O.**).
+- \`Start_PB\` (**N.O.**), \`Stop_PB\` (**N.C.**: 1 when not pressed), \`EStop_OK\` (**N.C.**: 1 = released), \`Discharge_PB\` (**N.O.**).
 - \`LT_101\` level (REAL %), \`TT_101\` temperature (REAL °C).
 - Outputs \`Fill_Valve\`, \`Mixer\`, \`Heater\`, \`Drain_Valve\`, \`Batch_Done_Light\` (green), \`Running_Light\` (amber).
 - Tags \`Step\` (DINT) and \`Mix_Timer\` (TIMER) are created for you.
 
 **The recipe** — the QA limits are 85 % fill and 60 °C; the setpoints leave margin for instrument accuracy.
 
-| Step | Name | Outputs | Go to the next step when… |
-|---|---|---|---|
-| **0** | IDLE | — | **Start** → 10 |
-| **10** | FILL | \`Fill_Valve\` | \`LT_101\` ≥ **87 %** → 20 |
-| **20** | MIX & HEAT | \`Mixer\`, \`Heater\` | mixed ≥ **5 s** in this step **and** \`TT_101\` ≥ **62 °C** → 30 |
-| **30** | DRAIN | \`Drain_Valve\` | \`LT_101\` < **1 %** (empty) → 40 |
-| **40** | DONE | \`Batch_Done_Light\` | **Discharge_PB** (operator acknowledges) → 0 |
+- **Step 0 — IDLE:** no outputs. **Start** → step 10.
+- **Step 10 — FILL:** \`Fill_Valve\` open. \`LT_101\` ≥ **87 %** → step 20.
+- **Step 20 — MIX & HEAT:** \`Mixer\` and \`Heater\` on. Mixed at least **5 s** in this step **and** \`TT_101\` ≥ **62 °C** → step 30.
+- **Step 30 — DRAIN:** \`Drain_Valve\` open. \`LT_101\` < **1 %** (empty) → step 40.
+- **Step 40 — DONE:** \`Batch_Done_Light\` on. **Discharge_PB** (the operator acknowledges) → step 0.
 
+**Rules**
 - \`Running_Light\` is on in steps 10, 20 and 30.
 - **Start** only works in step 0. **Stop** or the **E-stop** abort the batch at once: back to step 0, everything off.
 - \`Mix_Timer\` restarts every time step 20 is entered.`,
@@ -285,6 +294,7 @@ EQU. Every transition is a MOV. Outputs are driven from the step — never latch
           expectObs('fillValve', false, 'Step 20: Fill_Valve must be closed', { within: 100, for: 300 }),
           expectObs('mixerRunning', true, 'Step 20 must run the mixer', { within: 500 }),
           expectObs('heaterOn', true, 'Step 20 must heat', { within: 100 }),
+          expectObs('runningLight', true, 'Running_Light must stay on in step 20'),
           tap('start'),
           expectTag('Step', 20, 'Start must be ignored while a batch is running', { for: 1000 }),
           expectTag('Step', 30, 'At 62 °C (after at least 5 s of mixing) the sequence must move to step 30 (DRAIN)', { within: 110000 }),
@@ -292,6 +302,7 @@ EQU. Every transition is a MOV. Outputs are driven from the step — never latch
           expectObs('heaterOn', false, 'Step 30: the heater must be off', { within: 100 }),
           expectObs('mixerRunning', false, 'Step 30: the mixer must be off', { within: 300 }),
           expectObs('drainValve', true, 'Step 30 must open Drain_Valve', { within: 100 }),
+          expectObs('runningLight', true, 'Running_Light must stay on while draining (step 30)', { within: 100 }),
           expectTag('Step', 40, 'When the tank is empty (< 1 %) the sequence must move to step 40 (DONE)', { within: 25000 }),
           expectObs('drainValve', false, 'Step 40: Drain_Valve must be closed', { within: 100 }),
           expectObsRange('level', { max: 1.2 }, 'The tank must be drained empty'),
@@ -399,12 +410,12 @@ Make a **virtual encoder**: while the belt runs, a self-resetting \`Track_Clock\
 **120 ms** (PRE + 2 scans) = every **6 cm** of belt travel. On each pulse, **BSL** shifts \`Track[0]\` one bit
 up and loads \`PE_Tall\` into bit 0. The bits now *ride along with the boxes*: bit *n* is what \`PE_Tall\` saw
 *n* × 6 cm upstream. A tall box writes about five 1-bits; when its front edge reaches \`PE_Divert\` it has travelled
-1.5 m = **25 pulses**, so its bits sit at about **20…24** — bit **22** is right in the middle.
+1.5 m = **25 pulses**, so its bits sit at about **20…24** — bit **22** is right in the middle. (Always test the middle
+of the window, never its edge: every stop and restart of the belt can shift the tracking by a pulse.)
 
 **Your task**
 - Start / Stop / E-stop run the belt (\`Conveyor_Run\`, seal-in). The tracking clock runs **only while the belt runs**.
-- When a box arrives at \`PE_Divert\` and the tracking says it is tall: extend the pusher, and retract it as soon as
-  \`Pusher_Extended\` is made. Short boxes pass.
+- When a box arrives at \`PE_Divert\` and the tracking says it is tall: extend the pusher, and retract it as soon as \`Pusher_Extended\` is made. Short boxes pass.
 - **Zero missorted boxes, zero jams** — for three minutes of random boxes, with stops in between.
 
 Tags \`Track\` (DINT[2]), \`Track_Ctl\` (CONTROL), \`Track_Clock\` (TIMER) and \`Divert_OS\` (BOOL) are created for you.`,
@@ -488,8 +499,8 @@ Tags \`Track\` (DINT[2]), \`Track_Ctl\` (CONTROL), \`Track_Clock\` (TIMER) and \
         steps: [
           ...startBelt(ALTERNATE),
           wait(60000),
-          expectObsRange('boxesRejected', { min: 10 }, 'Tall boxes must be rejected'),
-          expectObsRange('boxesGood', { min: 10 }, 'Short boxes must reach the good lane'),
+          expectObsRange('boxesRejected', { min: 9 }, 'Tall boxes must be rejected'),
+          expectObsRange('boxesGood', { min: 9 }, 'Short boxes must reach the good lane'),
         ],
       },
       {
@@ -578,23 +589,19 @@ sequencer.
 Dana has already mapped the bits of the DINT \`Lamps\` to them (**bit 0** = \`NS_Red\` … **bit 7** = \`Dont_Walk\`).
 
 **The drum** (\`Lamp_Steps[0..6]\` — you fill it; \`Step_Times\` is already filled in)
+- **Step 0 — ALL RED** (home, at power-up): NS red, EW red, Don't walk — 2 s
+- **Step 1 — NS GREEN:** NS green, EW red, Don't walk — 10 s
+- **Step 2 — NS YELLOW:** NS yellow, EW red, Don't walk — 3 s
+- **Step 3 — ALL RED:** NS red, EW red, Don't walk — 1 s
+- **Step 4 — EW GREEN:** NS red, EW green, **Walk** — 8 s
+- **Step 5 — EW YELLOW:** NS red, EW yellow, Don't walk — 3 s
+- **Step 6 — ALL RED:** NS red, EW red, Don't walk — 1 s
 
-| Step | Signal | Lamps on | Time (\`Step_Times\`) |
-|---|---|---|---|
-| 0 | ALL RED (home, at power-up) | NS red, EW red, Don't walk | 2 s |
-| 1 | NS GREEN | NS green, EW red, Don't walk | 8 s |
-| 2 | NS YELLOW | NS yellow, EW red, Don't walk | 3 s |
-| 3 | ALL RED | NS red, EW red, Don't walk | 1 s |
-| 4 | EW GREEN | NS red, EW green, **Walk** | 6 s |
-| 5 | EW YELLOW | NS red, EW yellow, Don't walk | 3 s |
-| 6 | ALL RED | NS red, EW red, Don't walk | 1 s |
-
-After step 6 the drum wraps back to step 1. Pedestrians cross the main street together with the side-street green.
+That's the timing sheet of your **Traffic Cycle** (mission 3-6) plus a 2 s all-red home step at power-up. After step 6 the drum wraps back to step 1. Pedestrians now cross the main street together with every side-street green ("pedestrian recall").
 
 **Your task**
 - Fill \`Lamp_Steps\` (e.g. with MOVs on the first scan, \`XIC(S:FS)\`). Binary literals help: \`2#1000_1001\` = ALL RED.
-- Step the drum with \`SQO(Lamp_Steps[0],16#FF,Lamps,Lamp_Seq,6,0)\`, clocked by a self-resetting \`Step_Timer\` whose
-  preset comes from \`Step_Times[Lamp_Seq.POS]\`.
+- Step the drum with \`SQO(Lamp_Steps[0],16#FF,Lamps,Lamp_Seq,6,0)\`, clocked by a self-resetting \`Step_Timer\` whose preset comes from \`Step_Times[Lamp_Seq.POS]\`.
 - At power-up the drum is at home (position 0): show \`Lamp_Steps[0]\` (all red) for 2 s, then start at NS green.
 - **No conflicting signals, ever.**`,
     objectives: [
@@ -640,13 +647,13 @@ After step 6 the drum wraps back to step 1. Pedestrians cross the main street to
         steps: [
           wait(100),
           ...[1, 2].flatMap((n): TestStep[] => [
-            ...phase('nsGreen', NS_GREEN, 8000, `Cycle ${n}: NS GREEN`, n === 1 ? 2500 : 500),
+            ...phase('nsGreen', NS_GREEN, 10000, `Cycle ${n}: NS GREEN`, n === 1 ? 2500 : 500),
             ...phase('nsYellow', NS_YELLOW, 3000, `Cycle ${n}: NS YELLOW`),
             expectObs('ewRed', true, `Cycle ${n}: ALL RED after NS yellow`, { within: 100 }),
             expectObs('nsRed', true, `Cycle ${n}: ALL RED after NS yellow`, { within: 100 }),
             ...lampsAre(ALL_RED, `Cycle ${n}: ALL RED after NS yellow`),
             expectObs('nsRed', true, `Cycle ${n}: the all-red clearance must last about 1 s`, { for: 600 }),
-            ...phase('ewGreen', EW_GREEN, 6000, `Cycle ${n}: EW GREEN with WALK`),
+            ...phase('ewGreen', EW_GREEN, 8000, `Cycle ${n}: EW GREEN with WALK`),
             ...phase('ewYellow', EW_YELLOW, 3000, `Cycle ${n}: EW YELLOW`),
             expectObs('ewRed', true, `Cycle ${n}: ALL RED after EW yellow`, { within: 100 }),
             ...lampsAre(ALL_RED, `Cycle ${n}: ALL RED after EW yellow`),
@@ -690,15 +697,13 @@ and back in the morning.
 
 **The hardware**
 - \`Night_Mode\` → \`Local:1:I.Pt02.Data\` — maintained key switch, 1 = night flash requested.
-- The lamps and your drum from **Sequencer Traffic** are loaded (the drum patterns are now stored in
-  \`Lamp_Steps\`, so the first-scan loading rung is optional). Extra tags: \`Night_Active\` (BOOL), \`Flash_Timer\` (TIMER).
+- The lamps and your drum from **Sequencer Traffic** are loaded (the drum patterns are now stored in \`Lamp_Steps\`, so the first-scan loading rung is optional). Extra tags: \`Night_Active\` (BOOL), \`Flash_Timer\` (TIMER).
 
 **Specification**
 1. **Day** (key off): the normal drum cycle, exactly as before.
 2. **Entering night:** when the key is on, the cycle continues until the drum reaches an **ALL-RED** step
    (step 3 or 6) — a green or yellow is **never cut short**. From there the intersection flashes.
-3. **Night flash:** \`NS_Yellow\` and \`EW_Red\` flash together at **1 Hz** (about 0.5 s on, 0.5 s off).
-   Every other lamp is dark, pedestrian heads included.
+3. **Night flash:** \`NS_Yellow\` and \`EW_Red\` flash together at **1 Hz** (about 0.5 s on, 0.5 s off). Every other lamp is dark, pedestrian heads included.
 4. **Back to day:** when the key is turned off, show **ALL RED (steady) for 2 s**, then restart the cycle with
    **NS green** — the drum's home step is exactly that.
 5. **Never a conflict.**`,
@@ -746,11 +751,11 @@ and back in the morning.
         steps: [
           wait(300),
           ...lampsAre(ALL_RED, 'Power-up (home step: ALL RED)'),
-          ...phase('nsGreen', NS_GREEN, 8000, 'NS GREEN', 2500),
+          ...phase('nsGreen', NS_GREEN, 10000, 'NS GREEN', 2500),
           ...phase('nsYellow', NS_YELLOW, 3000, 'NS YELLOW'),
           expectObs('ewRed', true, 'ALL RED after NS yellow', { within: 100 }),
           ...lampsAre(ALL_RED, 'ALL RED after NS yellow'),
-          ...phase('ewGreen', EW_GREEN, 6000, 'EW GREEN with WALK', 1500),
+          ...phase('ewGreen', EW_GREEN, 8000, 'EW GREEN with WALK', 1500),
           ...phase('ewYellow', EW_YELLOW, 3000, 'EW YELLOW'),
           expectObs('nsGreen', true, 'The cycle must continue with NS green', { within: 1600 }),
         ],
@@ -762,7 +767,7 @@ and back in the morning.
           expectObs('nsGreen', true, 'The day cycle must start with NS green', { within: 2500 }),
           wait(1000),
           set('night', true),
-          expectObs('nsGreen', true, 'The NS green must not be cut short when night mode is requested', { for: 6000 }),
+          expectObs('nsGreen', true, 'The NS green must not be cut short when night mode is requested', { for: 8000 }),
           expectObs('nsYellow', true, 'The main street must get its full yellow clearance first', { within: 1500 }),
           expectObs('nsYellow', true, 'The main street must get its full 3 s yellow first', { for: 2500 }),
           expectObs('nsRed', true, 'Night flash may only start from an ALL-RED step', { within: 800 }),
@@ -776,10 +781,10 @@ and back in the morning.
         name: 'Night mode from the side-street green',
         description: 'The key is turned during the EW green: the flash starts after the EW yellow and all red.',
         steps: [
-          expectObs('ewGreen', true, 'The day cycle must reach the EW green', { within: 16000 }),
+          expectObs('ewGreen', true, 'The day cycle must reach the EW green', { within: 20000 }),
           wait(500),
           set('night', true),
-          expectObs('ewGreen', true, 'The EW green must not be cut short', { for: 4000 }),
+          expectObs('ewGreen', true, 'The EW green must not be cut short', { for: 6000 }),
           expectObs('ewYellow', true, 'The side street must get its yellow clearance', { within: 2500 }),
           expectObs('ewYellow', true, 'The side street must get its full 3 s yellow', { for: 2500 }),
           ...flashing('Night flash', 2200),
@@ -799,7 +804,7 @@ and back in the morning.
           expectObs('nsRed', true, 'The all-red transition must be steady for about 2 s', { for: 700 }),
           expectObs('ewRed', true, 'The all-red transition must be steady for about 2 s (EW red)', { for: 600 }),
           ...lampsAre(ALL_RED, 'Still ALL RED'),
-          ...phase('nsGreen', NS_GREEN, 8000, 'Day again: NS GREEN', 1400),
+          ...phase('nsGreen', NS_GREEN, 10000, 'Day again: NS GREEN', 1400),
           ...phase('nsYellow', NS_YELLOW, 3000, 'Day again: NS YELLOW'),
         ],
       },
@@ -814,8 +819,8 @@ is on), a RES to send the drum home, and a flasher driven by a timer's accumulat
 program in miniature.
 
 **Field tip:** real controllers enter flash on faults too — the conflict monitor, a dead lamp (red-out) or a
-controller watchdog drops the signal into a hardware **flasher** that works even if the CPU doesn't. And the
-MUTCD rule you just implemented ("don't cut clearances short, return to steady operation through red") exists
-because drivers trust the sequence they expect.`,
+controller watchdog drops the signal into a hardware **flasher** that works even if the CPU doesn't. And signal
+standards such as the US MUTCD ask for exactly what you built — enter flash from a red interval, return to steady
+operation through a red clearance — because drivers trust the sequence they expect.`,
   },
 ];

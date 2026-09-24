@@ -127,8 +127,12 @@ const NO_CONFLICT: MissionInvariant = {
   message: 'CONFLICT: NS and EW both had green/yellow (or WALK was lit with NS green/yellow) — somebody just crashed',
 };
 
-/** Instant lamp check (used right after a synchronising edge). */
-const lampNow = (id: string, value: boolean, message: string): TestStep => expectObs(id, value, message);
+/**
+ * Lamp check right after a synchronising edge. It allows the lamp 50 ms (a few scans) to settle, so rung
+ * order does not matter (e.g. red rungs written before the green ones overlap for one scan at power-up).
+ * A lamp that is really lit in the wrong phase still fails, and so does anything the conflict monitor sees.
+ */
+const lampNow = (id: string, value: boolean, message: string): TestStep => expectObs(id, value, message, { within: 50 });
 
 /**
  * One full fixed-time cycle starting at the rising edge of NS green (already synchronised). Every
@@ -548,10 +552,11 @@ Tip: a TON's **\`.TT\`** (timer timing) bit is ON exactly while it is counting.`
     objectives: [
       'Start sounds the horn for 3 s, then the motor starts and seals in',
       'The horn stops when the motor starts',
-      'Stop / E-stop during the warning cancel the start',
+      'Stop / E-stop / overload during the warning cancel the start',
+      'Stop / E-stop / overload stop a running motor — no restart after a release or reset',
       'No horn when Start is pressed on a running motor',
     ],
-    concepts: ['TON', '.TT', '.DN', 'XIC', 'XIO', 'OTE'],
+    concepts: ['TON', 'XIC', 'XIO', 'OTE'],
     starter: {
       rungs: [SAFE_SEAL],
       comments: ['Line 3 start/stop (chapter 2) — starts instantly, no warning!'],
@@ -627,6 +632,60 @@ Tip: a TON's **\`.TT\`** (timer timing) bit is ON exactly while it is counting.`
         ],
       },
       {
+        name: 'Overload during the warning cancels the start',
+        steps: [
+          wait(200),
+          tap('start'),
+          expectObs('horn', true, 'Pressing Start must sound the warning horn', { within: 100 }),
+          wait(1000),
+          set('overload_trip', true),
+          expectObs('horn', false, 'An overload trip during the warning must cancel the start (horn off) — OL_OK belongs in the request rung too', {
+            within: 150,
+            for: 300,
+          }),
+          wait(700),
+          set('overload_trip', false),
+          tap('overload_reset'),
+          expectObs('overloadTripped', false, 'Scenario check: the overload relay should accept the reset', { within: 200 }),
+          expectObs('horn', false, 'Resetting the overload must not sound the horn', { for: 500 }),
+          staysOff('DANGER: the motor started by itself after the overload reset — the trip must cancel the start request', 4000),
+        ],
+      },
+      {
+        name: 'E-stop on a running motor — no restart on release',
+        steps: [
+          wait(200),
+          tap('start'),
+          expectObs('contactor', true, 'The motor must start after the 3 s warning', { within: 3500, for: 500 }),
+          set('estop', true),
+          stops('The E-stop must stop the motor'),
+          wait(1000),
+          set('estop', false),
+          expectObs('horn', false, 'Releasing the E-stop must not sound the horn', { for: 500 }),
+          staysOff('DANGER: the motor restarted when the E-stop was released — EStop_OK must drop the motor seal-in', 4000),
+          tap('start'),
+          expectObs('horn', true, 'After the E-stop, Start must give a fresh warning', { within: 100 }),
+          expectObs('contactor', false, 'The restart must wait for the full 3 s warning', { for: 2500 }),
+          expectObs('contactor', true, 'After the warning the motor must start again', { within: 700 }),
+        ],
+      },
+      {
+        name: 'Overload on a running motor — no restart after the reset',
+        steps: [
+          wait(200),
+          tap('start'),
+          expectObs('contactor', true, 'The motor must start after the 3 s warning', { within: 3500, for: 500 }),
+          set('overload_trip', true),
+          stops('The overload trip must stop the motor'),
+          wait(1000),
+          set('overload_trip', false),
+          tap('overload_reset'),
+          expectObs('overloadTripped', false, 'Scenario check: the overload relay should accept the reset', { within: 200 }),
+          expectObs('horn', false, 'Resetting the overload must not sound the horn', { for: 500 }),
+          staysOff('DANGER: the motor restarted when the overload was reset — OL_OK must drop the motor seal-in', 4000),
+        ],
+      },
+      {
         name: 'Stop a running motor — no restart, no horn',
         steps: [
           wait(200),
@@ -660,7 +719,8 @@ the two — the heart of every sequence you'll write. The \`.TT\` bit gave you "
 
 **Field tip:** start-up warnings are required on conveyors that can't be seen end to end, and many plants use
 a *warning → short pause → start* pattern, or a horn plus a rotating beacon. And a stop pressed during the
-warning must always cancel the start — never "remember" it.`,
+warning must always cancel the start — never "remember" it. The same goes for the E-stop and the overload:
+after a release or a reset the machine restarts only on a fresh Start press, with a fresh warning.`,
   },
 
   // -------------------------------------------------------------------------
@@ -699,7 +759,7 @@ For the demo, Dana sets the service interval to **30 s** (\`30000\`); on the rea
       '`Fault_Light` = SERVICE DUE at 30 s of run time (and E-stop / overload as before)',
       'Holding Jog 2 s while stopped resets the meter; a short press or a running motor does not',
     ],
-    concepts: ['RTO', 'RES', 'TON', '.DN', '.ACC'],
+    concepts: ['RTO', 'RES', 'TON'],
     starter: {
       rungs: [SAFE_SEAL, '', '', '', RUN_LIGHT, READY_LIGHT, FAULT_LIGHT],
       comments: [
@@ -795,7 +855,7 @@ For the demo, Dana sets the service interval to **30 s** (\`30000\`); on the rea
           wait(28_000),
           expectObs('faultLight', false, 'SERVICE DUE came on too early — the service interval is 30 s of run time', { for: 300 }),
           expectObs('faultLight', true, 'SERVICE DUE (Fault_Light) must come on after 30 s of run time', { within: 2500 }),
-          expectObs('contactor', true, 'The motor keeps running when service is due (it is a reminder, not a trip)'),
+          expectObs('contactor', true, 'The motor must keep running when service is due (it is a reminder, not a trip)', { for: 2000 }),
           tap('stop'),
           stops('Stop must stop the motor'),
           expectObs('faultLight', true, 'SERVICE DUE must stay on after the motor stops (an RTO keeps .DN)', { for: 2000 }),
@@ -897,7 +957,7 @@ Each head shows **exactly one** lamp at a time. \`Dont_Walk\` is lit steadily; \
       'One lamp per head; `Dont_Walk` steady, `Walk` off',
       'Never a conflict',
     ],
-    concepts: ['TON', '.DN', 'XIC', 'XIO', 'OTE'],
+    concepts: ['TON', 'XIC', 'XIO', 'OTE'],
     starter: {
       rungs: ['', '', '', '', '', '', '', '', '', '', '', ''],
       comments: CYCLE_COMMENTS,
@@ -983,8 +1043,9 @@ mission 3-6 is loaded.
 **Specification**
 1. The vehicle cycle stays exactly as in 3-6.
 2. A press of \`Ped_PB\` is **remembered** (\`Ped_Request\`) until it is served.
-3. A request is served at the **start of the next NS red interval** — the moment NS yellow ends. WALK is then
-   lit for **6 s**. (A request that comes in later than that waits for the next cycle.)
+3. A request is served in the **first all-red** — the 1 s right after NS yellow ends, while every head is red.
+   A request that was already waiting lights WALK the moment NS yellow ends; one made during that all-red
+   lights it at once. WALK then stays lit for **6 s**. A request made after the all-red waits for the next cycle.
 4. After WALK, DON'T WALK **flashes** (0.5 s / 0.5 s, pedestrian clearance) until NS turns green again; then
    it is steady.
 5. Without a request: DON'T WALK steady, no WALK. One press = one WALK: the request is cleared once served.
@@ -993,12 +1054,12 @@ mission 3-6 is loaded.
 What a press *during* WALK does is up to you (we don't test it).`,
     objectives: [
       'The vehicle cycle is unchanged',
-      '`Ped_PB` latches a request that is served at the next NS red interval',
+      '`Ped_PB` latches a request that is served in the next all-red after NS yellow',
       'WALK 6 s, then flashing DON\'T WALK until NS green',
       'One press = one WALK; no WALK without a request',
       'Never WALK with NS green/yellow, never WALK + DON\'T WALK together',
     ],
-    concepts: ['TON', 'XIC', 'XIO', 'OTE', 'OTL', 'OTU'],
+    concepts: ['TON', 'XIC', 'XIO', 'OTE'],
     starter: {
       rungs: [...CYCLE_TIMERS, '', '', '', '', '', ...CYCLE_LAMPS, 'OTE(Dont_Walk);', ''],
       comments: [
@@ -1063,6 +1124,14 @@ What a press *during* WALK does is up to you (we don't test it).`,
           expectObs('walk', true, 'WALK must stay lit for 6 s', { for: 5600 }),
           expectObs('walk', false, 'WALK must end after 6 s', { within: 700 }),
           ...flashes('dontWalk', "Pedestrian clearance: DON'T WALK", 2),
+          expectObs('ewYellow', true, 'The vehicle cycle must reach EW yellow', { within: 4000 }),
+          expectObs('dontWalk', false, "DON'T WALK must keep flashing until NS turns green — it went steady during EW yellow", {
+            within: 1100,
+          }),
+          expectObs('ewYellow', false, 'EW yellow must end after 3 s', { within: 3600 }),
+          expectObs('dontWalk', false, "DON'T WALK must keep flashing until NS turns green — it went steady during the last all-red", {
+            within: 1100,
+          }),
           expectObs('nsGreen', true, 'The vehicle cycle must continue to NS green', { within: 6000 }),
           expectObsRange('pedCrossed', { min: 1 }, 'The pedestrian must have made it across', {}),
           expectObs('dontWalk', true, "Once NS is green, DON'T WALK must be steady again", { within: 100, for: 3000 }),
@@ -1070,8 +1139,23 @@ What a press *during* WALK does is up to you (we don't test it).`,
         ],
       },
       {
+        name: 'Request during the first all-red is served at once',
+        description: 'The button is pressed 0.4 s into the all-red that follows NS yellow.',
+        steps: [
+          ...untilNsRedInterval(),
+          wait(400),
+          tap('ped', 100),
+          expectObs('walk', true, 'A request made during the first all-red (the 1 s after NS yellow) must light WALK at once', {
+            within: 300,
+          }),
+          expectObs('dontWalk', false, "DON'T WALK must be off during WALK", { within: 50 }),
+          expectObs('walk', true, 'WALK must stay lit for 6 s', { for: 5600 }),
+          expectObs('walk', false, 'WALK must end after 6 s', { within: 700 }),
+        ],
+      },
+      {
         name: 'Late request waits for the next cycle',
-        description: 'The button is pressed during EW green, after the NS red interval has started.',
+        description: 'The button is pressed during EW green, after the first all-red is over.',
         steps: [
           expectObs('ewGreen', true, 'The cycle must reach EW green', { within: 16_000 }),
           wait(1000),

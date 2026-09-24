@@ -8,6 +8,11 @@ import { expectObs, expectObsRange, expectTag, press, release, set, tap, wait } 
 
 /** Bits, timers, counters and one-shots (chapters 1–4). */
 const COUNT_PALETTE = ['XIC', 'XIO', 'OTE', 'OTL', 'OTU', 'ONS', 'OSR', 'OSF', 'TON', 'TOF', 'RTO', 'CTU', 'CTD', 'RES'];
+/**
+ * 4-4's palette: no timers. The lesson is that an edge *proves* the car is through while a timer only
+ * guesses — and a lucky TOF on the exit loop would pass, because every simulated car drives off at full speed.
+ */
+const GATE_PALETTE = COUNT_PALETTE.filter((i) => !['TON', 'TOF', 'RTO'].includes(i));
 
 // ---------------------------------------------------------------------------
 // Conveyor (4-1, 4-2)
@@ -124,12 +129,12 @@ blocks the eye for 0.6 s — dozens of scans — but the CTU only counts the **e
 **Your task**
 - Start / Stop / E-stop control the belt like the motor in chapter 2 (seal-in, Stop wins, the E-stop drops the
   seal: no restart when it's released).
-- \`Box_Count.ACC\` counts every box that leaves the belt at the exit eye — and keeps counting across stops.
-  Use a preset of 1000 (the shift target).`,
+- \`Box_Count.ACC\` counts every box that leaves the belt at the exit eye — and keeps counting across stops
+  and E-stops. Use a preset of 1000 (the shift target).`,
     objectives: [
       'Start / Stop / E-stop seal-in for `Conveyor_Run`',
-      '`Box_Count.ACC` = boxes delivered past `PE_Exit`',
-      'The count survives stops and restarts',
+      '`Box_Count.ACC` = boxes delivered past `PE_Exit` (a box that stops on the eye is still one box)',
+      'The count survives stops, E-stops and restarts',
     ],
     concepts: ['CTU', 'XIC', 'OTE'],
     starter: {
@@ -189,6 +194,49 @@ blocks the eye for 0.6 s — dozens of scans — but the CTU only counts the **e
           ...stopAndCompare(11, 'After 36 s of running'),
         ],
       },
+      {
+        name: 'A box stopped on the eye is still one box',
+        description: 'Stop is pressed while the first box is right on the exit eye; the belt is restarted after 1 s.',
+        steps: [
+          set('box_pattern', ALL_SHORT),
+          wait(200),
+          tap('start'),
+          expectTag('PE_Exit', true, 'Scenario check: the first box should reach the exit eye', { within: 15_000 }),
+          wait(100),
+          tap('stop'),
+          beltStops('Stop must stop the belt', 300),
+          expectTag('PE_Exit', true, 'Scenario check: the box should be standing on the exit eye'),
+          wait(700),
+          tap('start'),
+          beltRuns('Start must restart the belt', 300),
+          expectObs('boxesGood', 1, 'Scenario check: the first box should run off the end after the restart', { within: 2000 }),
+          wait(500),
+          ...stopAndCompare(
+            1,
+            'A box that stopped on the eye and moved on is still ONE box — count the eye itself, not "eye AND belt running"',
+          ),
+        ],
+      },
+      {
+        name: 'The count survives an E-stop',
+        steps: [
+          set('box_pattern', ALL_SHORT),
+          wait(200),
+          tap('start'),
+          expectObs('boxesGood', 2, 'Scenario check: two boxes should reach the good lane', { within: 20_000 }),
+          wait(500),
+          set('estop', true),
+          beltStops('The E-stop must stop the belt', 300),
+          expectTag('Box_Count.ACC', 2, 'The E-stop must not clear the shift count (2 boxes so far)', { within: 50, for: 500 }),
+          set('estop', false),
+          expectTag('Box_Count.ACC', 2, 'Releasing the E-stop must not change the shift count', { for: 1000 }),
+          tap('start'),
+          beltRuns('Start must restart the belt after the E-stop', 500),
+          expectObs('boxesGood', 3, 'Scenario check: the next box should reach the good lane', { within: 4000 }),
+          wait(500),
+          ...stopAndCompare(3, 'Counting must carry on after the E-stop'),
+        ],
+      },
     ],
     invariants: [BELT_STOP_WINS, BELT_ESTOP],
     parInstructions: 7,
@@ -238,7 +286,7 @@ What Start does while the belt is already running is up to you.`,
       'Start after a complete batch resets the counter (RES) and starts a new batch',
       'Stop / E-stop mid-batch pause it without losing the count',
     ],
-    concepts: ['CTU', 'RES', '.DN', 'XIC', 'XIO'],
+    concepts: ['CTU', 'RES', 'XIC', 'XIO'],
     starter: {
       rungs: [BELT_SEAL, 'XIC(PE_Exit)CTU(Batch_Count,10,0);', '', ''],
       comments: ['Belt start/stop (4-1)', 'Count the boxes of the batch', 'New batch: reset the counter', 'CASE FULL light (amber)'],
@@ -270,7 +318,11 @@ What Start does while the belt is already running is up to you.`,
           expectTag('Batch_Count.ACC', 10, 'The belt stopped with Batch_Count.ACC not at 10 — stop exactly at the preset'),
           expectObsRange('boxesGood', { min: 9, max: 10 }, 'The belt must stop when the 10th box reaches the exit — not earlier, not later'),
           expectObs('lightAmber', true, 'CASE FULL (Light_Amber) must light when the batch is complete', { within: 150, for: 2000 }),
-          expectObs('conveyorRunning', false, 'The belt must stay stopped until the packer presses Start', { for: 3000 }),
+          expectObs('conveyorRunning', false, 'The belt must stay stopped until the packer presses Start — it must never start the next case by itself', {
+            for: 20_000,
+          }),
+          expectObs('lightAmber', true, 'CASE FULL must stay lit until the packer presses Start'),
+          expectTag('Batch_Count.ACC', 10, 'The full case must stay counted (10) until the packer presses Start — only Start resets it'),
         ],
       },
       {
@@ -374,6 +426,12 @@ that passes power for **one scan only**, on the false→true transition of its r
 - **ONS** (*One Shot*) — an input instruction with a storage bit: \`XIC(PB_Green)ONS(Green_ONS)…\`
 - **OSR** / **OSF** — output one-shots (rising / falling edge) that set an output bit for one scan.
 
+**A sneak peek at chapter 5's math** (you only need three boxes here)
+- \`ADD(Source A, Source B, Dest)\` — Dest = A + B, e.g. \`ADD(Press_Count,1,Press_Count)\` adds one.
+- \`MUL(Source A, Source B, Dest)\` — Dest = A × B. \`MUL(Press_Count,10,Meter_1)\` multiplies the DINT count by 10
+  and stores it in the REAL \`Meter_1\` (the controller converts the integer for you).
+- \`CLR(Dest)\` — Dest = 0.
+
 **The hardware**
 - \`PB_Green\` → \`Local:1:I.Data.8\` — green push button, **N.O.**
 - \`PB_Red\` → \`Local:1:I.Data.9\` — red push button, **N.C.**: **1 when NOT pressed**.
@@ -474,14 +532,14 @@ that passes power for **one scan only**, on the false→true transition of its r
     ],
     parInstructions: 6,
     allowedInstructions: ['XIC', 'XIO', 'OTE', 'OTL', 'OTU', 'ONS', 'OSR', 'OSF', 'ADD', 'SUB', 'MUL', 'MOV', 'CLR', 'CPT'],
-    requiredInstructions: ['ADD'],
+    // No requiredInstructions: ADD or CPT both do the math, and the counting tests already enforce the one-shot.
     debrief: `Without the one-shot, a single press added 20 or 30 — one per scan. The ONS stores the rung state in its
 storage bit and passes power only on the scan where the rung goes from false to true. (A CTU does the same
 thing internally with its \`.CU\` bit — that's why counters "just work".)
 
 **Field tip:** every storage bit must be **unique** — reuse \`Green_ONS\` on another rung and both one-shots
-break in confusing ways. And never put an ONS in front of a timer or a RES "to be safe": a one-shot on a
-permanent condition is the classic reason a machine "only works the first time".`,
+break in confusing ways. And never put a one-shot in front of a **TON**: it is enabled for a single scan,
+resets on the next one and never times out — a classic "the machine just sits there" call.`,
   },
 
   // -------------------------------------------------------------------------
@@ -511,6 +569,8 @@ has a dented company truck to prove it: the old timer-based program dropped the 
   the **falling edge** of \`Entry_PE\` — then it comes down. One ticket, one car.
 - **Exit:** a car on \`Exit_Loop\` raises the exit gate; it comes down on the falling edge of \`Exit_PE\`.
 - **Never** lower an arm onto a car. Gates stay down when nobody is there, and don't open before the ticket.
+- The timer instructions are locked out of the palette for this job: after Gus's truck, nobody wants a gate
+  that *guesses*.
 
 **Meet the OSF** (*One Shot Falling*): \`XIC(Entry_PE)OSF(Entry_OSF,Entry_Passed)\` sets \`Entry_Passed\` for exactly one
 scan when \`Entry_PE\` goes from 1 to 0.`,
@@ -520,7 +580,7 @@ scan when \`Entry_PE\` goes from 1 to 0.`,
       'Each car gets its own gate cycle',
       'An arm never comes down on a car',
     ],
-    concepts: ['OSF', 'OSR', 'ONS', 'XIC', 'XIO', 'OTE'],
+    concepts: ['OSF', 'ONS', 'XIC', 'XIO', 'OTE'],
     starter: {
       rungs: ['', '', '', ''],
       comments: ['Entry: detect the car leaving the eye (falling edge)', 'Entry gate', 'Exit: detect the car leaving the eye', 'Exit gate'],
@@ -593,7 +653,7 @@ scan when \`Entry_PE\` goes from 1 to 0.`,
     ],
     invariants: [NO_GATE_HITS],
     parInstructions: 12,
-    allowedInstructions: COUNT_PALETTE,
+    allowedInstructions: GATE_PALETTE,
     debrief: `A gate is a seal-in with a smart "stop" condition: not a timer that *guesses* how long a car takes, but the
 **falling edge** of the eye that *proves* the car is through. The OSF turned a level (the eye is clear) into an
 event (the eye just became clear) — the difference between "no car" and "the car has gone".
@@ -631,8 +691,8 @@ twenty minutes looking for a space that didn't exist. The plant manager wants th
 3. When the garage is **full**, a ticket must **not** raise the entry gate (the driver turns around). A car
    that is already under the arm still gets through, of course.
 4. The exit gate always works.
-5. The attendant's \`Reset_Key\` sets the count back to **0** (used when the count has drifted, e.g. after the
-   night shift left cars that were counted out on Friday).
+5. The attendant's \`Reset_Key\` sets the count back to **0**. It's for when the count has drifted — e.g. it was
+   zeroed on Friday night with two cars still parked, and when they leave on Monday the count reads −2.
 6. Never lower an arm onto a car; never let a 13th car in.`,
     objectives: [
       '`Car_Count`: CTU on entry passes, CTD on exit passes (same counter, preset 12)',
@@ -641,7 +701,7 @@ twenty minutes looking for a space that didn't exist. The plant manager wants th
       '`Reset_Key` clears the count',
       'No gate hits, never more than 12 cars inside',
     ],
-    concepts: ['CTU', 'CTD', 'RES', 'OSF', '.DN'],
+    concepts: ['CTU', 'CTD', 'RES', 'OSF'],
     starter: {
       rungs: [...GATE_RUNGS, '', '', '', '', ''],
       comments: [
@@ -690,12 +750,18 @@ twenty minutes looking for a space that didn't exist. The plant manager wants th
         steps: [
           ...manualGarage(),
           ...send('spawn_entry', 3),
+          expectTag('Entry_Loop', true, 'A car should arrive on the entry loop', { within: 10_000 }),
+          expectObs('entryGateUp', true, 'The ticket must raise the entry gate', { within: 4000 }),
+          expectTag('Car_Count.ACC', 0, 'The gate is up but the car has not passed the entry eye yet: count cars that have passed the eye, not tickets or gate openings'),
           expectObs('carsEntered', 1, 'The first car must get in', { within: 15_000 }),
           expectTag('Car_Count.ACC', 1, 'One car in: Car_Count.ACC must be 1', { within: 100, for: 500 }),
           expectObs('carsEntered', 3, 'All three cars must get in', { within: 15_000 }),
           expectTag('Car_Count.ACC', 3, 'Three cars in: Car_Count.ACC must be 3', { within: 100, for: 500 }),
           wait(8000),
           ...send('spawn_exit', 2),
+          expectTag('Exit_Loop', true, 'A leaving car should drive onto the exit loop', { within: 20_000 }),
+          wait(200),
+          expectTag('Car_Count.ACC', 3, 'The leaving car is still inside, waiting for the exit gate: count it out when it has passed the exit eye, not on the loop'),
           expectObs('carsExited', 2, 'Both leaving cars must get out', { within: 25_000 }),
           expectTag('Car_Count.ACC', 1, 'Three in, two out: Car_Count.ACC must be 1', { within: 100, for: 1000 }),
           expectObs('openSign', true, 'SPACES must be lit with 1 car inside', { for: 100 }),
@@ -731,7 +797,7 @@ twenty minutes looking for a space that didn't exist. The plant manager wants th
       },
       {
         name: 'Attendant reset',
-        description: 'Two cars from Friday night (counted out already) leave; the count drifts; the attendant fixes it.',
+        description: 'The count was zeroed with two cars still parked: they leave, the count drifts below zero, the attendant fixes it.',
         steps: [
           ...manualGarage(2),
           ...send('spawn_exit', 2),

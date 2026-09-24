@@ -193,17 +193,47 @@ export function countInstructions(project: Project): number {
   return n;
 }
 
-/** Mnemonics used anywhere in the project, with their location. */
-function usedInstructions(project: Project): Array<{ op: string; program: string; routine: string; rung: number }> {
-  const out: Array<{ op: string; program: string; routine: string; rung: number }> = [];
+/** Mnemonics used anywhere in the project, with their operands and location. */
+function usedInstructions(
+  project: Project,
+): Array<{ op: string; operands: readonly string[]; program: string; routine: string; rung: number }> {
+  const out: Array<{ op: string; operands: readonly string[]; program: string; routine: string; rung: number }> = [];
   for (const p of project.programs) {
     for (const r of p.routines) {
       r.rungs.forEach((rung, i) => {
-        for (const ins of instructionsOf(rung.elements)) out.push({ op: ins.op.toUpperCase(), program: p.name, routine: r.name, rung: i });
+        for (const ins of instructionsOf(rung.elements)) {
+          out.push({ op: ins.op.toUpperCase(), operands: ins.operands, program: p.name, routine: r.name, rung: i });
+        }
       });
     }
   }
   return out;
+}
+
+/**
+ * Canonical form of operands for comparisons: case-insensitive, whitespace-free, controller-scoped alias
+ * tags followed to their base (`Motor_Starter` and `Local:2:O.Data.0` compare equal).
+ */
+function operandCanonicalizer(project: Project): (operand: string) => string {
+  const aliases = new Map<string, string>();
+  for (const t of project.tags) if (t.aliasFor) aliases.set(lower(t.name), t.aliasFor);
+  return (operand) => {
+    let cur = operand.replace(/\s+/g, '');
+    for (let depth = 0; depth < 8; depth++) {
+      const m = /^([^.[]+)(.*)$/.exec(cur);
+      const target = m ? aliases.get(lower(m[1]!)) : undefined;
+      if (!m || target === undefined) break;
+      cur = target.replace(/\s+/g, '') + m[2]!;
+    }
+    return lower(cur);
+  };
+}
+
+/** `'OTL'` or `'OTL(Motor_Starter)'` -> mnemonic + optional operand. */
+function parseRequirement(req: string): { op: string; operand?: string } {
+  const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(\s*([^()]*?)\s*\))?\s*$/.exec(req);
+  if (!m) return { op: req.trim().toUpperCase() };
+  return m[2] ? { op: m[1]!.toUpperCase(), operand: m[2] } : { op: m[1]!.toUpperCase() };
 }
 
 /** Mission palette rules as verification-style error messages. */
@@ -223,8 +253,16 @@ export function paletteErrors(mission: MissionDef, project: Project): string[] {
     }
   }
   for (const req of mission.requiredInstructions ?? []) {
-    const op = req.toUpperCase();
-    if (!used.some((u) => u.op === op)) errors.push(`Error: This mission requires the ${op} instruction — use it in your program.`);
+    const { op, operand } = parseRequirement(req);
+    if (operand === undefined) {
+      if (!used.some((u) => u.op === op)) errors.push(`Error: This mission requires the ${op} instruction — use it in your program.`);
+      continue;
+    }
+    const canonical = operandCanonicalizer(project);
+    const want = canonical(operand);
+    if (!used.some((u) => u.op === op && u.operands.some((o) => canonical(o) === want))) {
+      errors.push(`Error: This mission requires the ${op} instruction on ${operand} — use ${op}(${operand}) in your program.`);
+    }
   }
   return errors;
 }

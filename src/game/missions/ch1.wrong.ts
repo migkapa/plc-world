@@ -25,6 +25,9 @@ export const CH1_WRONG: WrongAnswerSet = {
     { rungs: ['XIC(Switch_2)XIO(Switch_3)OTE(Light_4);'], why: 'XIO on the second key' },
     { rungs: ['XIC(Switch_2)OTE(Light_4);', 'XIC(Switch_3)OTE(Light_4);'], why: 'two rungs: last one wins' },
     { rungs: ['XIC(Switch_2)XIC(Switch_3)OTE(Light_5);'], why: 'wrong lamp' },
+    { rungs: ['[XIC(Switch_2)XIC(Switch_3),XIC(Switch_0)]OTE(Light_4);'], why: 'a third switch alone arms the rig (defeats the two-person rule)' },
+    { rungs: ['XIC(Switch_2)XIC(Switch_3)XIO(Switch_0)OTE(Light_4);'], why: 'an unrelated switch blocks arming' },
+    { rungs: ['[XIC(Switch_2)XIC(Switch_3),XIC(Switch_2)XIC(Switch_7)]OTE(Light_4);'], why: 'operator key + an unrelated switch arms the rig' },
   ],
   '1-4': [
     { rungs: ['XIC(PB_Black_1)OTE(Buzzer);', 'XIC(PB_Black_2)OTE(Buzzer);'], why: 'duplicate destructive bit: station A never works' },
@@ -104,6 +107,24 @@ export const CH1_WRONG: WrongAnswerSet = {
         'XIC(Switch_0)XIO(Switch_1)OTE(Buzzer);',
       ],
       why: 'CALL needs both buttons and misses the lamp test',
+    },
+    {
+      rungs: [
+        '[XIC(Switch_0)XIC(Switch_1)XIC(PB_Red),XIC(PB_Green)]OTE(Light_0);',
+        '[XIC(PB_Black_1),XIC(PB_Black_2),XIC(PB_Green)]OTE(Light_2);',
+        '[XIO(PB_Red),XIC(PB_Green)]OTE(Light_4);',
+        '[XIC(Switch_0)XIO(Switch_1),XIO(PB_Red)]OTE(Buzzer);',
+      ],
+      why: "buzzer also on STOP (carried over from 1-5) — caught in 'READY and the guard buzzer'",
+    },
+    {
+      rungs: [
+        '[XIC(Switch_0)XIC(Switch_1)XIC(PB_Red),XIC(PB_Green)]OTE(Light_0);',
+        '[XIC(PB_Black_1)XIO(PB_Black_2),XIO(PB_Black_1)XIC(PB_Black_2),XIC(PB_Green)]OTE(Light_2);',
+        '[XIO(PB_Red),XIC(PB_Green)]OTE(Light_4);',
+        'XIC(Switch_0)XIO(Switch_1)OTE(Buzzer);',
+      ],
+      why: "CALL as the exclusive OR from 1-6: dark with both call buttons held — caught in 'CALL from either station'",
     },
   ],
 };

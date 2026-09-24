@@ -105,7 +105,11 @@ export interface MissionDef {
   parInstructions?: number;
   /** Restrict the palette (undefined = everything). */
   allowedInstructions?: string[];
-  /** Instructions the program must use (e.g. ['OTL','OTU'] in a latch lesson); checked like a verify error. */
+  /**
+   * Instructions the program must use (e.g. ['OTL','OTU'] in a latch lesson); checked like a verify error.
+   * An entry may name the operand too, e.g. 'OTL(Motor_Starter)' (case-insensitive, aliases resolved), so a
+   * dummy instruction on an unrelated tag does not satisfy the lesson.
+   */
   requiredInstructions?: string[];
   /** Mission ids that must be completed first (defaults to the previous mission in the chapter). */
   requires?: string[];

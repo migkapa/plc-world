@@ -37,6 +37,15 @@ const EW_YELLOW = 'XIC(T_EW_Green.DN)XIO(T_EW_Yellow.DN)OTE(EW_Yellow);';
 const EW_RED = '[XIO(T_All_Red_1.DN),XIC(T_EW_Yellow.DN)]OTE(EW_Red);';
 const LAMPS = [NS_GREEN, NS_YELLOW, NS_RED, EW_GREEN, EW_YELLOW, EW_RED];
 const DW_STEADY = 'OTE(Dont_Walk);';
+/** Red = neither green nor yellow, with the red rungs BEFORE the green/yellow rungs (a one-scan overlap at power-up). */
+const RED_FIRST_LAMPS = [
+  'XIO(NS_Green)XIO(NS_Yellow)OTE(NS_Red);',
+  'XIO(EW_Green)XIO(EW_Yellow)OTE(EW_Red);',
+  NS_GREEN,
+  NS_YELLOW,
+  EW_GREEN,
+  EW_YELLOW,
+];
 
 const PED_REQ = '[XIC(Ped_PB),XIC(Ped_Request)]XIO(Walk)OTE(Ped_Request);';
 const PED_ACTIVE = '[XIC(Ped_Request)XIC(T_NS_Yellow.DN)XIO(T_All_Red_1.DN),XIC(Walk_Active)]XIC(T_NS_Yellow.DN)OTE(Walk_Active);';
@@ -133,6 +142,10 @@ export const CH3_WRONG: WrongAnswerSet = {
       why: 'E-stop does not cancel the warning',
     },
     { rungs: [WARN_REQ, WARN_TMR, '[XIC(Warn_Timer.TT),XIC(Motor_Starter)]OTE(Horn);', WARN_MOTOR], why: 'horn keeps sounding while running' },
+    {
+      rungs: ['[XIC(Start_PB),XIC(Start_Warning)]XIO(Warn_Timer.DN)XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Start_Warning);', WARN_TMR, WARN_HORN, WARN_MOTOR],
+      why: 'warning request not blocked while running: Start on a running motor sounds the horn again',
+    },
     { rungs: [WARN_REQ, WARN_TMR, 'XIC(Warn_Timer.DN)OTE(Horn);', WARN_MOTOR], why: 'horn after the delay instead of before' },
     { rungs: [WARN_REQ, 'XIC(Start_Warning)TOF(Warn_Timer,3000,0);', WARN_HORN, WARN_MOTOR], why: 'TOF instead of TON' },
     { rungs: [WARN_REQ, 'XIC(Start_Warning)TON(Warn_Timer,300,0);', WARN_HORN, WARN_MOTOR], why: '0.3 s warning' },
@@ -147,6 +160,26 @@ export const CH3_WRONG: WrongAnswerSet = {
     {
       rungs: ['[XIC(Start_PB),XIC(Start_Warning)]XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Start_Warning);', WARN_TMR, 'XIC(Start_Warning)OTE(Horn);', 'XIC(Warn_Timer.DN)XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Motor_Starter);'],
       why: 'horn on the request: it never stops while running',
+    },
+    {
+      rungs: [WARN_REQ, WARN_TMR, WARN_HORN, '[XIC(Warn_Timer.DN),XIC(Motor_Starter)]XIC(Stop_PB)XIC(OL_OK)OTE(Motor_Starter);'],
+      why: 'E-stop missing from the motor seal: the motor restarts (no horn) the moment the E-stop is released',
+    },
+    {
+      rungs: [WARN_REQ, WARN_TMR, WARN_HORN, '[XIC(Warn_Timer.DN),XIC(Motor_Starter)]XIC(Stop_PB)XIC(EStop_OK)OTE(Motor_Starter);'],
+      why: 'overload missing from the motor seal: the motor restarts the moment the overload is reset',
+    },
+    {
+      rungs: [WARN_REQ, WARN_TMR, WARN_HORN, '[XIC(Warn_Timer.DN),XIC(Motor_Starter)]XIC(Stop_PB)OTE(Motor_Starter);'],
+      why: 'only Stop in the motor seal: E-stop release / overload reset restart the motor',
+    },
+    {
+      rungs: ['[XIC(Start_PB),XIC(Start_Warning)]XIO(Motor_Starter)XIC(Stop_PB)XIC(EStop_OK)OTE(Start_Warning);', WARN_TMR, WARN_HORN, WARN_MOTOR],
+      why: 'overload missing from the request: the warning times out during a trip and the motor starts when the overload is reset',
+    },
+    {
+      rungs: ['[XIC(Start_PB),XIC(Start_Warning)]XIO(Motor_Starter)XIC(Stop_PB)XIC(EStop_OK)OTE(Start_Warning);', WARN_TMR, 'XIC(Warn_Timer.TT)XIC(OL_OK)OTE(Horn);', WARN_MOTOR],
+      why: 'overload only silences the horn: the request keeps timing and the motor starts after the reset',
     },
   ],
   '3-5': [
@@ -171,6 +204,18 @@ export const CH3_WRONG: WrongAnswerSet = {
     { rungs: [SAFE_SEAL, HOUR_RTO, HOLD_TON, HOLD_RES, RUN_LIGHT, READY_LIGHT, 'XIC(Run_Timer.DN)OTE(Fault_Light);'], why: 'FAULT lamp lost the E-stop / overload indication' },
     { rungs: [SAFE_SEAL, 'XIC(Motor_Aux)RTO(Run_Timer,3000,0);', HOLD_TON, HOLD_RES, RUN_LIGHT, READY_LIGHT, FAULT_SERVICE], why: 'preset 3 s instead of 30 s' },
     { rungs: [SAFE_SEAL, HOUR_RTO, HOLD_TON, HOLD_RES, RUN_LIGHT, READY_LIGHT, '[XIO(EStop_OK),XIO(OL_OK),XIC(Run_Timer.TT)]OTE(Fault_Light);'], why: 'lamp on .TT: lit while running' },
+    {
+      rungs: [
+        '[XIC(Start_PB),XIC(Motor_Starter)]XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)XIO(Run_Timer.DN)OTE(Motor_Starter);',
+        HOUR_RTO,
+        HOLD_TON,
+        HOLD_RES,
+        RUN_LIGHT,
+        READY_LIGHT,
+        FAULT_SERVICE,
+      ],
+      why: 'SERVICE DUE trips the motor (it is a reminder, not a trip)',
+    },
   ],
   '3-6': [
     {
@@ -257,6 +302,18 @@ export const CH3_WRONG: WrongAnswerSet = {
       rungs: ped({ dw: '[XIO(Walk_Active),XIC(T_Walk.DN)XIO(T_Flash_On.DN)]OTE(Dont_Walk);', flash: ['XIC(T_Walk.DN)XIO(T_Flash_Off.DN)TON(T_Flash_On,1500,0);', 'XIC(T_Flash_On.DN)TON(T_Flash_Off,1500,0);'] }),
       why: 'clearance flashing far too slow',
     },
+    {
+      rungs: ped({ active: '[XIC(Ped_Request)XIC(T_NS_Yellow.DN)XIO(T_All_Red_1.DN),XIC(Walk_Active)]XIC(T_NS_Yellow.DN)XIO(T_EW_Green.DN)OTE(Walk_Active);' }),
+      why: "pedestrian phase ends at EW yellow: DON'T WALK stops flashing 4 s before NS green",
+    },
+    {
+      rungs: ped({ active: '[XIC(Ped_Request)XIC(T_NS_Yellow.DN)XIO(T_All_Red_1.DN),XIC(Walk_Active)]XIC(T_NS_Yellow.DN)XIO(T_EW_Yellow.DN)OTE(Walk_Active);' }),
+      why: "pedestrian phase ends at the last all-red: DON'T WALK steady 1 s before NS green",
+    },
+    {
+      rungs: ped({ active: '[XIC(Ped_Request)XIC(NS_Yellow),XIC(Walk_Active)]XIC(T_NS_Yellow.DN)OTE(Walk_Active);' }),
+      why: 'served only on the scan NS yellow ends (yellow lamp still on): a press during the first all-red waits a whole cycle',
+    },
   ],
 };
 
@@ -293,6 +350,27 @@ export const CH3_RIGHT: WrongAnswerSet = {
       rungs: [WARN_REQ, WARN_TMR, 'XIC(Start_Warning)XIO(Warn_Timer.DN)OTE(Horn);', WARN_MOTOR],
       why: 'horn = request AND NOT done',
     },
+    {
+      rungs: [
+        'XIC(Start_PB)XIO(Motor_Starter)OTL(Start_Warning);',
+        '[XIO(Stop_PB),XIO(EStop_OK),XIO(OL_OK),XIC(Motor_Starter)]OTU(Start_Warning);',
+        WARN_TMR,
+        WARN_HORN,
+        WARN_MOTOR,
+      ],
+      why: 'request latched with OTL, unlatched by Stop / E-stop / overload or the running motor',
+    },
+    {
+      rungs: [
+        'XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Motor_OK);',
+        '[XIC(Start_PB),XIC(Start_Warning)]XIO(Motor_Starter)XIC(Motor_OK)OTE(Start_Warning);',
+        WARN_TMR,
+        WARN_HORN,
+        '[XIC(Warn_Timer.DN),XIC(Motor_Starter)]XIC(Motor_OK)OTE(Motor_Starter);',
+      ],
+      tags: [{ name: 'Motor_OK', dataType: 'BOOL' }],
+      why: 'Stop / E-stop / overload collected in one permissive bit',
+    },
   ],
   '3-5': [
     {
@@ -319,6 +397,7 @@ export const CH3_RIGHT: WrongAnswerSet = {
       why: 'lamps from the timing (.TT) bits',
     },
     { rungs: [...LAMPS, ...TIMERS, DW_STEADY], why: 'lamp rungs before the timers' },
+    { rungs: [...TIMERS, ...RED_FIRST_LAMPS, DW_STEADY], why: 'reds = neither green nor yellow, written first (one-scan overlap at power-up)' },
   ],
   '3-7': [
     {
@@ -338,6 +417,10 @@ export const CH3_RIGHT: WrongAnswerSet = {
         PED_WALK,
       ],
       why: 'pedestrian phase with OTL/OTU',
+    },
+    {
+      rungs: [...TIMERS, PED_REQ, PED_ACTIVE, PED_TWALK, ...PED_FLASH, ...RED_FIRST_LAMPS, PED_DW, PED_WALK],
+      why: 'reds written first, derived from the green/yellow outputs',
     },
   ],
 };

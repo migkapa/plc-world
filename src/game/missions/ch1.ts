@@ -196,6 +196,7 @@ form a logical **AND**: power only reaches the coil if every contact passes it.`
       '`Light_4` is OFF with no key or only one key ON',
       '`Light_4` is ON while both `Switch_2` AND `Switch_3` are ON',
       '`Light_4` drops out as soon as either key is turned OFF',
+      'No other switch can arm the rig (or stop it from arming)',
     ],
     concepts: ['XIC', 'OTE'],
     starter: { rungs: [''], comments: ['ARMED lamp: operator key AND supervisor key'] },
@@ -236,6 +237,21 @@ form a logical **AND**: power only reaches the coil if every contact passes it.`
           lamp('light4', false, 'Light_4 must turn OFF as soon as the supervisor key goes OFF'),
         ],
       },
+      {
+        name: 'Other switches do not matter',
+        description: 'Flips every other switch: only the two keys may arm the rig.',
+        steps: [
+          wait(100),
+          ...[0, 1, 4, 5, 6, 7].map((n) => sw(n, true)),
+          lamp('light4', false, 'ARMED must stay OFF — only Switch_2 AND Switch_3 may arm the rig, no other switch'),
+          sw(2, true),
+          lamp('light4', false, 'ARMED must stay OFF with only the operator key ON, whatever the other switches do'),
+          sw(3, true),
+          lamp('light4', true, 'Both keys ON must arm the rig, whatever position the other switches are in'),
+          sw(2, false),
+          lamp('light4', false, 'ARMED must drop when the operator key goes OFF, whatever the other switches do'),
+        ],
+      },
     ],
     parInstructions: 3,
     allowedInstructions: BITS,
@@ -257,8 +273,9 @@ tape one button down. "Anti-tie-down" is the term to search for.`,
     sceneId: 'trainer',
     difficulty: 2,
     xp: 80,
-    briefing: `Assembly line 2 is 40 meters long. Before anyone reaches into the conveyor, the operator sounds the
-**warning buzzer** — and there must be a button at **each end** of the line.
+    briefing: `Assembly line 2 is 40 meters long. Before the conveyor is restarted after a stop, the operator sounds
+the **warning buzzer** so everybody along the line steps clear — and there must be a button at **each end**
+of the line.
 
 **The hardware**
 - \`PB_Black_1\` → \`Local:1:I.Data.10\` — black flush push button at station A, **N.O.** (1 while pressed).
@@ -333,7 +350,10 @@ writes its bit **every** scan, true *or* false. Only the last rung "wins", so st
 Studio 5000 warns about it at verify time: *Duplicate destructive bit reference*.
 
 **Field tip:** one output, one OTE. When several conditions drive an output, gather them in branches on a
-single rung — the next tech will thank you.`,
+single rung — the next tech will thank you.
+
+And a safety note: a warning buzzer only tells people the line is about to move — it never makes it safe to
+reach in. Anyone who puts a hand into a conveyor first **locks out and tags out** (LOTO) its energy sources.`,
   },
 
   // -------------------------------------------------------------------------
@@ -438,7 +458,7 @@ pressed". The instruction describes the **bit**, never the device.`,
     kind: 'build',
     sceneId: 'trainer',
     difficulty: 3,
-    xp: 100,
+    xp: 120,
     briefing: `The warehouse mezzanine stairs have a light switch at the **bottom** and another at the **top**.
 Flipping **either** switch must toggle the stair light — whatever position the other one is in.
 Electricians call it a *three-way switch circuit*; in logic it's an **exclusive OR (XOR)**.
@@ -513,8 +533,8 @@ has an **XOR** instruction, but it works on whole integers bit by bit — handy 
     tagline: 'Boss: a real operator panel — with a lamp test.',
     kind: 'boss',
     sceneId: 'trainer',
-    difficulty: 3,
-    xp: 150,
+    difficulty: 4,
+    xp: 250,
     briefing: `Final exam of the week. Riverside is shipping a new operator panel and you are programming it on the
 bench before it goes out. Dana hands you the spec sheet:
 
@@ -582,6 +602,7 @@ bench before it goes out. Dana hands you the spec sheet:
           press('pb_red'),
           lamp('light0', false, 'READY must go OFF while STOP is pressed (PB_Red is N.C. — pressed reads 0)'),
           lamp('light4', true, 'The STOP lamp must light while STOP is pressed'),
+          lamp('buzzer', false, 'STOP must not sound the buzzer — the buzzer is only for an open guard (the guard is closed here)'),
           release('pb_red'),
           lamp('light0', true, 'READY must return when STOP is released'),
           lamp('light4', false, 'The STOP lamp must go OFF when STOP is released'),
@@ -603,6 +624,12 @@ bench before it goes out. Dana hands you the spec sheet:
           lamp('light2', true, 'CALL must light while PB_Black_2 is held'),
           release('pb_black2'),
           lamp('light2', false, 'CALL must go OFF when PB_Black_2 is released'),
+          press('pb_black1'),
+          press('pb_black2'),
+          lamp('light2', true, 'CALL must light while BOTH call buttons are held (either OR both — not exclusive OR)'),
+          release('pb_black1'),
+          release('pb_black2'),
+          lamp('light2', false, 'CALL must go OFF when both call buttons are released'),
         ],
       },
       {

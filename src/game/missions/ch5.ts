@@ -74,9 +74,7 @@ ended up on the floor. Dana: *"Switches only tell you yes or no. A level **trans
 Time you learned to read a number."*
 
 **The hardware**
-- \`LT_101\` → \`Local:3:I.Ch0Data\` — radar level transmitter, 4–20 mA into a **1756-IF8**. The channel is
-  configured to scale the signal to **0.0–100.0 %** — a **REAL** tag (with a little noise, like any real
-  transmitter).
+- \`LT_101\` → \`Local:3:I.Ch0Data\` — radar level transmitter, 4–20 mA into a **1756-IF8**. The channel is configured to scale the signal to **0.0–100.0 %** — a **REAL** tag (with a little noise, like any real transmitter).
 - \`Fill_Valve\` → \`Local:2:O.Data.0\` — XV-101 inlet on/off valve (fills 4.5 % per second while open).
 - \`Start_PB\` → \`Local:1:I.Data.0\` — **N.O.**: 1 only while pressed.
 - \`Stop_PB\` → \`Local:1:I.Data.1\` — **N.C.**: **1 when NOT pressed**, 0 while pressed.
@@ -296,8 +294,7 @@ A box instruction on a rung by itself (no contacts) executes on every scan.`,
     debrief: `**MOV** and **CPT** are the workhorses of analog programming. Two traps you just avoided:
 
 - **Order of operations** — \`Pot_1+Pot_2/2\` is *not* an average; CPT follows normal math precedence.
-- **Data types** — Logix picks REAL math only if a source or the destination is REAL. Park the sum in a DINT
-  and 73.3 silently becomes 73 (Logix rounds, half to even), and your average is off by 0.15 %.
+- **Data types** — Logix picks REAL math only if a source or the destination is REAL. Park the sum in a DINT and 73.3 silently becomes 73 (Logix rounds, half to even), and your average is off by 0.15 %.
 
 **Field tip:** averaging two redundant transmitters is common, but a good program also *compares* them: if they
 disagree by more than a few percent, one of them is lying — raise a deviation alarm instead of averaging
@@ -326,8 +323,7 @@ than **80 %** (bottles fall over). You'll prototype the speed-reference logic on
 - \`Speed_Ref\` (REAL) — an internal tag for your calculation.
 
 **Your task**
-- Map the usable pot range **10 … 90 %** linearly onto the speed reference **20 … 80 %**:
-  Pot_1 = 10 → 20 %, Pot_1 = 50 → 50 %, Pot_1 = 90 → 80 %.
+- Map the usable pot range **10 … 90 %** linearly onto the speed reference **20 … 80 %**: Pot_1 = 10 → 20 %, Pot_1 = 50 → 50 %, Pot_1 = 90 → 80 %.
 - **Clamp** it: below 10 % the reference stays at **20 %**, above 90 % it stays at **80 %**.
 - Use **SCP** (Scale with Parameters) for the scaling. SCP does **not** clamp — it happily extrapolates
   (Pot_1 = 0 would give 12.5 %), so the limits are up to you.`,
@@ -446,10 +442,8 @@ safe band. You prototype it on the trainer, with \`Pot_1\` playing the tank leve
 - \`Buzzer\` → \`Local:2:O.Data.8\`.
 
 **Your task**
-- Each lamp is worth **12.5 %**: \`Light_n\` is ON when \`Pot_1 ≥ 12.5 × (n + 1)\`.
-  So 12.5 % lights \`Light_0\` only, 50 % lights \`Light_0\` … \`Light_3\`, and only a full 100 % lights all eight.
-- The \`Buzzer\` sounds while the level is **outside the 10–90 % band** (below 10 % the pump could run dry,
-  above 90 % the tank is about to overflow).
+- Each lamp is worth **12.5 %**: \`Light_n\` is ON when \`Pot_1 ≥ 12.5 × (n + 1)\`. So 12.5 % lights \`Light_0\` only, 50 % lights \`Light_0\` … \`Light_3\`, and only a full 100 % lights all eight.
+- The \`Buzzer\` sounds while the level is **outside the 10–90 % band** (below 10 % the pump could run dry, above 90 % the tank is about to overflow).
 - Lamps go off again when the level drops.
 
 **GEQ** is *Greater than or Equal*. **LIM** (*Limit Test*) is true when Low ≤ Test ≤ High — and when you give it a
@@ -567,21 +561,17 @@ explicit: **hysteresis**, not a single setpoint that chatters on and off every s
 - \`Start_PB\` (**N.O.**), \`Stop_PB\` (**N.C.**: 1 when not pressed), \`EStop_OK\` (**N.C.**: 1 = released).
 - \`LT_101\` — level, **REAL** 0–100 %. \`TT_101\` → \`Local:3:I.Ch1Data\` — temperature, **REAL** °C.
 - \`LSL_101\` → \`Local:1:I.Data.2\` — low level switch, 1 when the level is ≥ 10 % (heater element covered).
-- \`Fill_Valve\` (4.5 %/s of 15 °C water), \`Drain_Valve\` (5 %/s), \`Heater\` (full power), \`Mixer\` (agitator starter),
-  \`Running_Light\` (amber).
-- \`Mixer_Running\` → \`Local:1:I.Data.5\` — agitator starter auxiliary contact, **N.O.** (≈ 100 ms after \`Mixer\`).
-  The E-stop's second contact is hardwired in the **agitator** circuit only — **not** in the heater or the valves.
+- \`Fill_Valve\` (4.5 %/s of 15 °C water), \`Drain_Valve\` (5 %/s), \`Heater\` (full power), \`Mixer\` (agitator starter), \`Running_Light\` (amber).
+- \`Mixer_Running\` → \`Local:1:I.Data.5\` — agitator starter auxiliary contact, **N.O.** (≈ 100 ms after \`Mixer\`). The E-stop's second contact is hardwired in the **agitator** circuit only — **not** in the heater or the valves.
 - \`Discharge_PB\` (**N.O.**) — the CIP skid draws hot water while it is held.
 - \`System_On\` (BOOL) — an internal tag for the running state.
 
 **Functional specification**
-1. **Start** / **Stop** / **E-stop** control \`System_On\` (seal-in, Stop wins, no restart after an E-stop).
-   \`Running_Light\` = \`System_On\`.
+1. **Start** / **Stop** / **E-stop** control \`System_On\` (seal-in, Stop wins, no restart after an E-stop). \`Running_Light\` = \`System_On\`.
 2. **Level:** while running, \`Fill_Valve\` opens when \`LT_101\` < **50 %** and closes at **60 %** (hysteresis).
 3. **Discharge:** \`Drain_Valve\` is open while \`Discharge_PB\` is held (running or not).
 4. **Mixer:** runs while the system is on and \`LT_101\` ≥ **20 %** and \`LSL_101\` is made.
-5. **Heater:** only while the \`Mixer\` is commanded **and** proven running (\`Mixer_Running\`). Then: **ON below
-   58 °C, OFF above 62 °C**, and in between it keeps doing what it was doing.
+5. **Heater:** only while the \`Mixer\` is commanded **and** proven running (\`Mixer_Running\`). Then: **ON below 58 °C, OFF above 62 °C**, and in between it keeps doing what it was doing.
 6. Stop and the E-stop drop the heater and the fill valve **immediately**. Never overflow, never heat or mix dry.`,
     objectives: [
       'Start / Stop / E-stop run the system; Running_Light',
@@ -713,6 +703,10 @@ explicit: **hysteresis**, not a single setpoint that chatters on and off every s
           expectObs('mixerRunning', false, 'Stop must stop the mixer', { within: 300 }),
           expectObs('runningLight', false, 'RUNNING must go off after Stop', { within: 150 }),
           expectObs('fillValve', false, 'Nothing may restart by itself after Stop', { for: 2000 }),
+          press('discharge'),
+          expectObs('drainValve', true, 'Discharge must also work while the system is stopped (spec item 3: running or not)', { within: 150 }),
+          release('discharge'),
+          expectObs('drainValve', false, 'Releasing Discharge_PB must close Drain_Valve', { within: 150 }),
           tap('start'),
           expectObs('fillValve', true, 'Start must resume filling', { within: 150 }),
           expectObs('heaterOn', true, 'Start must resume heating', { within: 1000 }),

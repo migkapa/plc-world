@@ -178,3 +178,38 @@ describe.each(MISSIONS.map((m) => [m.id, m] as [string, MissionDef]))('mission %
     );
   }
 });
+
+describe('operand-aware requiredInstructions', () => {
+  const LIGHTS = [
+    'XIC(Motor_Aux)OTE(Run_Light);',
+    'XIC(EStop_OK)XIC(OL_OK)XIO(Motor_Aux)OTE(Ready_Light);',
+    '[XIO(EStop_OK),XIO(OL_OK)]OTE(Fault_Light);',
+  ];
+
+  it('2-4: a dummy OTL/OTU on an unrelated output does not satisfy the latch lesson', () => {
+    const m = getMission('2-4')!;
+    const dummy = [
+      '[XIC(Start_PB),XIC(Motor_Starter)]XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Motor_Starter);',
+      'XIO(Start_PB)XIC(Start_PB)OTL(Horn);',
+      'XIC(S:FS)OTU(Horn);',
+      ...LIGHTS,
+    ];
+    const r = runMission(m, dummy);
+    expect(r.passed).toBe(false);
+    expect(r.verifyErrors.join('\n')).toMatch(/requires the OTL instruction on Motor_Starter/);
+    expect(r.verifyErrors.join('\n')).toMatch(/requires the OTU instruction on Motor_Starter/);
+    // Behaviourally it is a (correct) seal-in: only the static rule can reject it.
+    expect(runMission(m, dummy, { enforcePalette: false }).passed).toBe(true);
+  });
+
+  it('2-4: the operand match is case-insensitive and resolves aliases', () => {
+    const m = getMission('2-4')!;
+    const r = runMission(m, [
+      'XIC(Start_PB)OTL(motor_starter);',
+      '[XIO(Stop_PB),XIO(EStop_OK),XIO(OL_OK),XIC(S:FS)]OTU(Local:2:O.Data.0);',
+      ...LIGHTS,
+    ]);
+    expect(r.verifyErrors).toEqual([]);
+    expect(r.passed, describeFailures(r)).toBe(true);
+  });
+});

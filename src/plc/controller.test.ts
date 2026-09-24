@@ -686,3 +686,36 @@ describe('readInputFromField', () => {
     expect(plc.readInputFromField('Local:1:I.Data.0')).toBe(true);
   });
 });
+
+describe('outputs at the PROG -> RUN transition', () => {
+  it('keep their Program-mode state until the first scan has run', async () => {
+    const { createProjectForScene } = await import('../sim/project');
+    const scene = {
+      hardware: {
+        platform: 'ControlLogix' as const,
+        chassis: '1756-A7' as const,
+        modules: [
+          { slot: 0, catalog: '1756-L85E' as const },
+          { slot: 1, catalog: '1756-IB16' as const },
+          { slot: 2, catalog: '1756-OB16E' as const },
+        ],
+      },
+      io: [],
+    };
+    const plc = createController(
+      createProjectForScene(scene, ['XIC(Local:1:I.Data.0)OTL(Local:2:O.Data.0);', 'XIC(S:FS)OTU(Local:2:O.Data.0);']),
+    );
+    expect(plc.requestMode('RUN')).toBe(true);
+    plc.scan(10);
+    plc.writeInputFromField('Local:1:I.Data.0', true);
+    plc.scan(10);
+    plc.writeInputFromField('Local:1:I.Data.0', false);
+    plc.scan(10);
+    expect(plc.readOutputForField('Local:2:O.Data.0')).toBe(true);
+    plc.requestMode('PROG');
+    plc.requestMode('RUN');
+    expect(plc.readOutputForField('Local:2:O.Data.0')).toBe(false);
+    plc.scan(10);
+    expect(plc.readOutputForField('Local:2:O.Data.0')).toBe(false);
+  });
+});

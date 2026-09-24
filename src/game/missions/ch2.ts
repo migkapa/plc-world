@@ -460,7 +460,8 @@ there so the *logic* knows what happened: to drop the seal, light the fault lamp
 
 **The trap:** Logix tags keep their values through Program mode and power cycles. When the controller goes
 to Run it performs a **prescan** that clears OTE outputs — but leaves OTL bits alone. A latched motor starter
-restarts the instant the controller returns to Run (after a download, a mode change or a power failure).
+restarts the instant the controller returns to Run after a mode change or a power failure (and even after a
+download, if the project file was saved with the bit set — for example after an upload).
 The first-scan flag **\`S:FS\`** is 1 during the first scan after entering Run.
 
 **Your task**
@@ -570,9 +571,10 @@ The first-scan flag **\`S:FS\`** is 1 during the first scan after entering Run.
     invariants: [STOP_WINS, ESTOP_DROPS, OVERLOAD_DROPS],
     parInstructions: 16,
     allowedInstructions: ['XIC', 'XIO', 'OTE', 'OTL', 'OTU'],
-    requiredInstructions: ['OTL', 'OTU'],
-    debrief: `OTL/OTU work, but they're **retentive**: the bit survives Program mode, a download of the same tags, and
-power cycles. The prescan clears OTE coils, so a seal-in circuit drops out naturally — a latched output does
+    // Operand-aware: a dummy OTL/OTU on some unrelated output must not satisfy the lesson.
+    requiredInstructions: ['OTL(Motor_Starter)', 'OTU(Motor_Starter)'],
+    debrief: `OTL/OTU work, but they're **retentive**: the bit survives Program mode and power cycles — and an
+upload/download round-trip carries it along too. The prescan clears OTE coils, so a seal-in circuit drops out naturally — a latched output does
 not. That's why many plant standards ban OTL on anything that moves, or require a first-scan unlatch like
 your \`XIC(S:FS)\` leg.
 
@@ -605,12 +607,14 @@ and the motor keeps running after the jog. The seal must come from **Start only*
 **Your task** (your safe start/stop from 2-3 is loaded)
 - Jog runs the motor only while held and **never seals in** — not even after a normal run.
 - Start/Stop keep working exactly as before.
-- **Stop, E-stop and the overload stop everything, jog included.**
+- **Stop, E-stop and the overload stop everything, jog included** — and, as in 2-3, nothing restarts by itself
+  after the E-stop is released or the overload is reset.
 - What Jog does while the motor is already running is up to you (we don't test it).`,
     objectives: [
       'Jog runs the motor only while held',
       'Jog never seals in',
       'Start still seals in, Stop still stops',
+      'E-stop / overload cancel the run: no restart after the release or reset',
       'Stop, E-stop and overload also block jog',
     ],
     concepts: ['XIC', 'XIO', 'OTE'],
@@ -684,22 +688,59 @@ and the motor keeps running after the jog. The seal must come from **Start only*
         ],
       },
       {
+        name: 'E-stop and overload during a normal run',
+        description: 'The run request must be dropped too, not only the output: no restart after the E-stop or the overload reset.',
+        steps: [
+          wait(200),
+          tap('start'),
+          runs('Start must run the motor'),
+          wait(300),
+          set('estop', true),
+          commandDrops('Pushing the E-stop must drop Motor_Starter'),
+          wait(200),
+          set('estop', false),
+          staysOff(
+            'DANGER: the motor restarted by itself after the E-stop was released — the E-stop must also break the Run_Latch seal-in',
+            1500,
+          ),
+          tap('start'),
+          runs('Start must work again after the E-stop is released'),
+          wait(300),
+          set('overload_trip', true),
+          commandDrops('An overload trip must drop Motor_Starter'),
+          wait(200),
+          set('overload_trip', false),
+          tap('overload_reset'),
+          expectObs('overloadTripped', false, 'The overload relay should reset', { within: 100 }),
+          staysOff(
+            'DANGER: the motor restarted by itself after the overload reset — the overload must also break the Run_Latch seal-in',
+            1500,
+          ),
+          tap('start'),
+          runs('Start must work again after the overload reset'),
+        ],
+      },
+      {
         name: 'Safety applies to jog',
+        description: 'Jog pressed while Stop is held, the E-stop is pushed or the overload is tripped.',
         steps: [
           wait(200),
           set('estop', true),
+          wait(50),
           press('jog'),
           noCommand('Jog must not command the motor while the E-stop is pushed', 500),
           release('jog'),
           set('estop', false),
           wait(200),
           press('stop'),
+          wait(50),
           press('jog'),
           noCommand('Stop must win over Jog', 500),
           release('jog'),
           release('stop'),
           wait(200),
           set('overload_trip', true),
+          wait(50),
           press('jog'),
           noCommand('Jog must not command the motor while the overload is tripped', 500),
           release('jog'),
@@ -760,7 +801,8 @@ request** when it wants the conveyor — but maintenance still needs local contr
 - **HAND:** local 3-wire control: Start runs and seals in, Stop stops. Remote_Run is ignored.
 - **AUTO:** the motor runs **while** Remote_Run is ON (no seal — the filler is in charge). Start is ignored.
 - Leaving HAND drops the seal: back in HAND the motor waits for Start.
-- In **every** position: Stop, E-stop and overload stop the motor. Keep the lights working.`,
+- In **every** position: Stop, E-stop and overload stop the motor. Keep the lights working.
+  (In AUTO there is no seal, so they only hold the motor off while they are active — more on that in the debrief.)`,
     objectives: [
       'OFF: the motor never runs',
       'HAND: Start/Stop seal-in; Remote_Run ignored',
@@ -894,8 +936,11 @@ request** when it wants the conveyor — but maintenance still needs local contr
     debrief: `One rung, two sources of command, one set of interlocks. Nested branches keep it readable: each leg
 reads like a sentence ("in HAND, Start or already running" / "in AUTO, the filler asks").
 
-Did you notice? In AUTO, if the E-stop is released while Remote_Run is still ON, the motor restarts by itself —
-the very thing mission 2-3 forbade. On **Commissioning Day** you'll fix it properly.
+Did you notice? In AUTO nothing is sealed in, so Stop and the E-stop only **hold** the motor off. Release
+Stop, twist the E-stop out or reset the overload while Remote_Run is still ON, and the motor restarts by
+itself — exactly what missions 2-1 and 2-3 taught you to prevent ("stays stopped"). The spec for this mission
+accepts it; the real fix is an **arming** memory that a Stop or a fault clears, so only a deliberate Start
+re-enables AUTO. That's your job on **Commissioning Day**.
 
 **Field tip:** in a hardwired HOA the HAND position often bypasses the PLC completely, so a dead PLC can't
 stop production. With a PLC-based HOA, make sure the interlocks (overload, E-stop) are still hardwired.`,
@@ -1000,6 +1045,8 @@ Internal tags \`Hand_Run\` and \`Auto_Armed\` (BOOL) are created for you.`,
           stops('HAND: Stop must stop the motor', 500),
           lightIs('runLight', false, 'RUN must go OFF when the motor stops'),
           lightIs('readyLight', true, 'READY must return when the motor stops'),
+          set('remote_run', true),
+          staysOff('In HAND, Remote_Run must not start the motor — the filler only has a say in AUTO', 1000),
         ],
       },
       {
@@ -1011,6 +1058,56 @@ Internal tags \`Hand_Run\` and \`Auto_Armed\` (BOOL) are created for you.`,
           runs('HAND: holding Jog must run the motor', 500),
           release('jog'),
           stops('Releasing Jog must stop the motor — jog never seals in', 1500),
+        ],
+      },
+      {
+        name: 'HAND: Stop, E-stop and overload block Jog',
+        steps: [
+          set('hoa', HAND),
+          wait(200),
+          set('estop', true),
+          wait(50),
+          press('jog'),
+          noCommand('Jog must not command the motor while the E-stop is pushed', 500),
+          release('jog'),
+          set('estop', false),
+          wait(200),
+          press('stop'),
+          wait(50),
+          press('jog'),
+          noCommand('Stop must win over Jog', 500),
+          release('jog'),
+          release('stop'),
+          wait(200),
+          set('overload_trip', true),
+          wait(50),
+          press('jog'),
+          noCommand('Jog must not command the motor while the overload is tripped', 500),
+          release('jog'),
+          set('overload_trip', false),
+          tap('overload_reset'),
+          staysOff('Nothing may start after the overload reset', 1000),
+          press('jog'),
+          runs('Jog must work again once everything is healthy'),
+          release('jog'),
+          stops('Releasing Jog must stop the motor'),
+        ],
+      },
+      {
+        name: 'HAND: E-stop, no restart',
+        steps: [
+          set('hoa', HAND),
+          wait(200),
+          tap('start'),
+          runs('HAND: Start must run the motor'),
+          wait(300),
+          set('estop', true),
+          commandDrops('The E-stop must drop Motor_Starter in HAND'),
+          wait(200),
+          set('estop', false),
+          staysOff('DANGER: HAND restarted by itself after the E-stop was released — the E-stop must also clear Hand_Run', 1500),
+          tap('start'),
+          runs('HAND: Start must work again after the E-stop'),
         ],
       },
       {
@@ -1077,6 +1174,27 @@ Internal tags \`Hand_Run\` and \`Auto_Armed\` (BOOL) are created for you.`,
           staysOff('DANGER: the motor restarted by itself after the E-stop was released', 2000),
           tap('start'),
           runs('Start must re-arm AUTO after the E-stop'),
+        ],
+      },
+      {
+        name: 'AUTO: overload disarms',
+        steps: [
+          set('hoa', AUTO),
+          wait(100),
+          tap('start'),
+          set('remote_run', true),
+          runs('AUTO: armed + Remote_Run must run the motor'),
+          wait(300),
+          set('overload_trip', true),
+          commandDrops('The overload trip must drop Motor_Starter in AUTO'),
+          lightIs('horn', true, 'The horn must sound while the overload is tripped'),
+          wait(200),
+          set('overload_trip', false),
+          tap('overload_reset'),
+          expectObs('overloadTripped', false, 'The overload relay should reset', { within: 100 }),
+          staysOff('DANGER: AUTO restarted by itself after the overload reset although Remote_Run is ON — the overload must disarm AUTO', 2000),
+          tap('start'),
+          runs('Start must re-arm AUTO after the overload reset'),
         ],
       },
       {

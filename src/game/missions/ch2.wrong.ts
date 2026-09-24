@@ -10,6 +10,12 @@ const RUN_LIGHT = 'XIC(Motor_Aux)OTE(Run_Light);';
 const READY_LIGHT = 'XIC(EStop_OK)XIC(OL_OK)XIO(Motor_Aux)OTE(Ready_Light);';
 const FAULT_LIGHT = '[XIO(EStop_OK),XIO(OL_OK)]OTE(Fault_Light);';
 const LIGHTS = [RUN_LIGHT, READY_LIGHT, FAULT_LIGHT];
+// 2-7 reference rungs (wrong answers below change one of them)
+const HAND_RUN_7 = '[XIC(Start_PB),XIC(Hand_Run)]XIC(HOA_Hand)XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Hand_Run);';
+const AUTO_ARMED_7 = '[XIC(Start_PB),XIC(Auto_Armed)]XIC(HOA_Auto)XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Auto_Armed);';
+const MOTOR_7 =
+  '[XIC(Hand_Run),XIC(HOA_Hand)XIC(Jog_PB),XIC(Auto_Armed)XIC(Remote_Run)]XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Motor_Starter);';
+const HORN_7 = 'XIO(OL_OK)OTE(Horn);';
 
 export const CH2_WRONG: WrongAnswerSet = {
   '2-1': [
@@ -104,6 +110,30 @@ export const CH2_WRONG: WrongAnswerSet = {
     {
       rungs: [SAFE_SEAL, 'XIC(Jog_PB)XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Motor_Starter);', ...LIGHTS],
       why: 'jog as a second OTE rung: overwrites the start/stop rung',
+    },
+    {
+      rungs: [
+        '[XIC(Start_PB),XIC(Run_Latch)]XIC(Stop_PB)OTE(Run_Latch);',
+        '[XIC(Run_Latch),XIC(Jog_PB)]XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Motor_Starter);',
+        ...LIGHTS,
+      ],
+      why: "Run_Latch without E-stop / overload: restarts by itself after the E-stop release or overload reset ('E-stop and overload during a normal run')",
+    },
+    {
+      rungs: [
+        '[XIC(Start_PB),XIC(Run_Latch)]XIC(Stop_PB)XIC(OL_OK)OTE(Run_Latch);',
+        '[XIC(Run_Latch),XIC(Jog_PB)]XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Motor_Starter);',
+        ...LIGHTS,
+      ],
+      why: 'Run_Latch without the E-stop: restarts by itself after the E-stop is released',
+    },
+    {
+      rungs: [
+        '[XIC(Start_PB),XIC(Run_Latch)]XIC(Stop_PB)XIC(EStop_OK)OTE(Run_Latch);',
+        '[XIC(Run_Latch),XIC(Jog_PB)]XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Motor_Starter);',
+        ...LIGHTS,
+      ],
+      why: 'Run_Latch without the overload: restarts by itself after the overload reset',
     },
   ],
   '2-6': [
@@ -226,6 +256,56 @@ export const CH2_WRONG: WrongAnswerSet = {
       ],
       why: 'Auto_Armed ignores the selector: stays armed through OFF',
     },
+    {
+      rungs: [
+        '[XIC(Start_PB),XIC(Hand_Run)]XIC(HOA_Hand)XIC(Stop_PB)XIC(OL_OK)OTE(Hand_Run);',
+        AUTO_ARMED_7,
+        MOTOR_7,
+        ...LIGHTS,
+        HORN_7,
+      ],
+      why: "Hand_Run without the E-stop: HAND restarts by itself after the E-stop release ('HAND: E-stop, no restart')",
+    },
+    {
+      rungs: [
+        HAND_RUN_7,
+        '[XIC(Start_PB),XIC(Auto_Armed)]XIC(HOA_Auto)XIC(Stop_PB)XIC(EStop_OK)OTE(Auto_Armed);',
+        MOTOR_7,
+        ...LIGHTS,
+        HORN_7,
+      ],
+      why: "Auto_Armed without the overload: AUTO restarts by itself after the overload reset ('AUTO: overload disarms')",
+    },
+    {
+      rungs: [
+        HAND_RUN_7,
+        AUTO_ARMED_7,
+        '[[XIC(Hand_Run),XIC(Auto_Armed)XIC(Remote_Run)]XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK),XIC(HOA_Hand)XIC(Jog_PB)]OTE(Motor_Starter);',
+        ...LIGHTS,
+        HORN_7,
+      ],
+      why: "jog leg bypasses Stop, E-stop and overload ('HAND: Stop, E-stop and overload block Jog')",
+    },
+    {
+      rungs: [
+        HAND_RUN_7,
+        AUTO_ARMED_7,
+        '[XIC(Hand_Run)XIC(Stop_PB),XIC(HOA_Hand)XIC(Jog_PB),XIC(Auto_Armed)XIC(Remote_Run)XIC(Stop_PB)]XIC(EStop_OK)XIC(OL_OK)OTE(Motor_Starter);',
+        ...LIGHTS,
+        HORN_7,
+      ],
+      why: 'Stop missing from the jog leg only: Stop does not beat Jog',
+    },
+    {
+      rungs: [
+        HAND_RUN_7,
+        AUTO_ARMED_7,
+        '[XIC(Hand_Run),XIC(HOA_Hand)XIC(Jog_PB),XIC(Auto_Armed)XIC(Remote_Run),XIC(HOA_Hand)XIC(Remote_Run)]XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Motor_Starter);',
+        ...LIGHTS,
+        HORN_7,
+      ],
+      why: "Remote_Run also runs the motor in HAND ('HAND: start, lights, stop')",
+    },
   ],
 };
 
@@ -284,6 +364,24 @@ export const CH2_RIGHT: WrongAnswerSet = {
         ...LIGHTS,
       ],
       why: 'jog while running drops the run request',
+    },
+    {
+      rungs: [
+        '[XIC(Start_PB),XIC(Run_Latch)]XIC(Stop_PB)XIO(Fault_Light)OTE(Run_Latch);',
+        '[XIC(Run_Latch),XIC(Jog_PB)]XIC(Stop_PB)XIO(Fault_Light)OTE(Motor_Starter);',
+        ...LIGHTS,
+      ],
+      why: 'interlock through the fault bit written one rung later (one-scan delay), as accepted in 2-3',
+    },
+    {
+      rungs: [
+        '[XIC(Start_PB),XIC(Run_Latch)]XIC(Healthy)OTE(Run_Latch);',
+        '[XIC(Run_Latch),XIC(Jog_PB)]XIC(Healthy)OTE(Motor_Starter);',
+        ...LIGHTS,
+        'XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Healthy);',
+      ],
+      tags: [{ name: 'Healthy', dataType: 'BOOL' }],
+      why: 'permissive bit written as the last rung (one-scan delay on Stop, E-stop and overload)',
     },
   ],
   '2-6': [

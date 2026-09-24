@@ -191,6 +191,10 @@ export const CH5_WRONG: WrongAnswerSet = {
       why: 'no drain valve',
     },
     {
+      rungs: [SYS, RUNL, FILL, 'XIC(System_On)XIC(Discharge_PB)OTE(Drain_Valve);', MIXER, HEATER],
+      why: 'drain gated by System_On: discharge dead while the system is stopped (spec: running or not)',
+    },
+    {
       rungs: [SYS, RUNL, FILL, DRAIN, MIXER, 'XIC(Mixer)XIC(Mixer_Running)LES(TT_101,58.0)OTL(Heater);', 'GRT(TT_101,62.0)OTU(Heater);'],
       why: 'latched heater that Stop / E-stop never unlatch',
     },

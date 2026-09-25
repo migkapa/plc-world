@@ -12,7 +12,7 @@ import type { ControlDef, SceneDefinition, SceneLogic, SimRuntime } from '../../
 import { SceneCanvas, useStageCamera } from '../../twin/Stage';
 import { cn } from '../../ui';
 import { ControlPad, FaultList } from './ControlPad';
-import { useControllerTick, useRuntimeValue } from './hooks';
+import { modalOpen, useControllerTick, useRuntimeValue } from './hooks';
 
 // ---------------------------------------------------------------------------
 // Error boundary & WebGL probe
@@ -81,14 +81,18 @@ function ShowTagsToggle() {
       type="button"
       onClick={toggle}
       aria-pressed={show}
-      title="Pin the I/O tag chips (alias · address · live value) on every device"
+      aria-label="Show I/O tags"
+      title={show ? 'Showing the I/O tag chips (alias · address · live value) on every device — click to show them on hover only' : 'Show I/O tags: pin the tag chips (alias · address · live value) on every device'}
       className={cn(
-        'pointer-events-auto flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border px-2 text-[11px] font-semibold backdrop-blur',
+        'pointer-events-auto flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border px-2 text-[11px] font-semibold whitespace-nowrap backdrop-blur',
         show ? 'border-emerald-400/50 bg-emerald-500/25 text-emerald-100' : 'border-white/10 bg-black/50 text-slate-200 hover:bg-white/10',
       )}
+      data-testid="show-io-tags"
     >
       {show ? <Eye size={13} /> : <EyeOff size={13} />}
-      I/O tags
+      <span>
+        <span className="hidden sm:inline">Show </span>I/O tags
+      </span>
     </button>
   );
 }
@@ -220,6 +224,8 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, faults =
   const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // an open dialog (hints, celebration, reset…) owns Escape, and F is not ours then either
+      if (modalOpen()) return;
       const t = e.target as HTMLElement | null;
       const typing = !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
       if (e.key === 'Escape' && expanded) {

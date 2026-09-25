@@ -256,7 +256,10 @@ export interface TankProps extends Placement {
 }
 
 export interface LevelSwitchProps extends Placement {
+  /** Switch OUTPUT (yellow LED): what goes to the PLC — e.g. a fail-safe N.C. high-high switch is on while DRY. */
   getActive: () => boolean;
+  /** Fork submerged in the product (tines look wet). Defaults to `getActive` (a N.O. "on when covered" switch). */
+  getWet?: () => boolean;
 }
 
 export interface TransmitterProps extends Placement {

@@ -9,10 +9,11 @@
  *  <TempTransmitter>   RTD assembly: thermowell + extension neck + round head transmitter with LCD
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef, type RefObject } from 'react';
+import { useMemo, useRef, type RefObject } from 'react';
 import * as THREE from 'three';
 import { Led } from '../../common';
 import type { LevelSwitchProps, TransmitterProps } from '../../contracts';
+import { useDisposeOnUnmount } from '../../dispose';
 import {
   type CableRoute,
   CABLE_YELLOW,
@@ -94,15 +95,16 @@ function drawLcd(ctx: CanvasRenderingContext2D, w: number, h: number, value: num
 // Vibrating fork level switch
 // ---------------------------------------------------------------------------
 
-export function LevelSwitch({ getActive, position, rotation, scale, onClick, cableTo }: LevelSwitchProps & Click) {
+export function LevelSwitch({ getActive, getWet, position, rotation, scale, onClick, cableTo }: LevelSwitchProps & Click) {
   const root = useRef<THREE.Group>(null);
   const ss = fm.polished();
-  // tines covered by the product look wet (glossier, slightly darker)
+  // tines covered by the product look wet (glossier, slightly darker) — independent of the output (N.C. / fail-safe)
   const forkMat = useMemo(() => fm.polished().clone(), []);
-  useEffect(() => () => forkMat.dispose(), [forkMat]);
+  useDisposeOnUnmount(forkMat);
   const wet = useRef(0);
   useFrame((_, dt) => {
-    wet.current += ((getActive() ? 1 : 0) - wet.current) * Math.min(1, dt * 2);
+    const submerged = getWet ? getWet() : getActive();
+    wet.current += ((submerged ? 1 : 0) - wet.current) * Math.min(1, dt * 2);
     forkMat.roughness = 0.32 - 0.22 * wet.current;
     forkMat.color.setScalar(1 - 0.25 * wet.current).multiply(FORK_TINT);
   });
@@ -291,7 +293,7 @@ export function LevelTransmitter({
   const ss = fm.polished();
   const beam = useRef<THREE.Mesh>(null);
   const beamMat = useMemo(() => radarBeamMaterial(), []);
-  useEffect(() => () => beamMat.dispose(), [beamMat]);
+  useDisposeOnUnmount(beamMat);
   const y0 = antenna === 'lens' ? -0.046 : -0.11;
   useFrame(({ clock }) => {
     const b = beam.current;

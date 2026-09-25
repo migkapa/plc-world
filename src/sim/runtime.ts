@@ -27,9 +27,17 @@ export interface SimRuntimeOptions {
 export interface SimRuntimeEx extends SimRuntime {
   /** Reset the plant; with `resetTags` also reset controller tag values (when the controller supports it). */
   resetScene(opts?: { resetTags?: boolean }): void;
+  /**
+   * Operator / test control changes: `listener(id, value)` runs after every `setControl()` (UI pad, 3D
+   * clicks, hotkeys, test steps), unthrottled. Returns an unsubscribe function.
+   */
+  onControl(listener: ControlListener): () => void;
   /** Stop forwarding controller events and drop all listeners. */
   dispose(): void;
 }
+
+/** Listener for `SimRuntimeEx.onControl`. */
+export type ControlListener = (id: string, value: boolean | number) => void;
 
 function defaultNow(): () => number {
   const perf = (globalThis as { performance?: { now(): number } }).performance;
@@ -54,6 +62,7 @@ class SimRuntimeImpl<S> implements SimRuntimeEx {
   private lastNotify = Number.NEGATIVE_INFINITY;
   private dirty = false;
   private readonly listeners = new Set<() => void>();
+  private readonly controlListeners = new Set<ControlListener>();
   private readonly io: IoAccess;
   private readonly unsubController: () => void;
 
@@ -156,6 +165,20 @@ class SimRuntimeImpl<S> implements SimRuntimeEx {
     this.logic.setControl(this.st, id, value);
     this.dirty = true;
     this.notify(true);
+    for (const l of [...this.controlListeners]) {
+      try {
+        l(id, value);
+      } catch (e) {
+        console.error('[sim] control listener failed', e);
+      }
+    }
+  }
+
+  onControl(listener: ControlListener): () => void {
+    this.controlListeners.add(listener);
+    return () => {
+      this.controlListeners.delete(listener);
+    };
   }
 
   getControl(id: string): boolean | number {
@@ -219,6 +242,7 @@ class SimRuntimeImpl<S> implements SimRuntimeEx {
   dispose(): void {
     this.unsubController();
     this.listeners.clear();
+    this.controlListeners.clear();
   }
 }
 

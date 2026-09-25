@@ -3,10 +3,13 @@
  * page actions and Download on the same row), the ladder editor (online, power flow animated) and a
  * compact list of verification problems (click to jump to the rung). When the panel is short (laptop
  * screens) the instruction palette collapses into one row so rungs keep most of the height.
+ *
+ * Game events from the ladder: Toggle Bit (`toggleBitUsed`) and "Edit Rung as Text" (`neutralTextUsed`)
+ * come from the editor's onToggleBit / onRungTextCommit callbacks.
  */
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, ChevronsDownUp, ChevronsUpDown, Download, GitBranchPlus, Info, PencilLine, TriangleAlert } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type ReactNode, type RefObject } from 'react';
-import { DEFAULT_FAVORITES, INSTR_DRAG_TYPE, InstrGlyph, LadderEditor, OnlineToolbar, type LadderEditorHandle } from '../../editor';
+import { DEFAULT_FAVORITES, INSTR_DRAG_TYPE, InstrGlyph, LadderEditor, OnlineToolbar, type EditsState, type LadderEditorHandle } from '../../editor';
 import { BranchGlyph, RungGlyph } from '../../editor/glyphs';
 import type { GameEvent } from '../../game/achievements';
 import { INSTRUCTIONS } from '../../plc/instructions';
@@ -14,7 +17,7 @@ import type { PlcController, Rung, VerifyError } from '../../plc/types';
 import { MAIN_PROGRAM, MAIN_ROUTINE } from '../../sim/project';
 import { Button, cn } from '../../ui';
 import { usePersistentState } from './hooks';
-import { friendlyVerifyError, mainRungs } from './program';
+import { exampleEntryFor, friendlyVerifyError, mainRungs } from './program';
 import type { WorkspaceRuntime } from './useWorkspaceRuntime';
 
 export interface LadderPanelProps {
@@ -30,18 +33,31 @@ export interface LadderPanelProps {
   className?: string;
 }
 
-const NEUTRAL_TEXT_SELECTOR = '[aria-label="Rung neutral text"]';
 /** Below this panel height the instruction palette collapses into a single row. */
 export const COMPACT_PALETTE_BELOW_PX = 440;
+/** How long the edits tile says "Edits Applied" after an online edit was accepted. */
+export const APPLIED_FLASH_MS = 2600;
 
-function AppliedIndicator({ at }: { at: number | null }) {
+/** True for APPLIED_FLASH_MS after each accepted online edit (`at` changes). */
+function useAppliedFlash(at: number | null): boolean {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     if (at === null) return;
     setVisible(true);
-    const h = window.setTimeout(() => setVisible(false), 2600);
+    const h = window.setTimeout(() => setVisible(false), APPLIED_FLASH_MS);
     return () => window.clearTimeout(h);
   }, [at]);
+  return visible;
+}
+
+/** The online toolbar's edits tile for the workspace state. */
+export function editsStateOf(pendingReason: WorkspaceRuntime['pendingReason'], justApplied: boolean): EditsState {
+  if (pendingReason === 'errors') return 'pending';
+  if (pendingReason === 'branch') return 'held';
+  return justApplied ? 'applied' : 'none';
+}
+
+function AppliedIndicator({ visible }: { visible: boolean }) {
   return (
     <span
       className={cn(
@@ -333,7 +349,6 @@ function LadderPanelImpl({ ws, editorRef, allowedInstructions, replayController,
   const localRef = useRef<LadderEditorHandle>(null);
   const ref = editorRef ?? localRef;
   const rootRef = useRef<HTMLDivElement>(null);
-  const nt = useRef({ focused: false, blurAt: 0 });
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
   const replay = replayController !== undefined;
@@ -357,14 +372,15 @@ function LadderPanelImpl({ ws, editorRef, allowedInstructions, replayController,
     return [...ws.errors.filter(own), ...ws.ruleErrors.filter((e) => e.rungIndex >= 0)];
   }, [ws.errors, ws.ruleErrors]);
 
-  const onChange = useCallback(
-    (next: Rung[]): void => {
-      const s = nt.current;
-      if (s.focused || performance.now() - s.blurAt < 600) onEventRef.current?.({ type: 'neutralTextUsed' });
-      ws.setRungs(next);
-    },
-    [ws],
-  );
+  const setRungs = ws.setRungs;
+  const onChange = useCallback((next: Rung[]): void => setRungs(next), [setRungs]);
+  const onToggleBit = useCallback(() => {
+    if (!replay) onEventRef.current?.({ type: 'toggleBitUsed' });
+  }, [replay]);
+  const onRungTextCommit = useCallback(() => onEventRef.current?.({ type: 'neutralTextUsed' }), []);
+  const exampleEntry = useMemo(() => exampleEntryFor(ws.scene, allowedInstructions), [ws.scene, allowedInstructions]);
+  const justApplied = useAppliedFlash(ws.appliedAt);
+  const editsState = replay ? 'none' : editsStateOf(ws.pendingReason, justApplied);
 
   const jump = (i: number): void => {
     const ed = ref.current;
@@ -385,16 +401,16 @@ function LadderPanelImpl({ ws, editorRef, allowedInstructions, replayController,
       className={cn('@container relative flex h-full min-h-0 min-w-0 flex-col bg-panel', className)}
       data-no-hotkeys=""
       data-testid="ladder-panel"
-      onFocusCapture={(e) => {
-        if (e.target instanceof Element && e.target.matches(NEUTRAL_TEXT_SELECTOR)) nt.current.focused = true;
-      }}
-      onBlurCapture={(e) => {
-        if (e.target instanceof Element && e.target.matches(NEUTRAL_TEXT_SELECTOR)) nt.current = { focused: false, blurAt: performance.now() };
-      }}
     >
       <div className="flex shrink-0 items-stretch">
         <ScrollFade className="min-w-0 flex-1">
-          <OnlineToolbar controller={replayController ?? ws.controller} online {...(allowKeySwitch && !replay ? { allowKeySwitch: true } : {})} onModeChange={noteUserMode} />
+          <OnlineToolbar
+            controller={replayController ?? ws.controller}
+            online
+            editsState={editsState}
+            {...(allowKeySwitch && !replay ? { allowKeySwitch: true } : {})}
+            onModeChange={noteUserMode}
+          />
         </ScrollFade>
         <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-l border-[#232e3a] bg-[#10161d] px-2" data-testid="edit-strip">
           <EditStatus ws={ws} replay={replay} />
@@ -426,7 +442,7 @@ function LadderPanelImpl({ ws, editorRef, allowedInstructions, replayController,
           onChange={onChange}
           program={MAIN_PROGRAM}
           routine={MAIN_ROUTINE}
-          controller={replayController ?? ws.editorController}
+          controller={replayController ?? ws.controller}
           online
           readOnly={replay}
           errors={replay ? [] : editorErrors}
@@ -448,9 +464,12 @@ function LadderPanelImpl({ ws, editorRef, allowedInstructions, replayController,
               }
             : {})}
           onTagsChanged={ws.reverify}
+          onToggleBit={onToggleBit}
+          onRungTextCommit={onRungTextCommit}
+          exampleEntry={exampleEntry}
           className="min-h-0 flex-1"
         />
-        {!replay && <AppliedIndicator at={ws.appliedAt} />}
+        {!replay && <AppliedIndicator visible={justApplied} />}
       </div>
       {!replay && <ProblemList errors={ws.errors} rules={ws.ruleErrors} rungs={ws.rungs} onJump={jump} />}
     </div>

@@ -35,12 +35,13 @@ export const JSR: InstructionDef = {
 - Rung-condition-in false: the routine is **not scanned** — its outputs keep their last state!
 - Prescan: the subroutine is prescanned once.
 
-Neutral text: \`JSR(Routine,InputCount,Input1…,Return1…)\`. Without parameters use \`JSR(Fill_Sequence,0)\`.
-Nesting too deep (e.g. a routine calling itself) causes major fault T04:C84 (stack overflow).
+Neutral text: \`JSR(Routine,InputCount,Input1…,Return1…)\`. Without parameters the input count is 0:
 
 \`\`\`
 XIC(Auto_Mode)JSR(Auto_Sequence,0);
-\`\`\``,
+\`\`\`
+
+Nesting too deep (e.g. a routine calling itself) causes major fault T04:C84 (stack overflow).`,
   costUs: 0.4,
   compile(ops, rt) {
     const routine = ops.name(0);

@@ -1,13 +1,7 @@
 /**
- * Tank-local visual effects of the `tank-process` twin (all components go inside the same group as the <Tank>):
+ * Tank-local visual effects of the `tank-process` twin (all components go inside the same group as the <Tank>).
+ * (The product's temperature tint and the boiling surface are the Tank device's own: `temperatureTint`, `getBoiling`.)
  *
- *  <LiquidGuard>     scene-side guard + temperature tint for the Tank device's liquid:
- *                    - the liquid mesh has a zero-length normal at the apex of the bottom head (normalize(0) = NaN in
- *                      the vertex shader) and its fresnel term can take pow() of a slightly negative base; the NaN
- *                      pixels are spread over the whole frame by Bloom. The guard fixes the normals of the cached
- *                      geometry and recompiles the two liquid materials with a sanitised output (NaN / Inf -> 0).
- *                    - tints the product by TEMPERATURE (blue when cold -> amber at the 60 °C batch temperature ->
- *                      orange-red near boiling) and roughens the surface while boiling.
  *  <HeaterCue>       additive glow on the immersion heater element (visible through the liquid in the cut-away) and a
  *                    HEATING lamp on the heater terminal box.
  *  <TankFx>          inlet stream + splash, small fresnel bubbles (nucleation on the heater, everywhere when boiling),
@@ -24,124 +18,6 @@ import { steel, unitCylY } from '../conveyor-sort/hall';
 import { Glow } from '../conveyor-sort/kit';
 import type { TankProcessState } from './logic';
 import { SKID, SKID_H, TL } from './layout';
-
-// ---------------------------------------------------------------------------
-// Liquid guard + temperature tint
-// ---------------------------------------------------------------------------
-
-const fixedGeos = new WeakSet<THREE.BufferGeometry>();
-function fixNormals(g: THREE.BufferGeometry) {
-  if (fixedGeos.has(g)) return;
-  fixedGeos.add(g);
-  const n = g.getAttribute('normal') as THREE.BufferAttribute | undefined;
-  if (!n) return;
-  let changed = false;
-  for (let i = 0; i < n.count; i++) {
-    const x = n.getX(i);
-    const y = n.getY(i);
-    const z = n.getZ(i);
-    if (x * x + y * y + z * z < 1e-10) {
-      n.setXYZ(i, 0, -1, 0);
-      changed = true;
-    }
-  }
-  if (changed) n.needsUpdate = true;
-}
-
-/** Heat-map ramp (blue -> cyan -> yellow-green -> amber at the 60 °C batch temperature -> orange -> red). */
-const TEMP_STOPS: [number, string][] = [
-  [15, '#2f86c4'],
-  [35, '#2ba3b5'],
-  [50, '#98ad5a'],
-  [60, '#dfae33'],
-  [75, '#e57b2a'],
-  [100, '#d63f28'],
-];
-const _c0 = new THREE.Color();
-const _c1 = new THREE.Color();
-/** Liquid tint for a temperature (°C). */
-export function temperatureColor(t: number, out: THREE.Color): THREE.Color {
-  if (t <= TEMP_STOPS[0]![0]) return out.set(TEMP_STOPS[0]![1]);
-  for (let i = 1; i < TEMP_STOPS.length; i++) {
-    const [t1, c1] = TEMP_STOPS[i]!;
-    if (t <= t1) {
-      const [t0, c0] = TEMP_STOPS[i - 1]!;
-      return out.lerpColors(_c0.set(c0), _c1.set(c1), (t - t0) / (t1 - t0));
-    }
-  }
-  return out.set(TEMP_STOPS[TEMP_STOPS.length - 1]![1]);
-}
-
-interface LiquidUniforms {
-  uDeep?: { value: THREE.Color };
-  uSwirl?: { value: number };
-}
-
-/** Place right after <Tank> inside the same parent group. */
-export function LiquidGuard({ state }: { state: TankProcessState }) {
-  const probe = useRef<THREE.Group>(null);
-  const mats = useRef<THREE.MeshStandardMaterial[]>([]);
-  const uni = useRef<LiquidUniforms>({});
-  const tries = useRef(0);
-  const tint = useMemo(() => new THREE.Color(), []);
-  const acc = useRef(1);
-  const lastT = useRef(-999);
-
-  const patch = () => {
-    const root = probe.current?.parent;
-    if (!root) return;
-    root.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
-      const g = m.geometry as THREE.BufferGeometry;
-      if (!g.getAttribute('aTop')) return;
-      fixNormals(g);
-      const mat = m.material as THREE.MeshStandardMaterial;
-      if (mats.current.includes(mat)) return;
-      const key = mat.customProgramCacheKey?.() ?? '';
-      if (!key.startsWith('plcworld-liquid')) return;
-      const orig = mat.onBeforeCompile;
-      mat.onBeforeCompile = (sh, r) => {
-        orig.call(mat, sh, r);
-        const u = sh.uniforms as Record<string, { value: unknown }>;
-        if (u.uDeep) uni.current.uDeep = u.uDeep as { value: THREE.Color };
-        if (u.uSwirl) uni.current.uSwirl = u.uSwirl as { value: number };
-        sh.vertexShader = sh.vertexShader.replace(
-          '#include <defaultnormal_vertex>',
-          '#include <defaultnormal_vertex>\nif (dot(transformedNormal, transformedNormal) < 1e-12) transformedNormal = normalMatrix * vec3(0.0, -1.0, 0.0);',
-        );
-        sh.fragmentShader = sh.fragmentShader
-          .replace('pow(1.0 - nv, 4.0)', 'pow(max(1.0 - nv, 0.0), 4.0)')
-          .replace(
-            '#include <dithering_fragment>',
-            '#include <dithering_fragment>\nif (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) gl_FragColor = vec4(0.0);\ngl_FragColor = clamp(gl_FragColor, 0.0, 16.0);',
-          );
-      };
-      mat.customProgramCacheKey = () => `${key}-guarded`;
-      mat.needsUpdate = true;
-      mats.current.push(mat);
-    });
-  };
-
-  useFrame((_, dt) => {
-    if (mats.current.length < 2 && tries.current < 120) {
-      tries.current++;
-      patch();
-    }
-    // boiling: a rough, rolling surface (after the Tank's own frame update set the agitator swirl)
-    const sw = uni.current.uSwirl;
-    if (sw && state.boiling) sw.value = Math.max(sw.value, 0.75);
-    acc.current += dt;
-    if (acc.current < 0.2) return;
-    acc.current = 0;
-    if (Math.abs(state.temperature - lastT.current) < 0.3) return;
-    lastT.current = state.temperature;
-    temperatureColor(state.temperature, tint);
-    for (const m of mats.current) m.color.copy(tint);
-    uni.current.uDeep?.value.copy(tint).multiplyScalar(0.12);
-  });
-  return <group ref={probe} />;
-}
 
 // ---------------------------------------------------------------------------
 // Heater cue

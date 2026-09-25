@@ -1,9 +1,13 @@
 /**
  * Mission complete! Stars pop in one by one, the XP counter runs, a level-up banner (with confetti)
  * and newly unlocked achievements follow; then the mission debrief, best stats and what to do next.
+ *
+ * Dialog behaviour: focus moves to "Next mission" (or the primary action), Tab stays inside, Escape
+ * closes, focus returns to where it was. While open it sets `useUiStore.celebrating` so the global
+ * level-up toasts / fanfare wait instead of doubling its own announcement.
  */
 import { ArrowRight, Award, ChevronsUp, Lightbulb, Map as MapIcon, RotateCcw, Sparkles, Star, Trophy, Wrench } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { sfx } from '../../audio/sfx';
 import { getAchievement } from '../../game/achievements';
@@ -11,7 +15,8 @@ import { getChapter } from '../../game/chapters';
 import { levelForXp } from '../../game/ranks';
 import { useGame, type CompletionOutcome } from '../../game/store';
 import type { MissionDef, MissionRunResult } from '../../game/types';
-import { Button, Markdown, ProgressBar, cn } from '../../ui';
+import { Button, Markdown, ProgressBar, cn, useFocusTrap } from '../../ui';
+import { useUiStore } from '../hud/uiStore';
 import { celebrateBurst, starPuff } from './confetti';
 import { celebrationTimeline, countUp, replayGoal } from './timeline';
 
@@ -54,8 +59,6 @@ function missingStarHint(mission: MissionDef, result: MissionRunResult, hintsUse
   return undefined;
 }
 
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
 export function CelebrationModal({ open, mission, outcome, result, hintsUsed, next, nextUnlocked, onNext, onReplay, onMap, onClose }: CelebrationModalProps) {
   const reduced = useGame((s) => s.profile.settings.reducedMotion);
   const xpTotal = useGame((s) => s.profile.xp);
@@ -79,35 +82,17 @@ export function CelebrationModal({ open, mission, outcome, result, hintsUsed, ne
   const starsRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  // focus moves into the dialog (primary action) and comes back when it closes; plant hotkeys and
-  // Tab never reach the page behind it
+  // focus moves into the dialog ("Next mission", else the primary action), Tab stays inside and focus
+  // returns to the opener when it closes; plant hotkeys never reach the page behind it (aria-modal)
+  useFocusTrap(dialogRef, open);
+
+  // global level-up toasts / fanfare wait while the celebration announces its own
+  const announcedLevel = outcome.newLevel > outcome.previousLevel ? outcome.newLevel : null;
   useEffect(() => {
     if (!open) return;
-    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const h = window.setTimeout(() => (dialogRef.current?.querySelector<HTMLElement>('[data-autofocus]:not([disabled])') ?? dialogRef.current)?.focus({ preventScroll: true }), 0);
-    return () => {
-      window.clearTimeout(h);
-      if (before && before.isConnected && !before.hasAttribute('disabled')) before.focus({ preventScroll: true });
-    };
-  }, [open]);
-  const trapTab = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
-    if (e.key !== 'Tab') return;
-    const items = [...(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].filter((el) => el.offsetParent !== null || el === document.activeElement);
-    if (items.length === 0) {
-      e.preventDefault();
-      return;
-    }
-    const first = items[0]!;
-    const last = items[items.length - 1]!;
-    const active = document.activeElement;
-    if (e.shiftKey && (active === first || !dialogRef.current?.contains(active))) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && (active === last || !dialogRef.current?.contains(active))) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
+    useUiStore.getState().beginCelebration(announcedLevel);
+    return () => useUiStore.getState().endCelebration();
+  }, [open, announcedLevel]);
 
   useEffect(() => {
     if (!open) return;
@@ -177,14 +162,18 @@ export function CelebrationModal({ open, mission, outcome, result, hintsUsed, ne
     };
   }, [open, cues, outcome, reduced]);
 
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose();
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      onCloseRef.current();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   const lvl = levelForXp(xpTotal);
@@ -202,7 +191,6 @@ export function CelebrationModal({ open, mission, outcome, result, hintsUsed, ne
         aria-modal="true"
         aria-label="Mission complete"
         tabIndex={-1}
-        onKeyDown={trapTab}
         className="relative flex outline-none max-h-[92vh] w-full max-w-2xl animate-[toast-in_260ms_ease-out] flex-col overflow-hidden rounded-2xl border border-edge bg-panel-2 shadow-2xl"
       >
         <div className="relative overflow-hidden px-6 pt-6 pb-4 text-center" style={{ background: `radial-gradient(ellipse at 50% 0%, ${accent}33 0%, transparent 70%)` }}>

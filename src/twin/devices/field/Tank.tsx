@@ -5,7 +5,8 @@
  *
  * The liquid is visible through a front quarter CUT-AWAY (default) or a full-height sight WINDOW
  * (`cutaway={false}`). Its free surface sits at getLevel() with ripples and a vortex/swirl when agitated; the
- * product keeps its hue (thickness-based absorption + fresnel), temperature shows as steam over the surface.
+ * product keeps its hue (thickness-based absorption + fresnel); temperature shows as steam over the surface and,
+ * with `temperatureTint`, as a heat-map tint of the product (`getLiquidColor` drives any other live color).
  *
  * Origin: floor, on the vessel axis. `diameter` = shell diameter, `height` = straight-shell height
  * (tangent line to tangent line). Level 0 % = lowest point inside the bottom head, 100 % = top tangent line.
@@ -15,6 +16,7 @@ import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import * as THREE from 'three';
 import type { TankProps, Vec3 } from '../../contracts';
+import { useDisposeOnUnmount } from '../../dispose';
 import { MOTOR_BLUE, MotorBody } from './Motor';
 import { box, canvasTex, type CableRoute, clickable, ConduitStub, DEVICE_ROOT, cylY, fm, geo, HexBolt, hexGeo, latheY, mat, Merge, rbox, RoutedCable, sphere, TAU, tex, torus } from './shared';
 
@@ -246,20 +248,16 @@ function liquidGeo(D: number, H: number, phiStart: number, phiLength: number, cu
     const top: number[] = [];
     const NR = 20;
     const NP = Math.max(24, Math.round((phiLength / TAU) * 96));
-    const P = (r: number, phi: number, y: number): [number, number, number] => [r * Math.sin(phi), y, r * Math.cos(phi)];
-    const tri = (a: [number, number, number], b: [number, number, number], c: [number, number, number], n: [number, number, number] | null, t: number) => {
+    type V3 = [number, number, number];
+    const P = (r: number, phi: number, y: number): V3 => [r * Math.sin(phi), y, r * Math.cos(phi)];
+    /** One triangle; `n` = one flat normal, or one normal per vertex. */
+    const tri = (a: V3, b: V3, c: V3, n: V3 | [V3, V3, V3], t: number) => {
       for (const v of [a, b, c]) {
         pos.push(...v);
         top.push(t);
       }
-      if (n) for (let i = 0; i < 3; i++) nor.push(...n);
-      else {
-        // radial outward normals for the wall
-        for (const v of [a, b, c]) {
-          const l = Math.hypot(v[0], v[2]) || 1;
-          nor.push(v[0] / l, 0, v[2] / l);
-        }
-      }
+      if (typeof n[0] === 'number') for (let i = 0; i < 3; i++) nor.push(...(n as V3));
+      else for (const v of n as [V3, V3, V3]) nor.push(...v);
     };
     // free surface (polar grid)
     for (let i = 0; i < NR; i++) {
@@ -278,14 +276,26 @@ function liquidGeo(D: number, H: number, phiStart: number, phiLength: number, cu
     for (let i = hpi.length - 1; i >= 0; i--) prof.push([hpi[i]![0], L.yT1 - hpi[i]![1]]);
     for (let k = 1; k <= 4; k++) prof.push([Rin, L.yT1 + (k / 4) * (L.yT2 - L.yT1)]);
     prof.push([Rin, yTopSurf]);
+    // outward profile normals [nr, ny] (perpendicular to the profile tangent). The apex of the bottom head gets
+    // (0, -1): a radial normal there would be zero-length -> normalize() = NaN in the shader (black bloom frames).
+    const pn = prof.map((_, i): [number, number] => {
+      if (i === 0) return [0, -1];
+      const [r0, y0] = prof[Math.max(0, i - 1)]!;
+      const [r1, y1] = prof[Math.min(prof.length - 1, i + 1)]!;
+      const dr = r1 - r0;
+      const dy = y1 - y0;
+      const l = Math.hypot(dr, dy);
+      return l > 1e-9 ? [dy / l, -dr / l] : [1, 0];
+    });
+    const N = (i: number, phi: number): V3 => [pn[i]![0] * Math.sin(phi), pn[i]![1], pn[i]![0] * Math.cos(phi)];
     for (let i = 0; i < prof.length - 1; i++) {
       const [ra, ya] = prof[i]!;
       const [rb, yb] = prof[i + 1]!;
       for (let j = 0; j < NP; j++) {
         const p0 = phiStart + (j / NP) * phiLength;
         const p1 = phiStart + ((j + 1) / NP) * phiLength;
-        tri(P(ra, p0, ya), P(rb, p1, yb), P(rb, p0, yb), null, 0);
-        tri(P(ra, p0, ya), P(ra, p1, ya), P(rb, p1, yb), null, 0);
+        tri(P(ra, p0, ya), P(rb, p1, yb), P(rb, p0, yb), [N(i, p0), N(i + 1, p1), N(i + 1, p0)], 0);
+        tri(P(ra, p0, ya), P(ra, p1, ya), P(rb, p1, yb), [N(i, p0), N(i, p1), N(i + 1, p1)], 0);
       }
     }
     // cut faces
@@ -302,7 +312,7 @@ function liquidGeo(D: number, H: number, phiStart: number, phiLength: number, cu
       const NY = 12;
       for (const phi of [phiStart, phiStart + phiLength]) {
         const sgn = phi === phiStart ? -1 : 1;
-        const n: [number, number, number] = [sgn * Math.cos(phi), 0, -sgn * Math.sin(phi)];
+        const n: V3 = [sgn * Math.cos(phi), 0, -sgn * Math.sin(phi)];
         for (let i = 0; i < NR; i++) {
           const r0 = (i / NR) * Rin;
           const r1 = ((i + 1) / NR) * Rin;
@@ -381,6 +391,8 @@ float liqH(vec2 p) {
         '#include <beginnormal_vertex>',
         `vec3 lpos = position;
 vec3 objectNormal = vec3( normal );
+// never feed a zero-length normal to normalize() (NaN -> black frames once Bloom spreads it)
+if (dot(objectNormal, objectNormal) < 1e-12) objectNormal = vec3(0.0, -1.0, 0.0);
 float rAt = uRin;
 if (uLevel < uT1) { float q = clamp((uT1 - uLevel) / uHd, 0.0, 1.0); rAt = uRin * sqrt(max(1.0 - q * q, 0.0)); }
 if (lpos.y >= uLevel) {
@@ -406,7 +418,8 @@ varying vec3 vObj;
 uniform vec3 uCamObj; uniform float uRin; uniform float uYBot; uniform float uLevel; uniform vec3 uDeep; uniform float uAbs;
 float liquidPath() {
   // ray from the camera through this fragment: length inside the liquid (vertical cylinder + surface + bottom)
-  vec3 rd = normalize(vObj - uCamObj);
+  vec3 dv = vObj - uCamObj;
+  vec3 rd = dv / max(length(dv), 1e-5);
   vec3 ro = vObj;
   float a = dot(rd.xz, rd.xz);
   float t = 4.0;
@@ -437,20 +450,27 @@ diffuseColor.rgb = mix(uDeep, diffuseColor.rgb, 0.25 + 0.75 * liqK);`,
           ? `diffuseColor.a = 0.92;
 #include <opaque_fragment>`
           : `{
-  float nv = abs(dot(normalize(normal), normalize(vViewPosition)));
+  // clamp: |n·v| can exceed 1 by rounding and pow() of a negative base is NaN
+  float nv = clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0);
   float fres = pow(1.0 - nv, 4.0);
   diffuseColor.a = clamp(mix(opacity, 0.97, 1.0 - liqK) + fres * 0.35, 0.0, 1.0);
 }
 #include <opaque_fragment>`,
+      )
+      // last line of defence: a non-finite pixel would be smeared over the whole frame by Bloom's mip chain
+      .replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+if (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) gl_FragColor = vec4(0.0);`,
       );
   };
   m.onBeforeCompile = (sh) => compile(sh, false);
-  m.customProgramCacheKey = () => 'plcworld-liquid-v2';
+  m.customProgramCacheKey = () => 'plcworld-liquid-v3';
   // back faces drawn first (inside of the liquid body), dark and nearly opaque
   const back = m.clone();
   back.side = THREE.BackSide;
   back.onBeforeCompile = (sh) => compile(sh, true);
-  back.customProgramCacheKey = () => 'plcworld-liquid-v2b';
+  back.customProgramCacheKey = () => 'plcworld-liquid-v3b';
   return { material: m, back, uniforms };
 }
 
@@ -569,7 +589,7 @@ function Steam({ L, getLevel, getTemperature, phiStart, phiLength }: { L: TankLa
     () => Array.from({ length: STEAM_N }, () => new THREE.SpriteMaterial({ map: steamTex(), color: '#e9eef2', transparent: true, depthWrite: false, opacity: 0 })),
     [],
   );
-  useEffect(() => () => mats.forEach((m) => m.dispose()), [mats]);
+  useDisposeOnUnmount(mats);
   const seeds = useMemo(
     () =>
       Array.from({ length: STEAM_N }, (_, i) => {
@@ -632,11 +652,50 @@ export interface TankExtraProps {
    * shell into a floor conduit stub; heater cable straight down into a floor stub.
    */
   cables?: { agitator?: CableRoute; heater?: CableRoute };
+  /** Live product color (overrides `liquidColor`; ignored while `temperatureTint` is on). Read every frame. */
+  getLiquidColor?: () => THREE.ColorRepresentation;
+  /**
+   * Tint the product by `getTemperature()` instead of `liquidColor`: `true` = TANK_TEMPERATURE_RAMP (blue when
+   * cold → amber at ~60 °C → red near boiling), or your own ramp of [°C, color] stops (ascending).
+   */
+  temperatureTint?: boolean | readonly TintStop[];
+  /** Rolling boil: rough, agitated surface even without the agitator. */
+  getBoiling?: () => boolean;
   onClick?: () => void;
 }
 
 /** Default product color (also the SightGlass default). */
 export const TANK_LIQUID_COLOR = '#2f86c4';
+
+/** A temperature → color stop for `temperatureTint`. */
+export type TintStop = readonly [celsius: number, color: string];
+
+/** Heat-map ramp for `temperatureTint` (starts at the default product color). */
+export const TANK_TEMPERATURE_RAMP: readonly TintStop[] = [
+  [15, TANK_LIQUID_COLOR],
+  [35, '#2ba3b5'],
+  [50, '#98ad5a'],
+  [60, '#dfae33'],
+  [75, '#e57b2a'],
+  [100, '#d63f28'],
+];
+
+const _t0 = new THREE.Color();
+const _t1 = new THREE.Color();
+/** Color of the product at `celsius` on a ramp (clamped to the end stops). */
+export function liquidTemperatureColor(celsius: number, out: THREE.Color, ramp: readonly TintStop[] = TANK_TEMPERATURE_RAMP): THREE.Color {
+  const first = ramp[0];
+  if (!first) return out;
+  if (!(celsius > first[0])) return out.set(first[1]); // also NaN
+  for (let i = 1; i < ramp.length; i++) {
+    const [t1, c1] = ramp[i]!;
+    if (celsius <= t1) {
+      const [t0, c0] = ramp[i - 1]!;
+      return out.lerpColors(_t0.set(c0), _t1.set(c1), (celsius - t0) / (t1 - t0 || 1));
+    }
+  }
+  return out.set(ramp[ramp.length - 1]![1]);
+}
 
 const _cam = new THREE.Vector3();
 
@@ -652,6 +711,9 @@ export function Tank({
   tag = 'T-101',
   agitator = true,
   cables,
+  getLiquidColor,
+  temperatureTint = false,
+  getBoiling,
   onClick,
   position,
   rotation,
@@ -664,19 +726,22 @@ export function Tank({
   const phiLength = cut ? (3 * Math.PI) / 2 : TAU;
   const shell = shellGeos(diameter, height, cut ? 'cut' : 'window');
   const liquid = useMemo(() => makeLiquidMaterial(L), [L]);
-  useEffect(
-    () => () => {
-      liquid.material.dispose();
-      liquid.back.dispose();
-    },
-    [liquid],
-  );
+  useDisposeOnUnmount(liquid, (l) => {
+    l.material.dispose();
+    l.back.dispose();
+  });
+  const ramp = temperatureTint === true ? TANK_TEMPERATURE_RAMP : temperatureTint || null;
+  /** Product color: static `liquidColor`, or per frame from getLiquidColor / the temperature ramp. */
+  const tint = useRef({ color: new THREE.Color(), key: '' });
+  const applyColor = (c: THREE.Color) => {
+    liquid.material.color.copy(c);
+    liquid.back.color.copy(c);
+    liquid.uniforms.uDeep.value.copy(c).multiplyScalar(0.12);
+  };
   useEffect(() => {
-    // the product keeps its hue; temperature shows as steam above the surface
-    liquid.material.color.set(liquidColor);
-    liquid.back.color.set(liquidColor);
-    liquid.uniforms.uDeep.value.set(liquidColor).multiplyScalar(0.12);
-  }, [liquid, liquidColor]);
+    tint.current.key = '';
+    if (!ramp && !getLiquidColor) applyColor(tint.current.color.set(liquidColor));
+  }, [liquid, liquidColor, ramp, getLiquidColor]); // eslint-disable-line react-hooks/exhaustive-deps
   const root = useRef<THREE.Group>(null);
   const liquidMesh = useRef<THREE.Mesh>(null);
   const impeller = useRef<THREE.Group>(null);
@@ -684,7 +749,7 @@ export function Tank({
   const shaftAngle = useRef(0);
   const swirl = useRef(0);
   const heaterMat = useMemo(() => new THREE.MeshStandardMaterial({ color: '#8f8a84', metalness: 0.7, roughness: 0.45, emissive: '#ff3a08', emissiveIntensity: 0 }), []);
-  useEffect(() => () => heaterMat.dispose(), [heaterMat]);
+  useDisposeOnUnmount(heaterMat);
   const getMotorAngle = useMemo(() => () => motorAngle.current, []);
   const ratio = 14.6;
 
@@ -700,10 +765,28 @@ export function Tank({
     shaftAngle.current += (rpm / 60) * TAU * d;
     motorAngle.current = shaftAngle.current * ratio;
     if (impeller.current) impeller.current.rotation.y = -shaftAngle.current;
-    // swirl eases with agitator speed and only when the impeller is covered
-    const target = THREE.MathUtils.clamp(rpm / 90, 0, 1) * (lvl > 25 ? 1 : lvl / 25);
+    // swirl eases with agitator speed and only when the impeller is covered; a rolling boil roughens the surface
+    let target = THREE.MathUtils.clamp(rpm / 90, 0, 1) * (lvl > 25 ? 1 : lvl / 25);
+    if (getBoiling?.() && lvl > 0) target = Math.max(target, 0.75);
     swirl.current += (target - swirl.current) * Math.min(1, d * 1.5);
     u.uSwirl.value = swirl.current;
+    // live product color (quantised so the material is only touched when the tint visibly changes)
+    const tc = tint.current;
+    if (ramp && getTemperature) {
+      const T = getTemperature();
+      const k = Number.isFinite(T) ? String(Math.round(T * 4)) : 'nan';
+      if (k !== tc.key) {
+        tc.key = k;
+        applyColor(liquidTemperatureColor(T, tc.color, ramp));
+      }
+    } else if (getLiquidColor) {
+      tc.color.set(getLiquidColor());
+      const k = tc.color.getHexString();
+      if (k !== tc.key) {
+        tc.key = k;
+        applyColor(tc.color);
+      }
+    }
     const heat = getHeaterOn?.() ?? false;
     heaterMat.emissiveIntensity += ((heat ? 0.9 : 0) - heaterMat.emissiveIntensity) * Math.min(1, d * 0.8);
   });
@@ -965,7 +1048,7 @@ function SightWindow({ L }: { L: TankLayout }) {
     () => new THREE.MeshStandardMaterial({ color: '#dff2ff', roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }),
     [],
   );
-  useEffect(() => () => glassMat.dispose(), [glassMat]);
+  useDisposeOnUnmount(glassMat);
   const frameW = 0.03;
   const bolts = Math.floor(h / 0.1);
   return (

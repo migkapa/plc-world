@@ -71,11 +71,12 @@ import {
 } from 'react';
 import { INSTRUCTION_DEFS, operandCountIssue } from '@/plc/instructions';
 import { NeutralTextError, instructionsOf, parseRungText, serializeRung } from '@/plc/neutralText';
+import type { OperandSpec } from '@/plc/instructions/types';
 import type { InstructionNode, PlcController, Rung, RungElement, VerifyError } from '@/plc/types';
 import { Modal } from '@/ui/Modal';
 import { cn } from '@/ui/cn';
 import { toast } from '@/ui/toast';
-import { AutocompleteInput, CommentEditor, ContextMenu, HoverCard, RungTextEditor, type AutoItem, type CommitHow, type MenuEntry } from './EditorOverlays';
+import { AutocompleteInput, CommentEditor, ContextMenu, HoverCard, RungTextEditor, singlePrefixMatch, type AutoItem, type CommitHow, type MenuEntry } from './EditorOverlays';
 import { RoutineIcon } from './glyphs';
 import { InstructionHelp } from './InstructionHelp';
 import { NewTagDialog, type NewTagRequest } from './NewTagDialog';
@@ -174,6 +175,15 @@ export interface LadderEditorProps {
   headerExtra?: ReactNode;
   /** A tag was created from the ladder (New Tag…): re-verify. */
   onTagsChanged?(): void;
+  /**
+   * Example ASCII entry shown by the empty-routine hint and the quick-entry placeholder, e.g.
+   * 'XIC Switch_0' (use tags that exist in this plant). Default: an input alias tag of the controller.
+   */
+  exampleEntry?: string;
+  /** Toggle Bit flipped a BOOL operand (Ctrl/Alt+T or the context menu), after the write. */
+  onToggleBit?(operand: string): void;
+  /** A rung was accepted from the neutral-text rung editor ("Edit Rung as Text"). */
+  onRungTextCommit?(rungIndex: number, text: string): void;
   ref?: Ref<LadderEditorHandle>;
 }
 
@@ -209,8 +219,12 @@ export interface LadderEditorHandle {
 // ---------------------------------------------------------------------------
 
 type EditState =
-  /** `seq` makes every operand edit a fresh editor instance (Tab onto the same operand re-arms it). */
-  | { kind: 'operand'; rungId: string; elementId: string; index: number; initial?: string; seq: number }
+  /**
+   * `seq` makes every operand edit a fresh editor instance (Tab onto the same operand re-arms it).
+   * `fill`: the operands of a just-inserted instruction are being filled in — Enter moves on to the
+   * next unset ('?') operand of the rung instead of closing.
+   */
+  | { kind: 'operand'; rungId: string; elementId: string; index: number; initial?: string; seq: number; fill?: boolean }
   | { kind: 'quick'; rungId: string; point: InsertPoint; sel: LadderSelection; initial: string }
   | { kind: 'mnemonic'; rungId: string; elementId: string }
   | { kind: 'rungText'; rungId: string }
@@ -237,9 +251,43 @@ const OFFLINE_FRAME: LiveFrame = { online: false, running: false, elements: unde
 const lower = (s: string): string => s.toLowerCase();
 let EDIT_SEQ = 0;
 
-function operandEdit(rungId: string, elementId: string, index: number, initial?: string): EditState {
+function operandEdit(rungId: string, elementId: string, index: number, initial?: string, fill = false): EditState {
   EDIT_SEQ += 1;
-  return initial !== undefined ? { kind: 'operand', rungId, elementId, index, initial, seq: EDIT_SEQ } : { kind: 'operand', rungId, elementId, index, seq: EDIT_SEQ };
+  return { kind: 'operand', rungId, elementId, index, seq: EDIT_SEQ, ...(initial !== undefined ? { initial } : {}), ...(fill ? { fill: true } : {}) };
+}
+
+/**
+ * The next unset ('?') operand after `index` of an instruction: in the same instruction, or (`sameRung`)
+ * anywhere later in the same rung.
+ */
+function nextUnsetOperand(rungs: readonly Rung[], rungId: string, elementId: string, index: number, sameRung: boolean): LadderSelection | undefined {
+  let cur: LadderSelection | undefined = { rungId, elementId, operandIndex: index };
+  for (let guard = 0; guard < 500; guard++) {
+    const next: LadderSelection | undefined = nextOperand(rungs, cur, 1);
+    if (!next?.elementId || next.operandIndex === undefined || next.rungId !== rungId) return undefined;
+    if (!sameRung && next.elementId !== elementId) return undefined;
+    if (next.elementId === cur?.elementId && next.operandIndex === cur.operandIndex) return undefined;
+    if (findInstr(rungs, next.rungId, next.elementId)?.operands[next.operandIndex] === '?') return next;
+    cur = next;
+  }
+  return undefined;
+}
+
+/** A typed number can be this operand (a literal: preset, source, expression…) — not a tag-only operand like a TIMER. */
+function takesLiteral(spec: OperandSpec | undefined): boolean {
+  if (!spec) return true;
+  return spec.kind === 'num' || spec.kind === 'int' || spec.kind === 'scalar' || spec.kind === 'display' || spec.kind === 'imm' || spec.kind === 'expr' || spec.kind === 'any';
+}
+
+/** Default empty-routine example: XIC on an input alias of the controller (a tag that exists here). */
+function defaultExampleEntry(controller: PlcController | undefined): string {
+  let input: string | undefined;
+  try {
+    input = controller?.tags.listAll().find((t) => t.dataType === 'BOOL' && t.aliasFor !== undefined && /:I\./.test(t.aliasFor))?.name;
+  } catch {
+    input = undefined;
+  }
+  return `XIC ${input ?? 'Start_PB'}`;
 }
 
 /** Character offsets of the instructions of a neutral-text rung (mnemonics outside operand lists). */
@@ -472,11 +520,13 @@ function OperandOverlay({
   const width = Math.max(260, Math.min(360, o.hit.w * zoom + 90));
   const left = Math.min(o.anchor === 'middle' ? o.x * zoom - width / 2 : (o.hit.x + o.hit.w) * zoom - width + 26, maxLeft);
   const types = spec ? spec.types.join(' | ') : 'operand';
+  const single = singlePrefixMatch(items, text);
   return (
     <AutocompleteInput
       value={text}
       onChange={setText}
       items={items}
+      enterTakesSingleMatch
       selectAll={initial === undefined}
       placeholder={spec?.kind === 'display' || spec?.kind === 'imm' ? 'Enter a value' : 'Type a tag name…'}
       header={
@@ -489,7 +539,8 @@ function OperandOverlay({
       }
       footer={
         <span>
-          <b>Enter</b> as typed · <b>Tab</b> complete · <b>↑↓</b> pick · <b>Esc</b> cancel{items.some((i) => i.expandable) ? ' · ▸ members: type “.”' : ''}
+          <b>Enter</b> {single ? <>use <span className="font-mono">{single.value}</span></> : 'as typed'} · <b>Tab</b> complete · <b>↑↓</b> pick · <b>Esc</b> cancel
+          {items.some((i) => i.expandable) ? ' · ▸ members: type “.”' : ''}
         </span>
       }
       onCommit={(v, how, item) => onCommit(v, how, item)}
@@ -529,6 +580,7 @@ function analyzeQuick(text: string): { mode: 'mnemonic' | 'operand' | 'none'; to
 
 function QuickEntryOverlay({
   initial,
+  example,
   style,
   controller,
   program,
@@ -539,6 +591,8 @@ function QuickEntryOverlay({
   onCancel,
 }: {
   initial: string;
+  /** Example entry for the placeholder (a tag of this plant). */
+  example: string;
   style: CSSProperties;
   controller?: PlcController;
   program: string;
@@ -587,7 +641,7 @@ function QuickEntryOverlay({
       }}
       items={items}
       error={error}
-      placeholder="XIC Start_PB  ·  TON Timer1 5000  ·  BST … NXB … BND"
+      placeholder={`${example}  ·  TON Timer1 5000  ·  BST … NXB … BND`}
       header={
         ctx.mode === 'operand' ? (
           <span>
@@ -743,6 +797,10 @@ export function LadderEditor(props: LadderEditorProps) {
   modalOpenRef.current = newTag !== null || helpOp !== null;
   const onTagsChangedRef = useRef(props.onTagsChanged);
   onTagsChangedRef.current = props.onTagsChanged;
+  const onToggleBitRef = useRef(props.onToggleBit);
+  onToggleBitRef.current = props.onToggleBit;
+  const onRungTextCommitRef = useRef(props.onRungTextCommit);
+  onRungTextCommitRef.current = props.onRungTextCommit;
   const historyRef = useRef(new EditHistory<Rung[]>({ limit: 200 }));
   const registryRef = useRef(new Map<string, RungBinding>());
   const visibleRef = useRef(new Set<string>());
@@ -1067,7 +1125,7 @@ export function LadderEditor(props: LadderEditorProps) {
       const next = insertAt(rs, point, ins);
       const firstMissing = ins.operands.findIndex((o) => o === '?');
       commit(next, { select: ins.operands.length > 0 ? { rungId: rung.id, elementId: ins.id, operandIndex: Math.max(0, firstMissing) } : { rungId: rung.id, elementId: ins.id } });
-      if (ins.operands.length > 0) setEditing(operandEdit(rung.id, ins.id, Math.max(0, firstMissing)));
+      if (ins.operands.length > 0) setEditing(operandEdit(rung.id, ins.id, Math.max(0, firstMissing), undefined, true));
     },
     [commit, ensureRung, isAllowed],
   );
@@ -1214,6 +1272,7 @@ export function LadderEditor(props: LadderEditorProps) {
         const v = controller.tags.readBool(op, program);
         controller.tags.writeBool(op, !v, program);
         dirtyRef.current = true;
+        onToggleBitRef.current?.(op);
       } catch (e) {
         toast({ tone: 'error', title: 'Toggle Bit failed', body: e instanceof Error ? e.message : String(e) });
       }
@@ -1938,7 +1997,16 @@ export function LadderEditor(props: LadderEditorProps) {
       else startQuickEntry(key.toUpperCase());
     } else if (!ctrl && !e.altKey && /^[0-9]$/.test(key) && s?.elementId && s.operandIndex !== undefined && !readOnlyRef.current) {
       handled();
-      startOperandEdit(s.rungId, s.elementId, s.operandIndex, key);
+      // a number typed on a tag-only operand (the TIMER of a TON…) goes to the instruction's next
+      // operand that takes a literal (its preset) — it never overwrites the tag
+      const instr = findInstr(rs, s.rungId, s.elementId);
+      let idx: number | undefined = s.operandIndex;
+      if (instr && !takesLiteral(specOf(instr.op, idx, instr.operands))) {
+        const n = instr.operands.length;
+        const order = [...Array(n).keys()].map((k) => (s.operandIndex! + 1 + k) % n);
+        idx = order.find((i) => instr.operands[i] === '?' && takesLiteral(specOf(instr.op, i, instr.operands))) ?? order.find((i) => takesLiteral(specOf(instr.op, i, instr.operands)));
+      }
+      if (idx !== undefined) startOperandEdit(s.rungId, s.elementId, idx, key);
     }
   };
 
@@ -2047,6 +2115,8 @@ export function LadderEditor(props: LadderEditorProps) {
   // ---------------------------------------------------------------- overlay rendering
   const routines = useMemo(() => routinesOf(controller, program), [controller, program, tagVersion]);
   const labels = useMemo(() => labelsOf(rungs), [rungs]);
+  const defaultExample = useMemo(() => defaultExampleEntry(controller), [controller, tagVersion]);
+  const exampleEntry = props.exampleEntry?.trim() || defaultExample;
 
   const validateRungText = useCallback((text: string) => checkRungText(text, allowedSet), [allowedSet]);
 
@@ -2104,6 +2174,22 @@ export function LadderEditor(props: LadderEditorProps) {
                 setEditing(null);
                 return;
               }
+              if (how === 'enter') {
+                // filling a new instruction (or an instruction with unset operands): Enter goes on to the
+                // next '?' operand, like Tab — the preset is never typed into the timer tag's editor
+                const after = nextUnsetOperand(next, rung.id, instr.id, editing.index, editing.fill === true);
+                if (after?.elementId && after.operandIndex !== undefined) {
+                  setSel(after);
+                  setEditing(operandEdit(after.rungId, after.elementId, after.operandIndex, undefined, editing.fill === true));
+                  return;
+                }
+                if (editing.fill) {
+                  // done filling in: select the instruction (typing then inserts, it does not edit an operand)
+                  setSel({ rungId: rung.id, elementId: instr.id });
+                  closeEditing();
+                  return;
+                }
+              }
               setSel({ rungId: rung.id, elementId: instr.id, operandIndex: editing.index });
               closeEditing();
             }}
@@ -2138,6 +2224,7 @@ export function LadderEditor(props: LadderEditorProps) {
         return (
           <QuickEntryOverlay
             initial={editing.initial}
+            example={exampleEntry}
             style={{ left: Math.max(4, Math.min(x * zoom - 20, viewW - 372)), top: y * zoom + 12, width: 360 }}
             {...(controller ? { controller } : {})}
             program={program}
@@ -2170,7 +2257,7 @@ export function LadderEditor(props: LadderEditorProps) {
               if (firstMissing) {
                 const idx = firstMissing.operands.indexOf('?');
                 commit(next, { select: { rungId: rung.id, elementId: firstMissing.id, operandIndex: idx } });
-                setEditing(operandEdit(rung.id, firstMissing.id, idx));
+                setEditing(operandEdit(rung.id, firstMissing.id, idx, undefined, true));
               } else {
                 commit(next, { select: { rungId: rung.id, elementId: last.id } });
                 closeEditing();
@@ -2189,7 +2276,10 @@ export function LadderEditor(props: LadderEditorProps) {
             onCancel={closeEditing}
             onCommit={(text) => {
               const res = replaceRungFromText(rungsRef.current, rung.id, text);
-              if (res.ok) commit(res.rungs, { select: { rungId: rung.id } });
+              if (res.ok) {
+                commit(res.rungs, { select: { rungId: rung.id } });
+                if (!readOnlyRef.current) onRungTextCommitRef.current?.(rungIndexOf(rungsRef.current, rung.id), text);
+              }
               closeEditing();
             }}
           />
@@ -2219,29 +2309,48 @@ export function LadderEditor(props: LadderEditorProps) {
   // ---------------------------------------------------------------- render
   const themeClass = `ld-theme-${theme}`;
   const allEmpty = rungs.every((r) => r.elements.length === 0);
+  const noRungs = rungs.length === 0;
   const endRail = { railL: LD.margin, railR: baseW - LD.rightPad, width: baseW };
   const history = historyRef.current;
 
   return (
     <div className={cn('ld-root relative flex min-h-0 min-w-0 flex-col overflow-hidden', themeClass, online && running && 'ld-running', className)}>
       {props.showHeader !== false && (
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--ld-chrome-border)] bg-[var(--ld-chrome)] px-2 text-[12px] text-[var(--ld-chrome-text)]">
-          <RoutineIcon main size={15} />
-          <span className="font-semibold">{program}</span>
-          <ChevronRight size={12} className="text-[var(--ld-chrome-muted)]" />
-          <span className="font-semibold">{routine}</span>
+        // container queries: at narrow widths the header drops labels (theme text, program name, zoom %)
+        // and shortens the pills instead of wrapping them onto a second line
+        <div
+          className="@container flex h-9 shrink-0 items-center gap-1.5 overflow-hidden border-b border-[var(--ld-chrome-border)] bg-[var(--ld-chrome)] px-2 text-[12px] whitespace-nowrap text-[var(--ld-chrome-text)] @2xl:gap-2"
+          data-testid="ld-header"
+        >
+          <RoutineIcon main size={15} className="shrink-0" />
+          <span className="hidden min-w-0 truncate font-semibold @xl:inline" title={program}>
+            {program}
+          </span>
+          <ChevronRight size={12} className="hidden shrink-0 text-[var(--ld-chrome-muted)] @xl:inline" />
+          <span className="min-w-0 truncate font-semibold" title={`${program} ▸ ${routine}`}>
+            {routine}
+          </span>
           <span
             className={cn(
-              'ml-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold',
+              'ml-1 inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold',
               online
                 ? faulted
                   ? 'border-red-500/40 bg-red-500/10 text-red-500'
                   : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500'
                 : 'border-[var(--ld-chrome-border)] text-[var(--ld-chrome-muted)]',
             )}
+            title={online ? (running ? 'Online · Run mode' : faulted ? 'Online · Faulted' : 'Online · Program mode') : 'Offline'}
+            data-testid="ld-status-pill"
           >
-            <span className={cn('h-1.5 w-1.5 rounded-full', online ? (faulted ? 'animate-pulse bg-red-500' : 'animate-pulse bg-emerald-500') : 'bg-slate-500')} />
-            {online ? (running ? 'Online · Run' : faulted ? 'Online · Faulted' : 'Online · Program') : 'Offline'}
+            <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', online ? (faulted ? 'animate-pulse bg-red-500' : 'animate-pulse bg-emerald-500') : 'bg-slate-500')} />
+            {online ? (
+              <>
+                <span className="hidden @3xl:inline">Online · </span>
+                {running ? 'Run' : faulted ? 'Faulted' : <><span className="hidden @3xl:inline">Program</span><span className="@3xl:hidden">Prog</span></>}
+              </>
+            ) : (
+              'Offline'
+            )}
           </span>
           <button
             type="button"
@@ -2251,53 +2360,63 @@ export function LadderEditor(props: LadderEditorProps) {
               focusEditor();
             }}
             className={cn(
-              'inline-flex cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold',
+              'inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold',
               errorCount.e > 0
                 ? 'border-red-500/40 bg-red-500/10 text-red-500'
                 : errorCount.w > 0
                   ? 'border-amber-500/40 bg-amber-500/10 text-amber-500'
                   : 'border-[var(--ld-chrome-border)] text-[var(--ld-chrome-muted)]',
             )}
-            title="Verification results — click to jump to the first rung with a problem"
+            title={`Verification results${errorCount.e > 0 || errorCount.w > 0 ? `: ${errorCount.e} error${errorCount.e === 1 ? '' : 's'}, ${errorCount.w} warning${errorCount.w === 1 ? '' : 's'}` : ''} — click to jump to the first rung with a problem`}
+            data-testid="ld-verify-pill"
           >
             {errorCount.e > 0 ? <XCircle size={11} /> : errorCount.w > 0 ? <TriangleAlert size={11} /> : <CheckCircle2 size={11} className="text-emerald-500" />}
-            {errorCount.e > 0 || errorCount.w > 0
-              ? `${errorCount.e} error${errorCount.e === 1 ? '' : 's'}, ${errorCount.w} warning${errorCount.w === 1 ? '' : 's'}`
-              : errors
-                ? 'Verified'
-                : 'Not verified'}
+            {errorCount.e > 0 || errorCount.w > 0 ? (
+              <>
+                <span className="hidden @2xl:inline">
+                  {`${errorCount.e} error${errorCount.e === 1 ? '' : 's'}, ${errorCount.w} warning${errorCount.w === 1 ? '' : 's'}`}
+                </span>
+                <span className="@2xl:hidden">{errorCount.e > 0 ? `${errorCount.e}${errorCount.w > 0 ? ` · ${errorCount.w}` : ''}` : errorCount.w}</span>
+              </>
+            ) : (
+              <span className="hidden @md:inline">{errors ? 'Verified' : 'Not verified'}</span>
+            )}
           </button>
           <div className="min-w-0 flex-1" />
           {props.headerExtra}
           {!readOnly && (
             <>
-              <ChromeButton label="Undo (Ctrl+Z)" onClick={undo} disabled={!history.canUndo}>
+              <ChromeButton label="Undo (Ctrl+Z)" onClick={undo} disabled={!history.canUndo} className="shrink-0">
                 <Undo2 size={14} />
               </ChromeButton>
-              <ChromeButton label="Redo (Ctrl+Y)" onClick={redo} disabled={!history.canRedo}>
+              <ChromeButton label="Redo (Ctrl+Y)" onClick={redo} disabled={!history.canRedo} className="shrink-0">
                 <Redo2 size={14} />
               </ChromeButton>
-              <div className="mx-0.5 h-5 w-px bg-[var(--ld-chrome-border)]" />
+              <div className="mx-0.5 h-5 w-px shrink-0 bg-[var(--ld-chrome-border)]" />
             </>
           )}
-          <ChromeButton label="Zoom out (Ctrl+-)" onClick={() => setZoom(zoom - 0.1)} disabled={zoom <= ZOOM_MIN}>
-            <Minus size={13} />
-          </ChromeButton>
+          <span className="hidden @lg:contents">
+            <ChromeButton label="Zoom out (Ctrl+-)" onClick={() => setZoom(zoom - 0.1)} disabled={zoom <= ZOOM_MIN} className="shrink-0">
+              <Minus size={13} />
+            </ChromeButton>
+          </span>
           <button
             type="button"
-            className="w-11 cursor-pointer rounded text-center font-mono text-[11px] text-[var(--ld-chrome-muted)] hover:text-[var(--ld-chrome-text)]"
+            className="w-11 shrink-0 cursor-pointer rounded text-center font-mono text-[11px] text-[var(--ld-chrome-muted)] hover:text-[var(--ld-chrome-text)]"
             onClick={() => setZoom(1)}
             title="Reset zoom (Ctrl+0)"
           >
             {Math.round(zoom * 100)}%
           </button>
-          <ChromeButton label="Zoom in (Ctrl++)" onClick={() => setZoom(zoom + 0.1)} disabled={zoom >= ZOOM_MAX}>
-            <Plus size={13} />
-          </ChromeButton>
-          <div className="mx-0.5 h-5 w-px bg-[var(--ld-chrome-border)]" />
-          <ChromeButton label={theme === 'dark' ? 'Studio 5000 classic look' : 'Dark look'} onClick={() => setTheme(theme === 'dark' ? 'classic' : 'dark')}>
+          <span className="hidden @lg:contents">
+            <ChromeButton label="Zoom in (Ctrl++)" onClick={() => setZoom(zoom + 0.1)} disabled={zoom >= ZOOM_MAX} className="shrink-0">
+              <Plus size={13} />
+            </ChromeButton>
+          </span>
+          <div className="mx-0.5 h-5 w-px shrink-0 bg-[var(--ld-chrome-border)]" />
+          <ChromeButton label={theme === 'dark' ? 'Studio 5000 classic look' : 'Dark look'} onClick={() => setTheme(theme === 'dark' ? 'classic' : 'dark')} className="shrink-0">
             {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-            <span className="text-[11px]">{theme === 'dark' ? 'Classic' : 'Dark'}</span>
+            <span className="hidden text-[11px] @3xl:inline">{theme === 'dark' ? 'Classic' : 'Dark'}</span>
           </ChromeButton>
         </div>
       )}
@@ -2368,9 +2487,12 @@ export function LadderEditor(props: LadderEditorProps) {
           {allEmpty && !readOnly && (
             <div className="pointer-events-none mx-auto mt-4 max-w-lg px-4 pb-8" style={{ marginLeft: Math.max(16, (endRail.railL + 24) * zoom) }}>
               <div className="rounded-xl border border-dashed border-[var(--ld-chrome-border)] bg-[var(--ld-chrome)]/60 px-5 py-4 text-[12.5px] leading-relaxed text-[var(--ld-chrome-muted)]">
-                <div className="mb-1 text-[13px] font-semibold text-[var(--ld-chrome-text)]">This routine is empty</div>
-                Click a rung and pick an instruction from the toolbar, or just type <span className="font-mono font-semibold text-[var(--ld-chrome-text)]">XIC Start_PB</span> and
-                press <K>Enter</K> — like the ASCII editor in Studio 5000. Drag toolbar buttons onto a rung wire, right-click for more.
+                <div className="mb-1 text-[13px] font-semibold text-[var(--ld-chrome-text)]" data-testid="ld-empty-title">
+                  {noRungs ? 'This routine is empty' : 'No instructions yet'}
+                </div>
+                {noRungs ? 'Pick an instruction from the toolbar' : `Click ${rungs.length === 1 ? 'the rung' : 'a rung'} and pick an instruction from the toolbar`}, or just
+                type <span className="font-mono font-semibold whitespace-nowrap text-[var(--ld-chrome-text)]" data-testid="ld-empty-example">{exampleEntry}</span> and press{' '}
+                <K>Enter</K> — like the ASCII editor in Studio 5000. Drag toolbar buttons onto a rung wire, right-click for more.
               </div>
             </div>
           )}

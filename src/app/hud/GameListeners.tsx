@@ -1,8 +1,9 @@
 /**
  * Global game listeners, mounted once in <App/>:
  *  - toasts for newly unlocked achievements (tone 'achievement', sfx 'achievement') via useGame.consumeUnlocks()
- *  - level-up / promotion toasts (sfx 'levelUp') — held back while the mission celebration shows its own
- *    level-up; a promotion earned there is toasted after the celebration closes
+ *  - level-up / promotion toasts (sfx 'levelUp') — held back while the mission celebration is open
+ *    (`useUiStore.celebrating`): a level-up the celebration already announced is not repeated; a
+ *    promotion is toasted (without a second fanfare) once the celebration has closed
  *  - applies settings: sfx.setEnabled(settings.sound), master volume, `html.reduce-motion` class
  */
 import { useEffect } from 'react';
@@ -12,9 +13,16 @@ import { levelForXp } from '../../game/ranks';
 import { useGame } from '../../game/store';
 import { toast } from '../../ui';
 import { useUiPrefs } from './prefs';
+import { useUiStore } from './uiStore';
 import './hud.css';
 
 const STAGGER_MS = 420;
+/** Level-ups wait this long before being announced (a celebration opening right after can claim them). */
+export const LEVEL_UP_DELAY_MS = 250;
+/** A mission clear opens the celebration: wait at most this long for it before announcing anyway. */
+export const CELEBRATION_WAIT_MS = 3000;
+/** Pause between the celebration closing and the held-back toasts. */
+export const AFTER_CELEBRATION_MS = 400;
 
 type GameSnapshot = ReturnType<typeof useGame.getState>;
 
@@ -27,22 +35,14 @@ function isMissionClear(s: GameSnapshot, before: GameSnapshot): boolean {
   });
 }
 
-/** The mission-complete celebration overlay is on screen (it announces level-ups itself). */
-function celebrationShowing(): boolean {
-  return typeof document !== 'undefined' && !!document.querySelector('[data-testid="celebration"]');
-}
-
-/** Run `fn` once the celebration (if it opens) has closed: first give it time to open, then poll. */
-function afterCelebration(later: (fn: () => void, ms: number) => void, fn: () => void): void {
-  let polls = 0;
-  let seen = false;
-  const check = (): void => {
-    polls++;
-    if (celebrationShowing()) seen = true;
-    else if (seen || polls >= 4) return void later(fn, 400);
-    if (polls < 2400) later(check, 500); // give up after ~20 min
-  };
-  later(check, 500);
+interface LevelUpNote {
+  level: number;
+  promoted: boolean;
+  rankTitle: string;
+  xpToNext: number;
+  /** Queued at (ms); a mission clear waits for its celebration until CELEBRATION_WAIT_MS later. */
+  at: number;
+  expectCelebration: boolean;
 }
 
 function announceAchievements(ids: string[]): void {
@@ -98,10 +98,12 @@ export function GameListeners() {
   }, []);
 
   // Level-ups and promotions. A passed mission (completeMission) opens the CelebrationModal, which
-  // animates its own level-up with the fanfare — so no toast / second fanfare then. A promotion earned
-  // that way is announced once the celebration has been closed.
+  // animates its own level-up with the fanfare — so no toast / second fanfare for that level. Anything
+  // arriving while the celebration is open waits until it closes.
   useEffect(() => {
     let prev = levelForXp(useGame.getState().profile.xp);
+    let queue: LevelUpNote[] = [];
+    let sawCelebration = false;
     const timers = new Set<number>();
     const later = (fn: () => void, ms: number): void => {
       const h = window.setTimeout(() => {
@@ -110,34 +112,66 @@ export function GameListeners() {
       }, ms);
       timers.add(h);
     };
-    const unsub = useGame.subscribe((s, before) => {
+
+    /** Announce the queued level-ups; `covered` = level the celebration already announced. */
+    const flush = (covered: number | null): void => {
+      const notes = queue;
+      queue = [];
+      sawCelebration = false;
+      const promo = [...notes].reverse().find((n) => n.promoted);
+      const top = notes[notes.length - 1];
+      if (!top) return;
+      if (promo) {
+        toast({ tone: 'achievement', title: `Promoted: ${promo.rankTitle}!`, body: `You reached level ${promo.level}. New insignia unlocked on your profile.`, duration: 6000 });
+        // the celebration already played the level-up fanfare for it
+        sfx.play(covered !== null && promo.level <= covered ? 'achievement' : 'levelUp');
+        return;
+      }
+      if (covered !== null && top.level <= covered) return; // shown by the celebration
+      toast({ tone: 'success', title: `Level up! Level ${top.level}`, body: `${top.rankTitle} · ${top.xpToNext.toLocaleString('en-US')} XP to level ${top.level + 1}`, duration: 5000 });
+      sfx.play('levelUp');
+    };
+
+    const check = (): void => {
+      if (queue.length === 0 || useUiStore.getState().celebrating) return; // flushed when it closes
+      const waiting = queue.some((n) => n.expectCelebration && performance.now() - n.at < CELEBRATION_WAIT_MS);
+      if (waiting && !sawCelebration) {
+        later(check, LEVEL_UP_DELAY_MS);
+        return;
+      }
+      flush(null);
+    };
+
+    const unsubGame = useGame.subscribe((s, before) => {
       const cur = levelForXp(s.profile.xp);
       const from = prev;
       prev = cur;
       if (cur.level <= from.level) return;
-      const promoted = cur.rank.title !== from.rank.title;
-      const promotion = (): void => {
-        toast({ tone: 'achievement', title: `Promoted: ${cur.rank.title}!`, body: `You reached level ${cur.level}. New insignia unlocked on your profile.`, duration: 6000 });
-      };
-      if (isMissionClear(s, before) || celebrationShowing()) {
-        if (promoted) afterCelebration(later, () => {
-          promotion();
-          sfx.play('achievement');
-        });
-        return;
-      }
-      later(() => {
-        if (celebrationShowing()) {
-          if (promoted) afterCelebration(later, promotion);
-          return;
-        }
-        if (promoted) promotion();
-        else toast({ tone: 'success', title: `Level up! Level ${cur.level}`, body: `${cur.rank.title} · ${cur.xpToNext.toLocaleString('en-US')} XP to level ${cur.level + 1}`, duration: 5000 });
-        sfx.play('levelUp');
-      }, 250);
+      queue.push({
+        level: cur.level,
+        promoted: cur.rank.title !== from.rank.title || queue.some((n) => n.promoted),
+        rankTitle: cur.rank.title,
+        xpToNext: cur.xpToNext,
+        at: performance.now(),
+        expectCelebration: isMissionClear(s, before),
+      });
+      later(check, LEVEL_UP_DELAY_MS);
     });
+
+    const unsubUi = useUiStore.subscribe((ui, before) => {
+      if (ui.celebrating && !before.celebrating) sawCelebration = true;
+      if (!ui.celebrating && before.celebrating && queue.length > 0) {
+        const covered = before.celebratedLevel;
+        later(() => {
+          if (useUiStore.getState().celebrating) return; // another one opened: wait for it
+          flush(covered);
+        }, AFTER_CELEBRATION_MS);
+      }
+    });
+
     return () => {
-      unsub();
+      unsubGame();
+      unsubUi();
       timers.forEach((h) => window.clearTimeout(h));
     };
   }, []);

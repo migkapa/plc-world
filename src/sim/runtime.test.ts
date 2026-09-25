@@ -258,4 +258,47 @@ describe('SimRuntime', () => {
     rt.setControl('start', true);
     expect(calls).toBe(0);
   });
+
+  it('onControl() reports every setControl (unthrottled) until unsubscribed or disposed', () => {
+    const { rt } = setup({ notifyIntervalMs: 1000, now: () => 0 });
+    const seen: Array<[string, boolean | number]> = [];
+    const off = rt.onControl((id, value) => seen.push([id, value]));
+    rt.setControl('start', true);
+    rt.setControl('start', false);
+    rt.setControl('pot', 42);
+    expect(seen).toEqual([
+      ['start', true],
+      ['start', false],
+      ['pot', 42],
+    ]);
+    // the plant has already taken the value when listeners run
+    const order: boolean[] = [];
+    const off2 = rt.onControl(() => order.push(rt.getControl('stop') === true));
+    rt.setControl('stop', true);
+    expect(order).toEqual([true]);
+    off2();
+    // a throwing listener does not break the others
+    const off3 = rt.onControl(() => {
+      throw new Error('boom');
+    });
+    const errors: unknown[] = [];
+    const origError = console.error;
+    console.error = (...a: unknown[]) => void errors.push(a);
+    try {
+      rt.setControl('start', true);
+    } finally {
+      console.error = origError;
+    }
+    expect(seen[seen.length - 1]).toEqual(['start', true]);
+    expect(errors.length).toBe(1);
+    off3();
+    off();
+    rt.setControl('start', false);
+    expect(seen.length).toBe(5); // start,start,pot,stop,start — nothing after off()
+    const late: string[] = [];
+    rt.onControl((id) => late.push(id));
+    rt.dispose();
+    rt.setControl('start', true);
+    expect(late).toEqual([]);
+  });
 });

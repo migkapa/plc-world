@@ -116,16 +116,28 @@ describe('useWorkspaceRuntime', () => {
     expect(hook.result.current.controller.getStatus().mode).toBe('REM_PROG');
   });
 
-  it('reports forces, cleared major faults, toggle bits and operator controls', () => {
+  it('reports forces and operator controls (via runtime.onControl, no wrapper)', () => {
     const { hook, events } = setup({ rungs: ['XIC(Switch_0)OTE(Light_0);'], comments: [], tags: [] });
     const ws = hook.result.current;
     act(() => ws.controller.setForce('Switch_0', true));
     expect(events).toContainEqual({ type: 'forceUsed' });
-    act(() => ws.editorController.tags.writeBool('Switch_0', true));
-    expect(events).toContainEqual({ type: 'toggleBitUsed' });
+    // the runtime is not patched: setControl is the class method
+    expect(Object.prototype.hasOwnProperty.call(ws.runtime, 'setControl')).toBe(false);
     act(() => ws.runtime.setControl('pb_green', true));
     act(() => ws.runtime.setControl('pb_green', false));
+    act(() => ws.runtime.setControl('pb_green', true)); // within 250 ms: not counted twice
     expect(events.filter((e) => e.type === 'controlUsed')).toEqual([{ type: 'controlUsed', sceneId: 'trainer', controlId: 'pb_green' }]);
+    // a direct controller write is not a Toggle Bit (that is reported by the ladder editor)
+    act(() => ws.controller.tags.writeBool('Switch_0', true));
+    expect(events).not.toContainEqual({ type: 'toggleBitUsed' });
+  });
+
+  it('stops listening to controls on unmount', () => {
+    const { hook, events } = setup({ rungs: ['XIC(Switch_0)OTE(Light_0);'], comments: [], tags: [] });
+    const rt = hook.result.current.runtime;
+    hook.unmount();
+    rt.setControl('pb_green', true);
+    expect(events.filter((e) => e.type === 'controlUsed')).toEqual([]);
   });
 
   it('counts a cleared major fault', () => {

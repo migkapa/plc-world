@@ -644,6 +644,7 @@ function TankMixing({ cutaway = true }: { cutaway?: boolean }) {
       <OnNozzle nozzle={n.lshh}>
         <LevelSwitch
           getActive={() => tankLevel() < 97}
+          getWet={() => tankLevel() >= 97}
           cableTo={jbRoute(n.lshh, 2, [
             [0.84, n.lshh.position[1] - 0.02, 0.06],
             [gx - 0.185, TJB_POS[1] + 0.25, 0.28],

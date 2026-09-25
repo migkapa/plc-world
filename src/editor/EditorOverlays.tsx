@@ -42,12 +42,26 @@ export interface AutoItem {
 export type CommitHow = 'enter' | 'tab' | 'shift-tab' | 'blur';
 
 /**
+ * The only selectable suggestion that starts with the typed text (case-insensitive), when the typed
+ * text is not itself a suggestion — what Enter takes with `enterTakesSingleMatch`.
+ */
+export function singlePrefixMatch(items: readonly AutoItem[], value: string): AutoItem | undefined {
+  const typed = value.trim().toLowerCase();
+  if (typed === '') return undefined;
+  const pickable = items.filter((i) => !i.action && !i.disabled);
+  if (pickable.some((i) => i.value.toLowerCase() === typed)) return undefined;
+  const matches = pickable.filter((i) => i.value.toLowerCase().startsWith(typed));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
  * Text input with a suggestion list.
  *
  * Keys: Enter commits what was TYPED (an exact case-insensitive match is committed in the item's
  * spelling) — it never swaps the text for a longer suggestion, unless the user moved the highlight
- * with ↑/↓. Tab completes to the highlighted row, or to the first suggestion extending the typed text
- * (marked "Tab"). Mouse click picks a row. Esc cancels.
+ * with ↑/↓, or `enterTakesSingleMatch` is set and exactly one suggestion starts with the typed text.
+ * Tab completes to the highlighted row, or to the first suggestion extending the typed text (marked
+ * "Tab"). Mouse click picks a row. Esc cancels.
  */
 export interface AutocompleteInputProps {
   value: string;
@@ -72,6 +86,12 @@ export interface AutocompleteInputProps {
   commitOnBlur?: boolean;
   listClassName?: string;
   ariaLabel?: string;
+  /**
+   * Enter with no highlighted row takes the suggestion when exactly ONE selectable row starts with the
+   * typed text (a prefix of an existing tag → that tag). The typed text is kept when it matches a row
+   * exactly, when several rows match, or when the user highlighted an action row (e.g. "New tag").
+   */
+  enterTakesSingleMatch?: boolean;
 }
 
 export function AutocompleteInput(p: AutocompleteInputProps) {
@@ -125,6 +145,13 @@ export function AutocompleteInput(p: AutocompleteInputProps) {
 
   /** Enter / Tab without a highlighted row: the typed text, in an exact match's spelling. */
   const commitTyped = (how: CommitHow): void => {
+    if (how === 'enter' && p.enterTakesSingleMatch && !p.onAccept) {
+      const single = singlePrefixMatch(items, value);
+      if (single) {
+        accept(single, how);
+        return;
+      }
+    }
     const typed = value.trim().toLowerCase();
     const exact = !p.onAccept && typed !== '' ? items.find((i) => !i.action && !i.disabled && i.value.toLowerCase() === typed) : undefined;
     commit(exact ? exact.value : value, how);

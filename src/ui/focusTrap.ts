@@ -1,7 +1,8 @@
 /**
  * useFocusTrap — dialog focus management for modals, drawers and sheets.
  *
- *  - on activate: remembers the opener (document.activeElement) and moves focus into the container
+ *  - on activate: remembers the opener (document.activeElement — or, when focus had already dropped to
+ *    <body> because the opener got disabled / removed, the last element that had focus) and moves focus into the container
  *    (`[data-autofocus]` if present and enabled, else the first tabbable element, else the container);
  *    focus that a child already placed inside the container (autoFocus, its own effect) is left alone
  *  - while active: Tab / Shift+Tab cycle inside the container
@@ -33,6 +34,36 @@ export function tabbables(root: HTMLElement): HTMLElement[] {
 /** Active traps, innermost last: only the top one handles Tab (nested dialogs). */
 const stack: HTMLElement[] = [];
 
+/**
+ * The elements that most recently received focus (newest last). A button that is disabled while
+ * focused (e.g. "Run tests" while the run is in progress) drops focus to <body>; a dialog opened after
+ * that still returns focus to it when it closes.
+ */
+const recentFocus: HTMLElement[] = [];
+if (typeof document !== 'undefined') {
+  document.addEventListener(
+    'focusin',
+    (e) => {
+      if (!(e.target instanceof HTMLElement)) return;
+      const i = recentFocus.indexOf(e.target);
+      if (i >= 0) recentFocus.splice(i, 1);
+      recentFocus.push(e.target);
+      if (recentFocus.length > 8) recentFocus.shift();
+    },
+    true,
+  );
+}
+
+function openerFor(root: HTMLElement): HTMLElement | null {
+  const a = document.activeElement;
+  if (a instanceof HTMLElement && a !== document.body && !root.contains(a)) return a;
+  for (let i = recentFocus.length - 1; i >= 0; i--) {
+    const el = recentFocus[i]!;
+    if (el.isConnected && !root.contains(el)) return el;
+  }
+  return null;
+}
+
 export interface FocusTrapOptions {
   /** Where focus goes when the trap is released (default: the element focused before it activated). */
   returnFocus?: () => HTMLElement | null | undefined;
@@ -46,7 +77,7 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean
     if (!active) return;
     const root = ref.current;
     if (!root) return;
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const opener = openerFor(root);
 
     if (!root.contains(document.activeElement)) {
       const preferred = root.querySelector<HTMLElement>('[data-autofocus]:not([disabled])');
@@ -88,7 +119,7 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean
       const back = opts.current.returnFocus?.() ?? opener;
       // Runs after the dialog left the DOM: only restore if focus was lost with it.
       const lost = (): boolean => !document.activeElement || document.activeElement === document.body || root.contains(document.activeElement);
-      if (back && back.isConnected && lost()) back.focus();
+      if (back && back.isConnected && lost()) back.focus({ preventScroll: true });
     };
   }, [active, ref]);
 }

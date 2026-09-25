@@ -3,8 +3,8 @@ import { createController } from '@/plc/controller';
 import { INSTRUCTION_DEFS } from '@/plc/instructions';
 import { createProjectForScene } from '@/sim/project';
 import { trainerLogic } from '@/sim/scenes';
-import { exampleFor } from './examples';
-import { parseRung } from '@/plc/neutralText';
+import { detailsRungs, exampleFor } from './examples';
+import { instructionsOf, parseRung } from '@/plc/neutralText';
 import {
   createLiveReader,
   forceInfo,
@@ -180,5 +180,20 @@ describe('examples', () => {
       const text = exampleFor(op);
       expect(() => parseRung(text), op).not.toThrow();
     }
+  });
+
+  it('the help card example is a rung of the instruction’s own details (they never disagree)', () => {
+    for (const [op, def] of Object.entries(INSTRUCTION_DEFS)) {
+      const rungs = detailsRungs(def.details);
+      expect(rungs.length, `${op} details have a code example`).toBeGreaterThan(0);
+      for (const r of rungs) expect(() => parseRung(r), `${op}: ${r}`).not.toThrow();
+      const ex = exampleFor(op);
+      expect(rungs, op).toContain(ex);
+      expect(instructionsOf(parseRung(ex).elements).some((i) => i.op === op), `${op} example uses ${op}`).toBe(true);
+    }
+    // the ones reviewers reported
+    expect(exampleFor('TON')).toBe('XIC(Start_PB)TON(Start_Delay,3000,0);');
+    expect(exampleFor('MEQ')).toBe('MEQ(Local:1:I.Data,16#000F,2#0101)OTE(Pattern_Found);');
+    expect(exampleFor('OTE')).toBe('[XIC(Start_PB),XIC(Motor)]XIC(Stop_PB)OTE(Motor);');
   });
 });

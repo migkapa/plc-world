@@ -570,20 +570,21 @@ export function Screw({ position, r = 0.0022, h = 0.0012, rotation }: { position
 // ---------------------------------------------------------------------------
 
 /**
- * Translucent-looking lamp lens material: saturated daylight color, a small emissive floor so the
- * unlit lens reads as colored polycarbonate (not paint), and a view-dependent "hot core" (emission
- * strongest where the lens faces the viewer, like an LED seen through a diffusing lens).
+ * Lamp lens material (pilot lights, illuminated push buttons, stack-light tiers). Not tone mapped, so a lit lens keeps
+ * its HDR emissive level and blooms; a view-dependent "hot core" makes the emission strongest where the lens faces the
+ * viewer (an LED seen through a diffusing lens). Drive its state with `lensTints()` + `setLensLit()`; it starts unlit.
  */
 export function makeLensMaterial(led: LedColor, opts: { map?: THREE.Texture; emissiveMap?: THREE.Texture; bumpMap?: THREE.Texture; bumpScale?: number; edge?: number } = {}) {
+  const off = lensTints(led);
   const m = new THREE.MeshStandardMaterial({
-    color: LENS_HEX[led],
+    color: off.unlit,
     map: opts.map ?? null,
     emissive: LIT_HEX[led],
     emissiveMap: opts.emissiveMap ?? opts.map ?? null,
     bumpMap: opts.bumpMap ?? null,
     bumpScale: opts.bumpScale ?? 1,
-    emissiveIntensity: 0,
-    roughness: 0.24,
+    emissiveIntensity: off.unlitE,
+    roughness: 0.2,
     metalness: 0,
     toneMapped: false,
   });
@@ -592,23 +593,59 @@ export function makeLensMaterial(led: LedColor, opts: { map?: THREE.Texture; emi
     sh.fragmentShader = sh.fragmentShader.replace(
       '#include <emissivemap_fragment>',
       `#include <emissivemap_fragment>
-      float lensNdv = abs(dot(normalize(normal), normalize(vViewPosition)));
+      float lensNdv = clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0);
       totalEmissiveRadiance *= mix(${edge}, 1.0, lensNdv * lensNdv);`,
     );
   };
   m.customProgramCacheKey = () => `lens-core:${edge}`;
+  m.userData.lit = false;
   return m;
 }
 
-/** Lit/unlit tints + emissive levels for a lens (unlit keeps ~95 % of the lens color). */
-export function lensTints(led: LedColor, litIntensity = 2.6) {
+const LENS_SMOKE = new THREE.Color(0.022, 0.022, 0.024);
+
+/** Linear-space luminance of a color. */
+function luminance(c: THREE.Color): number {
+  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+}
+
+export interface LensTints {
+  /** Unlit diffuse color: dark smoky polycarbonate with just a hint of the lens hue. */
+  unlit: THREE.Color;
+  /** Lit diffuse color. */
+  lit: THREE.Color;
+  /** Emissive floor when unlit (light scattered inside the translucent lens). */
+  unlitE: number;
+  /** Emissive intensity when lit. */
+  litE: number;
+}
+
+/**
+ * Lit / unlit states of a lamp lens.
+ *  - unlit: ~12 % of the daylight lens color, pulled toward neutral smoke, plus a tiny emissive floor — reads as a
+ *    dark, slightly translucent colored lens, never as "on" (the material is not tone mapped, so a saturated diffuse
+ *    color would look lit);
+ *  - lit: the emissive level is derived from the lit color's luminance so the lens core reaches ≈ `coreLuminance`
+ *    for EVERY color (the Stage's Bloom threshold is 1: a red / blue / amber lens at a fixed intensity used to stay
+ *    below it while green bloomed).
+ */
+export function lensTints(led: LedColor, coreLuminance = 2.6): LensTints {
   const white = led === 'white';
+  const litCol = new THREE.Color(LIT_HEX[led]);
   return {
-    unlit: new THREE.Color(LENS_HEX[led]).multiplyScalar(white ? 0.85 : 0.95),
-    lit: new THREE.Color(LIT_HEX[led]).multiplyScalar(white ? 0.6 : 0.85),
-    unlitE: white ? 0.03 : 0.07,
-    litE: litIntensity,
+    unlit: new THREE.Color(LENS_HEX[led]).multiplyScalar(white ? 0.2 : 0.13).lerp(LENS_SMOKE, 0.3),
+    lit: litCol.clone().multiplyScalar(white ? 0.6 : 0.85),
+    unlitE: white ? 0.012 : 0.03,
+    litE: THREE.MathUtils.clamp(coreLuminance / Math.max(0.05, luminance(litCol)), 1.2, 12),
   };
+}
+
+/** Apply a lens state (no-op when unchanged). */
+export function setLensLit(m: THREE.MeshStandardMaterial, tints: LensTints, lit: boolean): void {
+  if (m.userData.lit === lit) return;
+  m.userData.lit = lit;
+  m.color.copy(lit ? tints.lit : tints.unlit);
+  m.emissiveIntensity = lit ? tints.litE : tints.unlitE;
 }
 
 // ---------------------------------------------------------------------------

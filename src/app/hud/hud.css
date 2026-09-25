@@ -3,25 +3,26 @@
  * `html.reduce-motion` is toggled by <GameListeners/> from the player's settings.
  */
 
-@keyframes pw-xp-pop {
+/* "+N XP" beside the HUD: vertically centred in the top bar, drifts up a little and fades. */
+@keyframes pw-xp-float {
   0% {
     opacity: 0;
-    transform: translate(-50%, 6px) scale(0.9);
+    transform: translate(8px, -50%) scale(0.9);
   }
   15% {
     opacity: 1;
-    transform: translate(-50%, 0) scale(1.08);
+    transform: translate(0, -50%) scale(1.08);
   }
   30% {
-    transform: translate(-50%, 0) scale(1);
+    transform: translate(0, -50%) scale(1);
   }
   80% {
     opacity: 1;
-    transform: translate(-50%, -6px);
+    transform: translate(0, -70%);
   }
   100% {
     opacity: 0;
-    transform: translate(-50%, -14px);
+    transform: translate(0, -90%);
   }
 }
 

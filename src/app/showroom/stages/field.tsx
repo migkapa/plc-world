@@ -307,7 +307,7 @@ function TankScene({ demo }: { demo: DemoStore }) {
   const inlet = n.inlet.position;
   return (
     <group>
-      <Tank getLevel={level} getTemperature={temp} getAgitatorRpm={() => (demo.bool('mixer') ? 70 : 0)} getHeaterOn={() => demo.bool('heater') && level() >= 10} />
+      <Tank getLevel={level} getTemperature={temp} temperatureTint getBoiling={() => temp() >= 99.5 && level() > 0} getAgitatorRpm={() => (demo.bool('mixer') ? 70 : 0)} getHeaterOn={() => demo.bool('heater') && level() >= 10} />
       <OnNozzle nozzle={n.lt}>
         <LevelTransmitter getValue={level} units="%" tagLabel="LT-101" />
       </OnNozzle>
@@ -321,7 +321,7 @@ function TankScene({ demo }: { demo: DemoStore }) {
         <LevelSwitch getActive={() => level() >= 90} />
       </OnNozzle>
       <OnNozzle nozzle={n.lshh}>
-        <LevelSwitch getActive={() => level() < 97} />
+        <LevelSwitch getActive={() => level() < 97} getWet={() => level() >= 97} />
       </OnNozzle>
       <PipeRun
         points={[inlet, [inlet[0], inlet[1] + 0.22, inlet[2]], [-1.05, inlet[1] + 0.22, inlet[2]], [-1.05, 0.02, inlet[2]]]}

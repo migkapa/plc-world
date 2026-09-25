@@ -54,8 +54,8 @@ import {
 } from '../conveyor-sort/hall';
 import { IoHotspot, playSfx, ShadowBudget, TagLayer, useEdge, useSceneLoops } from '../conveyor-sort/kit';
 import { ControlValve } from './ControlValve';
-import { HeaterCue, LiquidGuard, LocalIndicator, TankFx } from './fx';
-import type { TankProcessState } from './logic';
+import { HeaterCue, LocalIndicator, TankFx } from './fx';
+import { TANK_PROCESS, type TankProcessState } from './logic';
 import {
   AlarmBeacon,
   FEED,
@@ -246,6 +246,7 @@ export const TankProcessView = memo(function TankProcessView({ state, runtime }:
       temp: () => state.temperature,
       rpm: () => state.agitatorRpm,
       heater: () => state.heaterGlow > 0.35,
+      boiling: () => state.boiling,
     }),
     [state],
   );
@@ -354,22 +355,34 @@ export const TankProcessView = memo(function TankProcessView({ state, runtime }:
       {/* ------------------------------ process skid ------------------------------ */}
       <Skid />
       <group position={[0, SKID_H, 0]}>
-        <Tank diameter={TANK_D} height={TANK_H} getLevel={g.level} getTemperature={g.temp} getAgitatorRpm={g.rpm} getHeaterOn={g.heater} cutaway tag="T-101" cables={tankCables} />
-        <LiquidGuard state={state} />
+        <Tank
+          diameter={TANK_D}
+          height={TANK_H}
+          getLevel={g.level}
+          getTemperature={g.temp}
+          temperatureTint
+          getBoiling={g.boiling}
+          getAgitatorRpm={g.rpm}
+          getHeaterOn={g.heater}
+          cutaway
+          tag="T-101"
+          cables={tankCables}
+        />
         <OnNozzle nozzle={N.lt}>
           <LevelTransmitter getValue={() => state.ltReading} units="%" tagLabel="LT-101" antenna="lens" cableTo={routes.lt} />
         </OnNozzle>
         <OnNozzle nozzle={N.tt}>
           <TempTransmitter getValue={() => state.ttReading} units="°C" tagLabel="TT-101" range={[0, 150]} cableTo={routes.tt} />
         </OnNozzle>
+        {/* fork wetness follows the product; the LED is the output (LSH can fail dry, LSHH is N.C. fail-safe: on while DRY) */}
         <OnNozzle nozzle={N.lsl}>
-          <LevelSwitch getActive={() => state.lsl} cableTo={routes.lsl} />
+          <LevelSwitch getActive={() => state.lsl} getWet={() => state.level >= TANK_PROCESS.lsl} cableTo={routes.lsl} />
         </OnNozzle>
         <OnNozzle nozzle={N.lsh}>
-          <LevelSwitch getActive={() => state.lsh} cableTo={routes.lsh} />
+          <LevelSwitch getActive={() => state.lsh} getWet={() => state.level >= TANK_PROCESS.lsh} cableTo={routes.lsh} />
         </OnNozzle>
         <OnNozzle nozzle={N.lshh}>
-          <LevelSwitch getActive={() => state.lshh} cableTo={routes.lshh} />
+          <LevelSwitch getActive={() => state.lshh} getWet={() => state.level >= TANK_PROCESS.lshh} cableTo={routes.lshh} />
         </OnNozzle>
         <HeaterCue state={state} />
         <TankFx state={state} />

@@ -14,6 +14,6 @@ export * from './tagTools';
 export { exampleFor } from './examples';
 export { TagMonitor, TagInput, type TagMonitorProps } from './TagMonitor';
 export { ControllerOrganizer, buildOrganizerTree, type ControllerOrganizerProps, type OrganizerNode, type OrganizerKind, type OrganizerSelection } from './ControllerOrganizer';
-export { OnlineToolbar, defaultCommPath, type OnlineToolbarProps } from './OnlineToolbar';
+export { OnlineToolbar, defaultCommPath, type EditsState, type OnlineToolbarProps } from './OnlineToolbar';
 export { AutocompleteInput, ContextMenu, HoverCard, type AutoItem, type MenuEntry, type MenuItem } from './EditorOverlays';
 export { InstrGlyph } from './glyphs';

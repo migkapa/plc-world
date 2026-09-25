@@ -6,6 +6,7 @@
 import { serializeRung } from '../../plc/neutralText';
 import type { Project, Rung, RungElement, TagDef, VerifyError } from '../../plc/types';
 import { MAIN_PROGRAM, MAIN_ROUTINE } from '../../sim/project';
+import type { SceneLogic } from '../../sim/types';
 
 /** A program as it is saved / exported / validated: neutral-text rungs, rung comments, player tags. */
 export interface ProgramSnapshot {
@@ -152,4 +153,24 @@ export function splitErrors(errors: ReadonlyArray<VerifyError>): { errors: Verif
 export function friendlyVerifyError(e: VerifyError): string {
   const where = e.rungIndex >= 0 ? `Rung ${e.rungIndex}: ` : '';
   return `${where}${e.message}`;
+}
+
+/**
+ * ASCII quick-entry example for the ladder editor's empty-routine hint, using the plant's own I/O
+ * aliases (the first digital input, e.g. "XIC Switch_0") and an instruction the mission allows.
+ */
+export function exampleEntryFor(scene: Pick<SceneLogic<unknown>, 'io'>, allowed?: ReadonlyArray<string>): string {
+  const ok = (op: string): boolean => !allowed || allowed.some((a) => a.toUpperCase() === op);
+  const input = scene.io.find((p) => p.dir === 'input' && p.signal === 'digital')?.alias;
+  const output = scene.io.find((p) => p.dir === 'output' && p.signal === 'digital')?.alias;
+  if (input) {
+    const contact = ['XIC', 'XIO'].find(ok);
+    if (contact) return `${contact} ${input}`;
+  }
+  if (output) {
+    const coil = ['OTE', 'OTL'].find(ok);
+    if (coil) return `${coil} ${output}`;
+  }
+  const first = allowed?.[0]?.toUpperCase();
+  return first ?? (input ? `XIC ${input}` : 'XIC Start_PB');
 }

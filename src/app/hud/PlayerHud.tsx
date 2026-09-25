@@ -1,6 +1,7 @@
 /**
  * Player HUD for the TopNav right slot: rank insignia + level, XP bar (tooltip: xp / next level),
- * streak flame and total stars. Click → Profile. Shows a floating "+N XP" when XP is gained.
+ * streak flame and total stars. Click → Profile. Shows a floating "+N XP" beside the HUD (inside the
+ * top bar, so it never covers page controls such as the mission bar's Hints button) when XP is gained.
  */
 import { Flame, Star } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -104,12 +105,14 @@ export function PlayerHud({ className }: { className?: string }) {
         <span className="font-mono text-[13px] font-semibold text-yellow-100">{p.stars}</span>
       </span>
 
-      {/* XP gained pop */}
+      {/* XP gained pop — floats up beside the HUD inside the top bar (never over the page below it) */}
       {pop && (
         <span
           key={pop.id}
-          className="pointer-events-none absolute top-full left-1/2 z-50 mt-1 rounded-full border border-yellow-300/40 bg-yellow-400/15 px-2 py-0.5 font-mono text-[11px] font-bold whitespace-nowrap text-yellow-200 shadow-lg shadow-yellow-900/30 backdrop-blur"
-          style={{ animation: reduced ? undefined : 'pw-xp-pop 1.8s ease-out both', transform: reduced ? 'translateX(-50%)' : undefined }}
+          className="pointer-events-none absolute top-1/2 right-full z-50 mr-1 rounded-full border border-yellow-300/40 bg-yellow-400/15 px-2 py-0.5 font-mono text-[11px] font-bold whitespace-nowrap text-yellow-200 shadow-lg shadow-yellow-900/30 backdrop-blur"
+          style={{ animation: reduced ? undefined : 'pw-xp-float 1.8s ease-out both', transform: reduced ? 'translateY(-50%)' : undefined }}
+          data-testid="xp-pop"
+          aria-hidden
         >
           +{fmt(pop.amount)} XP
         </span>

@@ -6,7 +6,7 @@
  * toolbar focus, End-rung double-click, rung text validation, organizer keyboard, online toolbar.
  */
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { createRef, useState } from 'react';
+import { Profiler, createRef, useState } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createController, type LogixController } from '@/plc/controller';
 import { instructionsOf, parseRung, serializeRung } from '@/plc/neutralText';
@@ -227,13 +227,29 @@ describe('operand autocomplete', () => {
     return { c, rs, m, input: screen.getByRole('textbox', { name: /OTE/ }) };
   };
 
-  it('Enter commits the typed name — never a longer existing tag', async () => {
+  it('Enter on a prefix of exactly one existing tag takes that tag', async () => {
     const { m, input } = setup();
     fireEvent.change(input, { target: { value: 'Motor' } });
     // the explicit choices are listed: create it, or pick Motor_Run
     const list = screen.getByRole('listbox');
     expect(within(list).getAllByRole('option')[0]!.textContent).toMatch(/New tag 'Motor'/);
     expect(within(list).getByText('Motor_Run')).toBeTruthy();
+    // the footer says what Enter does
+    expect(document.body.textContent).toMatch(/Enter use Motor_Run/);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await wait();
+    expect(texts(m.state.rungs)[0]).toBe('XIC(Motor_Run)OTE(Motor_Run);');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('Enter keeps the typed text when several tags match the prefix', async () => {
+    const c = trainerController(['XIC(Motor_Run)OTE(Light_0);'], [...tags, { name: 'Motor_Stop', dataType: 'BOOL' }]);
+    const rs = c.project.programs[0]!.routines[0]!.rungs;
+    const m = mount(rs, { controller: c });
+    act(() => m.ref.current!.setSelection({ rungId: rs[0]!.id, elementId: idOf(rs[0]!, 1), operandIndex: 0 }));
+    act(() => m.ref.current!.editOperand());
+    const input = screen.getByRole('textbox', { name: /OTE/ });
+    fireEvent.change(input, { target: { value: 'Motor' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await wait();
     expect(texts(m.state.rungs)[0]).toBe('XIC(Motor_Run)OTE(Motor);');
@@ -529,5 +545,207 @@ describe('OnlineToolbar', () => {
     const prog = screen.getByRole('menuitem', { name: /^Program Mode/ }) as HTMLButtonElement;
     expect(prog.disabled).toBe(true);
     expect(prog.title).toBe('Clear Majors first');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration follow-ups
+// ---------------------------------------------------------------------------
+
+describe('empty-routine hint', () => {
+  it('shows the example entry given by the host', () => {
+    mount([parseRung(';')], { exampleEntry: 'XIC Switch_3' });
+    expect(screen.getByTestId('ld-empty-example').textContent).toBe('XIC Switch_3');
+    expect(screen.getByTestId('ld-empty-title').textContent).toBe('No instructions yet');
+  });
+
+  it('says "No instructions yet" (not "empty") when an empty rung carries a comment', () => {
+    const r: Rung = { ...parseRung(';'), comment: 'Rung 0: start the motor here' };
+    mount([r]);
+    expect(screen.getByTestId('ld-empty-title').textContent).toBe('No instructions yet');
+  });
+
+  it('says the routine is empty without rungs', () => {
+    mount([]);
+    expect(screen.getByTestId('ld-empty-title').textContent).toBe('This routine is empty');
+  });
+
+  it('defaults to an input alias of the controller (a tag that exists in this plant)', () => {
+    const c = trainerController(['']);
+    mount(c.project.programs[0]!.routines[0]!.rungs, { controller: c });
+    const text = screen.getByTestId('ld-empty-example').textContent!;
+    expect(text).toMatch(/^XIC \w+$/);
+    expect(c.tags.exists(text.slice(4), 'MainProgram')).toBe(true);
+    expect(text).not.toBe('XIC Start_PB');
+  });
+
+  it('uses the example in the ASCII quick-entry placeholder', () => {
+    const r = parseRung(';');
+    const m = mount([r], { exampleEntry: 'XIC PB_Green' });
+    act(() => m.ref.current!.setSelection({ rungId: r.id }));
+    act(() => m.ref.current!.startQuickEntry(''));
+    const input = screen.getByRole('textbox', { name: 'ASCII instruction entry' }) as HTMLInputElement;
+    expect(input.placeholder.startsWith('XIC PB_Green')).toBe(true);
+  });
+});
+
+describe('filling in a new box instruction', () => {
+  it('Enter moves from the timer tag to the preset, then closes on the instruction', async () => {
+    const r = parseRung('XIC(A)OTE(B);');
+    const m = mount([r]);
+    act(() => m.ref.current!.setSelection({ rungId: r.id, elementId: idOf(r, 0) }));
+    act(() => m.ref.current!.insertInstruction('TON'));
+    let input = screen.getByRole('textbox', { name: /TON Timer/ });
+    fireEvent.change(input, { target: { value: 'Delay_T' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await wait();
+    input = screen.getByRole('textbox', { name: /TON Preset/ });
+    expect(document.activeElement).toBe(input);
+    fireEvent.change(input, { target: { value: '5000' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await wait();
+    expect(screen.queryByRole('textbox', { name: /TON/ })).toBeNull();
+    const ton = instructionsOf(m.state.rungs[0]!.elements).find((i) => i.op === 'TON')!;
+    expect(ton.operands).toEqual(['Delay_T', '5000', '0']);
+    // done: the instruction is selected (not its timer operand) and the ladder has the keys
+    expect(m.ref.current!.getSelection()).toEqual({ rungId: r.id, elementId: ton.id });
+    expect(document.activeElement).toBe(m.app);
+  });
+
+  it('a number typed on the selected timer operand goes to the preset — never over the timer tag', async () => {
+    const r = parseRung('XIC(A)TON(Delay_T,?,0);');
+    const m = mount([r]);
+    const tonId = idOf(r, 1);
+    act(() => m.ref.current!.setSelection({ rungId: r.id, elementId: tonId, operandIndex: 0 }));
+    fireEvent.keyDown(m.app, { key: '3' });
+    const input = screen.getByRole('textbox', { name: /TON Preset/ }) as HTMLInputElement;
+    expect(input.value).toBe('3');
+    fireEvent.change(input, { target: { value: '3000' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await wait();
+    expect(texts(m.state.rungs)).toEqual(['XIC(A)TON(Delay_T,3000,0);']);
+  });
+
+  it('ASCII quick entry of a bare mnemonic fills its operands the same way', async () => {
+    const r = parseRung('XIC(A);');
+    const m = mount([r]);
+    act(() => m.ref.current!.setSelection({ rungId: r.id, wireIndex: 1 }));
+    act(() => m.ref.current!.startQuickEntry('CTU'));
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'ASCII instruction entry' }), { key: 'Enter' });
+    let input = screen.getByRole('textbox', { name: /CTU Counter/ });
+    fireEvent.change(input, { target: { value: 'Parts' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await wait();
+    input = screen.getByRole('textbox', { name: /CTU Preset/ });
+    fireEvent.change(input, { target: { value: '12' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await wait();
+    expect(texts(m.state.rungs)).toEqual(['XIC(A)CTU(Parts,12,0);']);
+    expect(screen.queryByRole('textbox', { name: /CTU/ })).toBeNull();
+  });
+
+  it('editing an existing operand: Enter goes to an unset operand of the same instruction only', async () => {
+    const rs = [parseRung('TON(T1,?,0);'), parseRung('XIC(?)OTE(B);')];
+    const m = mount(rs);
+    act(() => m.ref.current!.setSelection({ rungId: rs[0]!.id, elementId: idOf(rs[0]!, 0), operandIndex: 0 }));
+    act(() => m.ref.current!.editOperand());
+    fireEvent.keyDown(screen.getByRole('textbox', { name: /TON Timer/ }), { key: 'Enter' });
+    await wait();
+    const pre = screen.getByRole('textbox', { name: /TON Preset/ });
+    fireEvent.change(pre, { target: { value: '100' } });
+    fireEvent.keyDown(pre, { key: 'Enter' });
+    await wait();
+    // the XIC(?) on the next rung is not dragged in
+    expect(screen.queryByRole('textbox', { name: /TON|XIC/ })).toBeNull();
+    expect(texts(m.state.rungs)).toEqual(['TON(T1,100,0);', 'XIC(?)OTE(B);']);
+  });
+});
+
+describe('host callbacks', () => {
+  it('onToggleBit reports the operand toggled from the ladder', () => {
+    const c = trainerController(['XIC(Switch_0)OTE(Light_0);']);
+    const rs = c.project.programs[0]!.routines[0]!.rungs;
+    const onToggleBit = vi.fn();
+    const m = mount(rs, { controller: c, online: true, onToggleBit });
+    act(() => m.ref.current!.setSelection({ rungId: rs[0]!.id, elementId: idOf(rs[0]!, 1), operandIndex: 0 }));
+    fireEvent.keyDown(m.app, { key: '†', code: 'KeyT', altKey: true });
+    expect(c.tags.readBool('Light_0', 'MainProgram')).toBe(true);
+    expect(onToggleBit).toHaveBeenCalledWith('Light_0');
+    // offline: nothing is toggled or reported
+    m.rerender({ online: false });
+    fireEvent.keyDown(m.app, { key: 't', ctrlKey: true });
+    expect(onToggleBit).toHaveBeenCalledTimes(1);
+  });
+
+  it('onRungTextCommit reports a rung accepted from "Edit Rung as Text"', () => {
+    const rs = [parseRung('XIC(A)OTE(B);'), parseRung('XIC(C)OTE(D);')];
+    const onRungTextCommit = vi.fn();
+    const m = mount(rs, { onRungTextCommit });
+    act(() => m.ref.current!.editRungText(rs[1]!.id));
+    const ta = screen.getByRole('textbox', { name: 'Rung neutral text' });
+    fireEvent.change(ta, { target: { value: 'XIO(C)OTE(D);' } });
+    fireEvent.keyDown(ta, { key: 'Enter' });
+    expect(texts(m.state.rungs)).toEqual(['XIC(A)OTE(B);', 'XIO(C)OTE(D);']);
+    expect(onRungTextCommit).toHaveBeenCalledWith(1, 'XIO(C)OTE(D);');
+    // a cancelled edit is not reported
+    act(() => m.ref.current!.editRungText(rs[0]!.id));
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Rung neutral text' }), { key: 'Escape' });
+    expect(onRungTextCommit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OnlineToolbar — edits tile and rendering', () => {
+  it('shows the edits state the host drives', () => {
+    const c = trainerController(['XIC(Switch_0)OTE(Light_0);']);
+    const { rerender } = render(<OnlineToolbar controller={c} />);
+    expect(screen.getByTestId('edits-tile').textContent).toMatch(/No Edits/);
+    rerender(<OnlineToolbar controller={c} editsState="pending" />);
+    expect(screen.getByTestId('edits-tile').textContent).toMatch(/Edits Pending/);
+    rerender(<OnlineToolbar controller={c} editsState="held" />);
+    expect(screen.getByTestId('edits-tile').textContent).toMatch(/Edits Held/);
+    rerender(<OnlineToolbar controller={c} editsState="applied" editsTitle="Accepted" />);
+    expect(screen.getByTestId('edits-tile').textContent).toMatch(/Edits Applied/);
+    expect(screen.getByTitle('Accepted')).toBeTruthy();
+  });
+
+  it('does not re-render while the controller is idle; re-renders on a status change', () => {
+    vi.useFakeTimers();
+    try {
+      const c = trainerController(['XIC(Switch_0)OTE(Light_0);']);
+      let commits = 0;
+      const onRender = (): void => {
+        commits++;
+      };
+      render(
+        <Profiler id="tb" onRender={onRender}>
+          <OnlineToolbar controller={c} />
+        </Profiler>,
+      );
+      act(() => void vi.advanceTimersByTime(50));
+      const settled = commits;
+      act(() => void vi.advanceTimersByTime(5000));
+      expect(commits).toBe(settled);
+      act(() => void c.requestMode('RUN'));
+      expect(commits).toBeGreaterThan(settled);
+      expect(screen.getByTitle('Controller mode').textContent).toMatch(/Rem Run/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the scan-time readout updates on its own', () => {
+    vi.useFakeTimers();
+    try {
+      const c = trainerController(['XIC(Switch_0)OTE(Light_0);']);
+      c.requestMode('RUN');
+      render(<OnlineToolbar controller={c} />);
+      const before = screen.getByTestId('scan-readout').textContent;
+      for (let i = 0; i < 20; i++) c.scan(10);
+      act(() => void vi.advanceTimersByTime(600));
+      expect(screen.getByTestId('scan-readout').textContent).not.toBe(before);
+      expect(screen.getByTestId('scan-readout').textContent).toMatch(/RUN$/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

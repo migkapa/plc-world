@@ -10,7 +10,8 @@
  *    short the contacts around it and energize the output by itself;
  *  - Download refuses a program that does not verify (like Studio 5000) and keeps the running logic;
  *  - tags created in the Tag Monitor / New Tag dialog are part of the saved program;
- *  - debounced autosave; game events (forces, fault cleared, toggle bit, rung edits, controls).
+ *  - debounced autosave; game events (forces, fault cleared, rung edits, operator controls). Toggle Bit and
+ *    neutral-text edits are reported by the ladder panel (LadderEditor onToggleBit / onRungTextCommit).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GameEvent } from '../../game/achievements';
@@ -49,8 +50,6 @@ export type PendingReason = 'errors' | 'branch';
 
 export interface WorkspaceRuntime {
   controller: LogixController;
-  /** The controller handed to the ladder editor (instrumented to report Toggle Bit). */
-  editorController: LogixController;
   runtime: SimRuntimeEx;
   scene: SceneLogic<unknown>;
   /** Rungs shown in the editor (may be ahead of the running logic). */
@@ -125,31 +124,6 @@ function droppedToast(dropped: number): void {
     tone: 'warning',
     title: `${dropped} rung${dropped === 1 ? '' : 's'} could not be loaded`,
     body: 'They were replaced by empty rungs (the text is kept in the rung comment).',
-  });
-}
-
-/** Proxy that reports Toggle Bit (the editor writes BOOL tags only for Toggle Bit). */
-function instrumentForToggleBit(controller: LogixController, onToggle: () => void): LogixController {
-  const tags = controller.tags;
-  const tagsProxy = new Proxy(tags, {
-    get(target, prop) {
-      const v = Reflect.get(target, prop, target) as unknown;
-      if (prop === 'writeBool' && typeof v === 'function') {
-        return (...args: unknown[]) => {
-          const r = (v as (...a: unknown[]) => unknown).apply(target, args);
-          onToggle();
-          return r;
-        };
-      }
-      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
-    },
-  });
-  return new Proxy(controller, {
-    get(target, prop) {
-      if (prop === 'tags') return tagsProxy;
-      const v = Reflect.get(target, prop, target) as unknown;
-      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
-    },
   });
 }
 
@@ -338,27 +312,18 @@ export function useWorkspaceRuntime(setup: WorkspaceSetup): WorkspaceRuntime {
     });
   }, [controller, emit, evaluate, scheduleSave]);
 
-  // --- operator controls → controlUsed (wraps the runtime so 3D clicks count too) --------------
+  // --- operator controls → controlUsed (pad, hotkeys and 3D clicks all go through setControl) ------
   useEffect(() => {
-    const rt = runtime as SimRuntimeEx & { setControl(id: string, v: boolean | number): void };
-    const proto = Object.getPrototypeOf(rt) as { setControl(this: SimRuntimeEx, id: string, v: boolean | number): void };
-    const original = proto.setControl;
     const last = new Map<string, number>();
-    rt.setControl = function setControl(id: string, value: boolean | number): void {
-      original.call(rt, id, value);
+    return runtime.onControl((id, value) => {
       const isNum = typeof value === 'number';
-      if (value === true || isNum) {
-        const t = performance.now();
-        const gap = isNum ? 1500 : 250;
-        if (t - (last.get(id) ?? -Infinity) > gap) {
-          last.set(id, t);
-          emit({ type: 'controlUsed', sceneId: runtime.scene.id, controlId: id });
-        }
-      }
-    };
-    return () => {
-      delete (rt as { setControl?: unknown }).setControl; // back to the prototype method
-    };
+      if (value !== true && !isNum) return;
+      const t = performance.now();
+      const gap = isNum ? 1500 : 250;
+      if (t - (last.get(id) ?? -Infinity) <= gap) return;
+      last.set(id, t);
+      emit({ type: 'controlUsed', sceneId: runtime.scene.id, controlId: id });
+    });
   }, [runtime, emit]);
 
   // --- flush the autosave when leaving -------------------------------------------------------
@@ -449,14 +414,12 @@ export function useWorkspaceRuntime(setup: WorkspaceSetup): WorkspaceRuntime {
     autoRunRef.current = false;
   }, []);
 
-  const editorController = useMemo(() => instrumentForToggleBit(controller, () => emit({ type: 'toggleBitUsed' })), [controller, emit]);
   const scene = setup.scene;
 
   // one object per state change, so memoized consumers (LadderPanel…) skip unrelated page renders
   return useMemo(
     () => ({
       controller,
-      editorController,
       runtime,
       scene,
       rungs,
@@ -475,7 +438,7 @@ export function useWorkspaceRuntime(setup: WorkspaceSetup): WorkspaceRuntime {
       reverify,
       flushSave,
     }),
-    [controller, editorController, runtime, scene, rungs, setRungs, errors, ruleErrors, pendingReason, heldRungs, appliedAt, snapshot, loadProgram, download, resetPlant, noteUserMode, reverify, flushSave],
+    [controller, runtime, scene, rungs, setRungs, errors, ruleErrors, pendingReason, heldRungs, appliedAt, snapshot, loadProgram, download, resetPlant, noteUserMode, reverify, flushSave],
   );
 }
 

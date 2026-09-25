@@ -1,8 +1,11 @@
 /**
  * Studio 5000-style online toolbar: controller mode tile (with the animated "running" indicator and
- * Run/Program mode actions), forces tile (enable / disable / remove all I/O forces), edits tile, fault
- * tile (Clear Majors), status lights (Run Mode, Controller OK, Energy Storage OK, I/O OK), key switch,
- * communication path and scan time.
+ * Run/Program mode actions), forces tile (enable / disable / remove all I/O forces), edits tile (driven
+ * by the host: `editsState`), fault tile (Clear Majors), status lights (Run Mode, Controller OK, Energy
+ * Storage OK, I/O OK), key switch, communication path and scan time.
+ *
+ * Rendering: the toolbar re-renders only when the controller status it shows changes (mode, key, faults,
+ * forces…); the scan-time readout is a separate small component that polls on its own.
  */
 import { AlertOctagon, ChevronDown, KeyRound, Pencil, PlugZap, TriangleAlert, Zap } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -16,8 +19,21 @@ import { toast } from '@/ui/toast';
 import { ContextMenu, type MenuEntry } from './EditorOverlays';
 import './ladder.css';
 
+/**
+ * State of the online edits, shown on the edits tile:
+ *  - 'none'    — the running logic is what the editor shows (Studio: "No Edits");
+ *  - 'pending' — the editor rungs do not verify: the controller keeps running the last good logic;
+ *  - 'held'    — edits are held on purpose (e.g. a branch leg without an instruction yet);
+ *  - 'applied' — edits were just accepted online (a short confirmation).
+ */
+export type EditsState = 'none' | 'pending' | 'applied' | 'held';
+
 export interface OnlineToolbarProps {
   controller: PlcController;
+  /** Edits tile (default 'none'). */
+  editsState?: EditsState;
+  /** Tooltip of the edits tile (default: a description of `editsState`). */
+  editsTitle?: string;
   /** Called after a successful Run/Program mode change. */
   onModeChange?(mode: 'RUN' | 'PROG'): void;
   /** The workstation is connected (default true). Offline shows the Offline tile. */
@@ -47,19 +63,84 @@ export function defaultCommPath(controller: PlcController): string {
   return 'AB_ETHIP-1\\192.168.1.10';
 }
 
-function useStatus(controller: PlcController): ControllerStatus {
+/** What the toolbar shows of a status (everything but the scan counters / times). */
+export function statusKey(st: ControllerStatus, forces: number): string {
+  const f = st.majorFault;
+  const m = st.minorFaults[st.minorFaults.length - 1];
+  return [
+    st.mode,
+    st.keySwitch,
+    st.running,
+    st.ok,
+    st.ioLed,
+    st.forcesEnabled,
+    forces,
+    f ? `${f.type}:${f.code}:${f.timeMs}` : '',
+    st.minorFaults.length,
+    m ? `${m.type}:${m.code}:${m.timeMs}` : '',
+  ].join('|');
+}
+
+/**
+ * Controller status, re-rendering only when something the toolbar shows changes. Controller events
+ * cover almost everything; a slow poll catches the rest (e.g. Clear Minors) without re-rendering an
+ * idle toolbar.
+ */
+function useStatus(controller: PlcController): [ControllerStatus, () => void] {
   const [status, setStatus] = useState(() => controller.getStatus());
+  const refreshRef = useRef<() => void>(() => undefined);
   useEffect(() => {
-    setStatus(controller.getStatus());
-    const unsub = controller.subscribe(() => setStatus(controller.getStatus()));
-    const h = window.setInterval(() => setStatus(controller.getStatus()), 250);
+    let key = '';
+    const refresh = (): void => {
+      const st = controller.getStatus();
+      const k = statusKey(st, Object.keys(controller.getForces()).length);
+      if (k === key) return;
+      key = k;
+      setStatus(st);
+    };
+    refreshRef.current = refresh;
+    refresh();
+    const unsub = controller.subscribe(refresh);
+    const h = window.setInterval(refresh, 1000);
     return () => {
       unsub();
       window.clearInterval(h);
     };
   }, [controller]);
-  return status;
+  const refresh = useCallback(() => refreshRef.current(), []);
+  return [status, refresh];
 }
+
+/** "Scan 0.042 ms · max 0.051 ms · RUN" — polls on its own so the scan times never re-render the toolbar. */
+function ScanReadout({ controller }: { controller: PlcController }) {
+  const format = useCallback((): string => {
+    const st = controller.getStatus();
+    return `${st.lastScanMs.toFixed(3)}|${st.maxScanMs.toFixed(3)}|${st.displayText}`;
+  }, [controller]);
+  const [text, setText] = useState(format);
+  useEffect(() => {
+    setText(format());
+    const h = window.setInterval(() => setText(format()), 500);
+    return () => window.clearInterval(h);
+  }, [format]);
+  const [last, max, display] = text.split('|');
+  return (
+    <span className="truncate" data-testid="scan-readout">
+      Scan <span className="font-mono text-[var(--ld-chrome-text)]">{last} ms</span> · max <span className="font-mono text-[var(--ld-chrome-text)]">{max} ms</span> · {display}
+    </span>
+  );
+}
+
+const EDITS: Record<EditsState, { label: string; tone: 'neutral' | 'amber-outline' | 'green-outline'; title: string }> = {
+  none: { label: 'No Edits', tone: 'neutral', title: 'The controller runs the logic shown in the editor. Rung edits are verified and applied online as you make them.' },
+  pending: {
+    label: 'Edits Pending',
+    tone: 'amber-outline',
+    title: 'Your rung edits do not verify yet: the controller keeps running the last good logic. Fix the errors and they are applied online.',
+  },
+  held: { label: 'Edits Held', tone: 'amber-outline', title: 'Your rung edits are held until they are complete (e.g. a branch level without an instruction).' },
+  applied: { label: 'Edits Applied', tone: 'green-outline', title: 'Your rung edits were verified and accepted online — the plant kept running.' },
+};
 
 function Led({ state, label, title }: { state: 'green' | 'red' | 'flashing-red' | 'flashing-green' | 'amber' | 'flashing-amber' | 'off'; label: string; title?: string }) {
   const color = state.includes('green') ? 'bg-emerald-400 shadow-emerald-400/70' : state.includes('red') ? 'bg-red-500 shadow-red-500/70' : state.includes('amber') ? 'bg-amber-400 shadow-amber-400/70' : '';
@@ -81,7 +162,7 @@ function Tile({
 }: {
   children: ReactNode;
   onClick?(el: HTMLElement): void;
-  tone: 'green' | 'blue' | 'red' | 'amber' | 'amber-outline' | 'neutral';
+  tone: 'green' | 'blue' | 'red' | 'amber' | 'amber-outline' | 'green-outline' | 'neutral';
   title?: string;
   className?: string;
   menu?: boolean;
@@ -92,6 +173,7 @@ function Tile({
     red: 'border-red-400/60 bg-red-600 text-white',
     amber: 'border-amber-300/60 bg-amber-400 text-black',
     'amber-outline': 'border-amber-400/80 bg-amber-400/10 text-amber-300',
+    'green-outline': 'border-emerald-400/70 bg-emerald-400/10 text-emerald-300',
     neutral: 'border-[var(--ld-chrome-border)] bg-[var(--ld-chrome-2)] text-[var(--ld-chrome-text)]',
   }[tone];
   return (
@@ -114,8 +196,8 @@ function Tile({
   );
 }
 
-export function OnlineToolbar({ controller, onModeChange, online = true, onGoOnline, onGoOffline, allowKeySwitch, path, className }: OnlineToolbarProps) {
-  const st = useStatus(controller);
+export function OnlineToolbar({ controller, editsState = 'none', editsTitle, onModeChange, online = true, onGoOnline, onGoOffline, allowKeySwitch, path, className }: OnlineToolbarProps) {
+  const [st, refreshStatus] = useStatus(controller);
   const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const [confirmForces, setConfirmForces] = useState(false);
   const lastFault = useRef<string | undefined>(undefined);
@@ -215,7 +297,15 @@ export function OnlineToolbar({ controller, onModeChange, online = true, onGoOnl
       out.push('sep', { heading: `${st.minorFaults.length} minor fault(s)` });
       for (const f of st.minorFaults.slice(-5)) out.push({ label: `${faultId(f.type, f.code)} ${f.message.slice(0, 60)}`, disabled: true, onSelect: () => undefined });
       const c = controller as PlcController & { clearMinorFaults?(): void };
-      if (c.clearMinorFaults) out.push({ label: 'Clear Minors', onSelect: () => c.clearMinorFaults!() });
+      if (c.clearMinorFaults) {
+        out.push({
+          label: 'Clear Minors',
+          onSelect: () => {
+            c.clearMinorFaults!();
+            refreshStatus(); // clearing minors raises no controller event
+          },
+        });
+      }
     }
     return out;
   };
@@ -261,8 +351,10 @@ export function OnlineToolbar({ controller, onModeChange, online = true, onGoOnl
         </span>
       </Tile>
       {/* edits */}
-      <Tile tone="neutral" title="Online edits are applied immediately (rungs are accepted and tested on change)">
-        <Pencil size={11} /> No Edits
+      <Tile tone={online ? EDITS[editsState].tone : 'neutral'} title={editsTitle ?? EDITS[editsState].title} className="min-w-[104px]">
+        <span className="flex items-center gap-1.5" data-testid="edits-tile" data-state={editsState}>
+          <Pencil size={11} /> {EDITS[editsState].label}
+        </span>
       </Tile>
       {/* faults */}
       <Tile
@@ -316,16 +408,7 @@ export function OnlineToolbar({ controller, onModeChange, online = true, onGoOnl
         <span className="truncate">
           Path: <span className="font-mono text-[var(--ld-chrome-text)]">{path ?? defaultCommPath(controller)}</span>
         </span>
-        <span className="truncate">
-          {online ? (
-            <>
-              Scan <span className="font-mono text-[var(--ld-chrome-text)]">{st.lastScanMs.toFixed(3)} ms</span> · max{' '}
-              <span className="font-mono text-[var(--ld-chrome-text)]">{st.maxScanMs.toFixed(3)} ms</span> · {st.displayText}
-            </>
-          ) : (
-            'Not connected'
-          )}
-        </span>
+        {online ? <ScanReadout controller={controller} /> : <span className="truncate">Not connected</span>}
       </div>
       {menu && <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} themeClass="ld-theme-dark" onClose={() => setMenu(null)} />}
       <Modal

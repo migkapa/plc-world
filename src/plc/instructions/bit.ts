@@ -106,10 +106,11 @@ export const OTE: InstructionDef = {
 - Prescan: the data bit is cleared.
 
 Because OTE writes the bit on **every** scan, using two OTEs on the same bit means the last one scanned
-wins (Studio 5000 warns: *duplicate destructive bit reference*). Use OTL/OTU or a branch instead.
+wins (Studio 5000 warns: *duplicate destructive bit reference*). Use OTL/OTU or a branch instead — e.g. a
+seal-in, where the Motor contact in parallel with Start keeps the coil on until Stop opens:
 
 \`\`\`
-XIC(Start_PB)[XIC(Motor),XIC(Jog_PB)]XIC(Stop_PB)OTE(Motor);
+[XIC(Start_PB),XIC(Motor)]XIC(Stop_PB)OTE(Motor);
 \`\`\``,
   costUs: 0.05,
   compile(ops) {

@@ -55,3 +55,19 @@ export function exampleFor(mnemonic: string): string {
   cache.set(op, out);
   return out;
 }
+
+/**
+ * The details markdown minus the fenced code block that holds exactly `example` — the help card shows that
+ * rung in its Example block (with a mini ladder), so printing it inside the notes too would repeat it.
+ * Code blocks with other or additional rungs are kept.
+ */
+export function detailsWithoutExample(details: string, example: string): string {
+  let removed = false;
+  return details
+    .replace(/\n*```[a-z]*\n([\s\S]*?)```\n*/g, (block, body: string) => {
+      if (removed || body.trim() !== example.trim()) return block;
+      removed = true;
+      return '\n\n';
+    })
+    .trim();
+}

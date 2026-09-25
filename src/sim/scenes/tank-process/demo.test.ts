@@ -38,6 +38,25 @@ describe('tank-process demo program', () => {
     expect(maxL).toBeLessThan(97);
   });
 
+  it('keeps the FCV_101 analog command within 0..100 % (also with LSH-101 failed)', () => {
+    const { controller, runtime } = setup();
+    tap(runtime, 'start');
+    let lo = Infinity;
+    let hi = -Infinity;
+    let opened = false;
+    for (let t = 0; t < 120_000; t += 100) {
+      if (t === 60_000) runtime.setControl('lsh_fail', true);
+      runtime.step(100);
+      const v = controller.tags.readNumber('FCV_101');
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+      if (v > 0) opened = true;
+    }
+    expect(opened).toBe(true);
+    expect(lo).toBeGreaterThanOrEqual(0);
+    expect(hi).toBeLessThanOrEqual(100);
+  });
+
   it('E-stop drops RUNNING and it stays off after the reset until START', () => {
     const { runtime } = setup();
     tap(runtime, 'start');

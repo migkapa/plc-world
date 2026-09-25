@@ -14,6 +14,7 @@ import {
   Motor,
   OnNozzle,
   PhotoEye42EF,
+  isoCylinderSize,
   PipeRun,
   PneumaticCylinder,
   ProxSensor872C,
@@ -183,18 +184,31 @@ const prox: StageDef = {
 // Cylinder
 // ---------------------------------------------------------------------------
 
+const CYL = { y: 0.2, z: 0.1, bore: 0.05, stroke: 0.3 };
+
 function CylinderScene({ demo }: { demo: DemoStore }) {
   const ext = useRamp(() => (demo.bool('coil') ? 1 : 0), 3.2, demo, 'ext');
+  // two display pedestals under the barrel (the cylinder has no tubes here: it would need a valve to go to)
+  const size = isoCylinderSize(CYL.bore);
+  const barrelBottom = CYL.y - size.profile / 2;
+  const rearZ = CYL.z - (size.base + CYL.stroke);
   return (
-    <PneumaticCylinder
-      position={[0, 0.2, 0.1]}
-      bore={0.05}
-      stroke={0.3}
-      getExtension={ext}
-      getRetractedSensor={() => ext() < 0.02}
-      getExtendedSensor={() => ext() > 0.98}
-      pusher={[0.26, 0.14]}
-    />
+    <group>
+      {[rearZ + 0.05, CYL.z - 0.05].map((z) => (
+        <mesh key={z} position={[0, barrelBottom / 2, z]} material={materials.metal('#2b3139', 0.62)} castShadow receiveShadow>
+          <boxGeometry args={[size.profile * 1.2, barrelBottom, 0.03]} />
+        </mesh>
+      ))}
+      <PneumaticCylinder
+        position={[0, CYL.y, CYL.z]}
+        bore={CYL.bore}
+        stroke={CYL.stroke}
+        getExtension={ext}
+        getRetractedSensor={() => ext() < 0.02}
+        getExtendedSensor={() => ext() > 0.98}
+        pusher={[0.26, 0.14]}
+      />
+    </group>
   );
 }
 

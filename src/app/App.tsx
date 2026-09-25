@@ -14,6 +14,7 @@ const SandboxPage = lazy(() => import('./pages/SandboxPage'));
 const ShowroomPage = lazy(() => import('./pages/ShowroomPage'));
 const ReferencePage = lazy(() => import('./pages/ReferencePage'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));
 
 function Loading() {
   return (
@@ -39,9 +40,7 @@ export default function App() {
               <Route path="/showroom/:device?" component={ShowroomPage} />
               <Route path="/reference/:mnemonic?" component={ReferencePage} />
               <Route path="/profile" component={ProfilePage} />
-              <Route>
-                <div className="p-10 text-center text-slate-400">Page not found.</div>
-              </Route>
+              <Route component={NotFoundPage} />
             </Switch>
           </Suspense>
           </RouteErrorBoundary>

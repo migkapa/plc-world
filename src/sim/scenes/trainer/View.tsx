@@ -63,9 +63,10 @@ import {
   useSfxLoops,
   type TagGroup,
 } from './kit';
-import { LampBoost, SoundWaves } from './fx';
+import { SoundWaves } from './fx';
 import { rackCableRuns } from './rackRuns';
 import { LabRoom, ROOM, ROOM_OCCLUDERS, WindowLight } from './Room';
+import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 // ---------------------------------------------------------------------------
 // Layout
@@ -356,7 +357,7 @@ function PanelBuzzer({ getOn, getPhase, position }: { getOn: () => boolean; getP
     m.toneMapped = false;
     return m;
   }, [winOn]);
-  useLayoutEffect(() => () => winOnEmissive.dispose(), [winOnEmissive]);
+  useDisposeOnUnmount(winOnEmissive);
   useFrame(({ clock }) => {
     const on = getOn();
     if (body.current) body.current.position.z = on ? Math.sin(getPhase() + clock.elapsedTime * 90) * 0.0005 : 0;
@@ -1227,9 +1228,7 @@ export function TrainerView({ state, runtime }: SceneViewProps<TrainerState>) {
               title={`Pilot light ${i} · 800F ${c} LED`}
               lines={lines.light[i]!}
             >
-              <LampBoost color={c} getLit={lit[i]!}>
-                <PilotLight800F color={c} legend={`L${i}`} getLit={lit[i]!} rear={false} />
-              </LampBoost>
+              <PilotLight800F color={c} legend={`L${i}`} getLit={lit[i]!} rear={false} />
             </IoTag>
           ))}
           <IoTag

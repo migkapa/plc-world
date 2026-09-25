@@ -40,6 +40,7 @@ import {
   vertexColorMetal,
   vertexColorPlastic,
 } from '../compactlogix/parts';
+import { useDisposeOnUnmount } from '../../../dispose';
 
 // ---------------------------------------------------------------------------
 // Dimensions
@@ -711,13 +712,10 @@ function useLcd() {
     });
     return { ctx: canvas.getContext('2d')!, tex, mat, prev: null as LcdState | null, last: -1 };
   }, []);
-  useEffect(
-    () => () => {
-      st.tex.dispose();
-      st.mat.dispose();
-    },
-    [st],
-  );
+  useDisposeOnUnmount(st, () => {
+    st.tex.dispose();
+    st.mat.dispose();
+  });
   return st;
 }
 

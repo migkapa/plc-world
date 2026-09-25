@@ -93,6 +93,13 @@ Compare instructions (**LES**, **GEQ**, …) work like contacts: they are *true*
       'Start does nothing on a tank that is already at 80 %',
       'The tank never overflows',
     ],
+    objectiveTests: [
+      [0, { test: 1, steps: [2, 3] }, { test: 2, steps: [2, 8] }],
+      [{ test: 1, steps: [4, 5, 6, 7] }, { invariant: 1 }],
+      [{ test: 2, steps: [5, 6] }, 3],
+      [4],
+      [{ invariant: 0 }],
+    ],
     concepts: ['LES', 'GEQ', 'XIC', 'OTE'],
     starter: {
       rungs: ['[XIC(Start_PB),XIC(Fill_Valve)]XIC(Stop_PB)OTE(Fill_Valve);'],
@@ -226,6 +233,12 @@ A box instruction on a rung by itself (no contacts) executes on every scan.`,
       'No lost decimals: REAL math all the way',
       'Both meters update continuously',
     ],
+    objectiveTests: [
+      [0, { test: 2, observe: ['meter1'] }],
+      [1, { test: 2, observe: ['meter2'] }],
+      [{ test: 0, steps: [4, 6] }, { test: 1, steps: [6, 9] }],
+      [2],
+    ],
     concepts: ['MOV', 'CPT', 'ADD', 'DIV'],
     starter: {
       rungs: ['', ''],
@@ -331,6 +344,11 @@ than **80 %** (bottles fall over). You'll prototype the speed-reference logic on
       'Pot_1 10…90 % scales linearly to Meter_1 20…80 % (SCP)',
       'Below 10 % Meter_1 holds 20 %',
       'Above 90 % Meter_1 holds 80 %',
+    ],
+    objectiveTests: [
+      [0, 3],
+      [1],
+      [2],
     ],
     concepts: ['SCP', 'LES', 'GRT', 'MOV'],
     starter: {
@@ -453,6 +471,12 @@ Low Limit **greater** than its High Limit it tests *outside* the band instead.`,
       'Exactly on a boundary (12.5 %, 62.5 %) the lamp is ON',
       'Buzzer ON below 10 % or above 90 %',
       'Lamps turn off again when the level falls',
+    ],
+    objectiveTests: [
+      [{ test: 0, observe: ['light0', 'light1', 'light2', 'light3', 'light4', 'light5', 'light6', 'light7'] }, { test: 2, observe: ['light0', 'light1', 'light2', 'light3', 'light4', 'light5', 'light6', 'light7'] }],
+      [{ test: 0, steps: [14, 37, 60, 72, 95, 118, 130, 164] }],
+      [{ test: 0, observe: ['buzzer'] }, { test: 1, observe: ['buzzer'] }, { test: 2, observe: ['buzzer'] }],
+      [{ test: 1, observe: ['light0', 'light1', 'light2', 'light3', 'light4', 'light5', 'light6', 'light7'] }],
     ],
     concepts: ['GEQ', 'LIM', 'LES', 'GRT'],
     starter: {
@@ -580,6 +604,14 @@ explicit: **hysteresis**, not a single setpoint that chatters on and off every s
       'Mixer only with ≥ 20 % level',
       'Heater only while the mixer is proven running',
       'Heater ON below 58 °C, OFF above 62 °C (temperature hysteresis)',
+    ],
+    objectiveTests: [
+      [{ test: 0, steps: [4] }, { test: 1, steps: [2, 7] }, 5, { invariant: 5 }, { invariant: 6 }, { invariant: 7 }],
+      [{ test: 0, steps: [1] }, { test: 1, steps: [3, 4, 5, 6] }, { test: 2, steps: [2, 6, 7, 8, 11, 12, 13] }, { invariant: 0 }],
+      [{ test: 2, steps: [5, 10] }],
+      [{ test: 0, steps: [3] }, { test: 3, steps: [2, 4, 5] }, { invariant: 2 }],
+      [{ test: 0, steps: [2] }, { test: 3, steps: [3, 6] }, { invariant: 1 }, { invariant: 4 }],
+      [4, { invariant: 3 }],
     ],
     concepts: ['LES', 'GEQ', 'LEQ', 'XIC', 'OTE'],
     starter: {

@@ -1,9 +1,9 @@
 /**
  * Scene definition for `conveyor-sort` (auto-registered by ../views.tsx). The demo program lives in ./demo.ts:
- * it does NOT start by itself — press START (a preview harness taps CONVEYOR_DEMO_START after loading).
+ * it does NOT start by itself — press START (previews apply `demoStart` = CONVEYOR_DEMO_START after loading).
  */
 import type { SceneDefinition } from '../../types';
-import { CONVEYOR_DEMO_RUNGS, CONVEYOR_DEMO_TAGS } from './demo';
+import { CONVEYOR_DEMO_RUNGS, CONVEYOR_DEMO_START, CONVEYOR_DEMO_TAGS } from './demo';
 import { conveyorSortLogic, type ConveyorSortState } from './logic';
 import { ConveyorSortView } from './View';
 
@@ -23,4 +23,5 @@ export const definition: SceneDefinition<ConveyorSortState> = {
   environment: 'hall',
   demoRungs: CONVEYOR_DEMO_RUNGS,
   demoTags: CONVEYOR_DEMO_TAGS,
+  demoStart: CONVEYOR_DEMO_START,
 };

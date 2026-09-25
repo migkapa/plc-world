@@ -103,6 +103,27 @@ function CarsDemo() {
   );
 }
 
+/** CarFleet LOD check: the same four styles at full detail (front row) and forced low-poly (back row). */
+function CarsLodDemo() {
+  const d = () => now() * 3;
+  const row = (z: number) => (i: number, o: CarInstance) => {
+    if (i >= 4) return false;
+    o.variant = i;
+    o.x = (i - 1.5) * 5.2;
+    o.z = z;
+    o.yaw = 0.35;
+    o.distance = d();
+    o.braking = now() % 2 >= 1;
+    return true;
+  };
+  return (
+    <group>
+      <CarFleet capacity={4} getCar={row(2.4)} lodDistance={false} />
+      <CarFleet capacity={4} getCar={row(-2.4)} lodDistance={0} />
+    </group>
+  );
+}
+
 function CabinetDemo() {
   return (
     <group>
@@ -127,6 +148,11 @@ export const previews: Record<string, Preview> = {
     Component: CarsDemo,
     description: 'Car variants 0..7: sedan, hatchback, SUV, taxi — <Car/> (front row) and instanced <CarFleet/> (back row); wheels spin, brake lights blink',
     camera: { position: [4, 5.5, 14], target: [0, 0.5, 0] },
+  },
+  TRAF_Cars_LOD: {
+    Component: CarsLodDemo,
+    description: 'CarFleet built-in LOD: full-detail cars (front row) vs the low-poly body + wheels used beyond lodDistance (back row)',
+    camera: { position: [3, 4.5, 13], target: [0, 0.6, 0] },
   },
   TRAF_SignalCabinet: {
     Component: CabinetDemo,

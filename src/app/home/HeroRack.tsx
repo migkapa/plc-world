@@ -164,7 +164,8 @@ function HeroRack({ quality, reducedMotion, active = true, onStatus }: HeroRackP
       className="absolute inset-0"
       onControls={lockControls}
     >
-      <ControlLogixRack hardware={trainerLogic.hardware} live={live} position={[0, 0.006, 0]} />
+      {/* hero close-up: always the live rack (lod off); the trainer demo runs on its own (no START needed) */}
+      <ControlLogixRack hardware={trainerLogic.hardware} live={live} position={[0, 0.006, 0]} lod={false} />
       <Pedestal />
       {/* the rack and pedestal never move: bake the contact shadow once */}
       <ContactShadows position={[0, 0.0015, 0.06]} opacity={0.7} scale={0.9} blur={2.2} far={0.3} resolution={512} frames={1} />

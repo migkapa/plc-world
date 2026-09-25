@@ -143,19 +143,18 @@ export function CampaignMap({ profile, selectedId, currentId, reducedMotion, doc
               return st === 'done' ? (
                 <path key={`d${i}`} d={s.d} fill="none" stroke={color} strokeWidth={5} strokeLinecap="round" filter="url(#road-glow)" opacity={0.95} />
               ) : (
-                <path
-                  key={`d${i}`}
-                  d={s.d}
-                  fill="none"
-                  stroke={color}
-                  strokeWidth={4}
-                  strokeLinecap="round"
-                  strokeDasharray="10 18"
-                  className={reducedMotion ? undefined : 'pw-dash'}
-                  filter="url(#road-glow)"
-                />
+                // static glow under the marching dashes (drawn in their own layer below): the blur is rasterised once
+                <path key={`d${i}`} d={s.d} fill="none" stroke={color} strokeWidth={4} strokeLinecap="round" filter="url(#road-glow)" opacity={0.28} />
               );
             })}
+          </svg>
+          {/* the open roads' marching dashes: a separate, unfiltered layer, so each animation frame repaints only them */}
+          <svg className="pointer-events-none absolute inset-0 will-change-transform" width={layout.width} height={layout.height} aria-hidden>
+            {layout.segments.map((s, i) =>
+              segmentState(s, states) === 'active' ? (
+                <path key={`m${i}`} d={s.d} fill="none" stroke={colorOf(s.to ?? s.from)} strokeWidth={4} strokeLinecap="round" strokeDasharray="10 18" className={reducedMotion ? undefined : 'pw-dash'} />
+              ) : null,
+            )}
           </svg>
 
           {/* chapter banners */}

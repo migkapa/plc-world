@@ -6,10 +6,11 @@
  * 360° amber LED ring → M12 micro QD with a yellow cordset.
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { ProxSensorProps } from '../../contracts';
 import { CABLE_YELLOW, DEVICE_ROOT, lBracketGeo, clickable, cylZ, fm, hexGeo, latheZ, M12_CORDSET_LENGTH, M12Cordset, mat, Merge, PanScrew, RoutedCable, TAU, torus, type CableRoute } from './shared';
+import { useDisposeOnUnmount } from '../../dispose';
 
 const LED_ON = new THREE.Color('#ffcf5a');
 const LED_OFF = new THREE.Color('#6b4a10');
@@ -19,7 +20,7 @@ export interface ProxExtraProps {
   bracket?: boolean;
   /** Non-flush (unshielded) sensing cap protrudes from the thread. Default true. */
   nonFlush?: boolean;
-  /** Where the yellow 889D cordset goes (parent coordinates); default: drops to a floor conduit stub. */
+  /** Where the yellow 889D cordset goes (parent coordinates, or 'floor' for a floor conduit stub); default: none. */
   cableTo?: CableRoute;
   onClick?: () => void;
 }
@@ -49,7 +50,7 @@ export function ProxSensor872C({ getActive, diameter = 0.018, bracket = true, no
   const ledMat = mat('f:proxLed', () => new THREE.MeshStandardMaterial({ color: '#6b4a10', roughness: 0.3, transparent: true, opacity: 0.9, emissive: new THREE.Color('#ffae00'), emissiveIntensity: 0, toneMapped: false }));
   // per-instance material state is set each frame: clone so sensors light independently
   const ledInst = useMemo(() => ledMat.clone(), [ledMat]);
-  useEffect(() => () => ledInst.dispose(), [ledInst]);
+  useDisposeOnUnmount(ledInst);
   useFrame(() => {
     const m = ledInst;
     const on = getActive();

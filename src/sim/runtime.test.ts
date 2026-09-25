@@ -96,6 +96,51 @@ describe('SimRuntime', () => {
     expect(rt.getControl('stop')).toBe(false);
   });
 
+  it('latches a momentary tap released before any scan saw it (QA: taps lost between two slow frames)', () => {
+    const { rt } = setup();
+    const seen: Array<[string, boolean | number]> = [];
+    rt.onControl((id, v) => seen.push([id, v]));
+    rt.step(100);
+    // press and release between two animation frames: no fixed step in between
+    rt.setControl('start', true);
+    rt.setControl('start', false);
+    expect(rt.getControl('start')).toBe(true); // held for the next step
+    expect(seen).toEqual([['start', true]]);
+    rt.tick(16);
+    expect(rt.getControl('start')).toBe(false); // released right after the step that scanned it
+    expect(seen).toEqual([
+      ['start', true],
+      ['start', false],
+    ]);
+    rt.step(200);
+    expect(rt.observe()).toMatchObject({ contactor: true, starts: 1 });
+    // a normal press (released after a scan) is not delayed
+    rt.setControl('stop', true);
+    rt.step(20);
+    rt.setControl('stop', false);
+    expect(rt.getControl('stop')).toBe(false);
+    rt.step(50);
+    expect(rt.observe().contactor).toBe(false);
+    // re-pressed before the latched release: stays pressed
+    rt.setControl('start', true);
+    rt.setControl('start', false);
+    rt.setControl('start', true);
+    rt.step(30);
+    expect(rt.getControl('start')).toBe(true);
+    rt.setControl('start', false);
+    expect(rt.getControl('start')).toBe(false);
+    // a reset drops a pending latched release
+    rt.setControl('stop', true);
+    rt.setControl('stop', false);
+    rt.resetScene();
+    rt.step(20);
+    expect(rt.getControl('stop')).toBe(false);
+    // non-momentary controls are applied as they come
+    rt.setControl('pot', 40);
+    rt.setControl('pot', 0);
+    expect(rt.getControl('pot')).toBe(0);
+  });
+
   it('passes analog values through the controller', () => {
     const { rt } = setup();
     rt.setControl('pot', 42.5);
@@ -264,6 +309,7 @@ describe('SimRuntime', () => {
     const seen: Array<[string, boolean | number]> = [];
     const off = rt.onControl((id, value) => seen.push([id, value]));
     rt.setControl('start', true);
+    rt.step(10); // (a release before any scan is latched to the next step: see the momentary latch test)
     rt.setControl('start', false);
     rt.setControl('pot', 42);
     expect(seen).toEqual([

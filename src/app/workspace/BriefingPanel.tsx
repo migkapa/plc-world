@@ -5,6 +5,7 @@
 import { BookOpen, CheckCircle2, Circle, Cpu, Lightbulb, ListChecks, Plug, XCircle } from 'lucide-react';
 import { memo, type ReactNode } from 'react';
 import { Link } from 'wouter';
+import { objectiveStates } from '../../game/objectives';
 import type { MissionDef, TestResult } from '../../game/types';
 import type { PlcController } from '../../plc/types';
 import type { SceneLogic, SimRuntime } from '../../sim/types';
@@ -12,20 +13,7 @@ import { Badge, Markdown, cn } from '../../ui';
 import { routes } from '../routes';
 import { IoTable } from './IoTable';
 
-export type ObjectiveState = 'pending' | 'passed' | 'failed';
-
-/**
- * Objective states from the latest test results: objective i ↔ test i when the counts match,
- * otherwise every objective is met only when every test passed.
- */
-export function objectiveStates(mission: Pick<MissionDef, 'objectives' | 'tests'>, results: ReadonlyArray<TestResult | undefined>, completed: boolean): ObjectiveState[] {
-  const n = mission.objectives.length;
-  const ran = results.length > 0 && results.every((r) => r !== undefined) && results.length === mission.tests.length;
-  if (!ran) return new Array<ObjectiveState>(n).fill(completed ? 'passed' : 'pending');
-  if (n === mission.tests.length) return results.map((r) => (r!.passed ? 'passed' : 'failed'));
-  const all = results.every((r) => r!.passed);
-  return new Array<ObjectiveState>(n).fill(all ? 'passed' : 'pending');
-}
+export { objectiveStates, type ObjectiveState } from '../../game/objectives';
 
 function Section({ icon, title, children, className }: { icon: ReactNode; title: string; children: ReactNode; className?: string }) {
   return (

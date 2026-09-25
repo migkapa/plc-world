@@ -9,11 +9,17 @@
  *   &tap=start                                            tap momentary controls 300 ms after load
  *   &warm=5000                                            simulate N ms instantly before the first frame
  *   &prog=1                                               leave the controller in PROG (no demo logic)
+ *   &start=0                                              do NOT apply the definition's `demoStart`
+ *
+ * Demo programs never start by themselves; the harness applies `SceneDefinition.demoStart` (e.g. tank / conveyor:
+ * tap START; motor station: H-O-A to HAND + START) right after loading, before `ctrl` / `warm`.
  */
+import { useThree } from '@react-three/fiber';
 import { StrictMode, useEffect, useMemo, useState } from 'react';
+import * as THREE from 'three';
 import { createRoot } from 'react-dom/client';
 import '../index.css';
-import { createDemoRuntime } from '../sim/demo';
+import { applyDemoStart, createDemoRuntime } from '../sim/demo';
 import { SCENES } from '../sim/scenes/views';
 import { useSimLoop } from '../sim/useSimLoop';
 import { SceneCanvas, useStageCamera, type StageQuality } from '../twin/Stage';
@@ -51,11 +57,27 @@ function CameraBar() {
   );
 }
 
+/** QA scripts inspect the scene graph through `window.__r3f` ({ scene, gl, camera, THREE }). */
+function DebugHandle() {
+  const { scene, gl, camera } = useThree();
+  useEffect(() => {
+    (window as unknown as { __r3f?: unknown }).__r3f = { scene, gl, camera, THREE };
+  }, [scene, gl, camera]);
+  return null;
+}
+
+/** QA scripts orbit / dolly the camera through `window.__controls` (drei CameraControls). */
+function exposeControls(c: unknown) {
+  (window as unknown as { __controls?: unknown }).__controls = c ?? undefined;
+}
+
 function Harness({ id }: { id: string }) {
   const def = SCENES[id];
   const demo = useMemo(() => {
     if (!def) return null;
-    const d = createDemoRuntime(def.logic, def.demoRungs ?? [], { tags: def.demoTags, run: params.get('prog') !== '1' });
+    const run = params.get('prog') !== '1';
+    const d = createDemoRuntime(def.logic, def.demoRungs ?? [], { tags: def.demoTags, run });
+    if (run && params.get('start') !== '0') applyDemoStart(d.runtime, def.demoStart);
     for (const pair of (params.get('ctrl') ?? '').split(',').filter(Boolean)) {
       const [k, v] = pair.split(':');
       if (k) d.runtime.setControl(k, parseValue(v ?? 'true'));
@@ -93,6 +115,7 @@ function Harness({ id }: { id: string }) {
       cameras={finalCams}
       lighting={def.environment ?? 'hall'}
       quality={(params.get('quality') as StageQuality) ?? 'high'}
+      onControls={exposeControls}
       overlay={
         <>
           <CameraBar />
@@ -126,6 +149,7 @@ function Harness({ id }: { id: string }) {
       }
     >
       <View state={demo.runtime.state} runtime={demo.runtime} />
+      <DebugHandle />
     </SceneCanvas>
   );
 }

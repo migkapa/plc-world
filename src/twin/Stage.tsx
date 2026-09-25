@@ -9,10 +9,12 @@
  * Inside the canvas, `useStageCamera().goTo('panel')` flies the camera to a preset.
  */
 import { CameraControls, ContactShadows, Environment, Lightformer, PerformanceMonitor } from '@react-three/drei';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Bloom, EffectComposer, N8AO, Vignette } from '@react-three/postprocessing';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
+import { hudInsets, hudRects } from './hud';
+import { releaseRendererAfterUnmount, watchRenderer } from './releaseRenderer';
 
 export type StageLighting = 'hall' | 'street' | 'studio';
 export type StageQuality = 'low' | 'medium' | 'high';
@@ -46,8 +48,17 @@ export interface SceneCanvasProps {
   cameras?: CameraPreset[];
   lighting?: StageLighting;
   quality?: StageQuality;
-  /** DOM overlay rendered above the canvas (has access to useStageCamera). */
+  /**
+   * DOM overlay rendered above the canvas (has access to useStageCamera). Everything the canvas layers itself
+   * (I/O tag chips, projected screens) stays below it; its interactive boxes (`pointer-events: auto`) are the HUD
+   * that tag chips keep out of (see hud.ts).
+   */
   overlay?: ReactNode;
+  /**
+   * Frame the view around the overlay HUD: the projection centre moves into the band between the HUD at the top
+   * and at the bottom (e.g. an expanded operator pad), so camera presets show their target unobstructed.
+   */
+  hudFraming?: boolean;
   className?: string;
   /** Limit how far users can orbit (meters). */
   maxDistance?: number;
@@ -74,8 +85,17 @@ export function SceneCanvas({
   background,
   contactShadows = false,
   onControls,
+  hudFraming = false,
 }: SceneCanvasProps) {
   const controlsRef = useRef<CameraControls | null>(null);
+  // R3F only forces a context loss on unmount: release the renderer fully (see releaseRenderer.ts)
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  useEffect(
+    () => () => {
+      if (rendererRef.current) releaseRendererAfterUnmount(rendererRef.current);
+    },
+    [],
+  );
   const [current, setCurrent] = useState<string | null>(cameras[0]?.id ?? null);
   const [degraded, setDegraded] = useState(false);
   const effectiveQuality: StageQuality = degraded && quality === 'high' ? 'medium' : quality;
@@ -100,8 +120,10 @@ export function SceneCanvas({
 
   return (
     <StageCameraContext.Provider value={api}>
-      <div className={className ?? 'relative h-full w-full'}>
+      <div className={className ?? 'relative h-full w-full'} data-stage-root="">
         <Canvas
+          // own stacking context: DOM layers the scene attaches next to the canvas stay below the overlay HUD
+          style={{ zIndex: 0 }}
           shadows={effectiveQuality === 'low' ? false : 'percentage'}
           dpr={dpr}
           gl={{ antialias: effectiveQuality !== 'low', powerPreference: 'high-performance', preserveDrawingBuffer: false }}
@@ -109,6 +131,8 @@ export function SceneCanvas({
           onCreated={({ gl }) => {
             gl.toneMapping = THREE.AgXToneMapping;
             gl.toneMappingExposure = lighting === 'street' ? 1.05 : 1.15;
+            rendererRef.current = gl;
+            watchRenderer(gl);
           }}
         >
           <StageCameraContext.Provider value={api}>
@@ -133,9 +157,14 @@ export function SceneCanvas({
             />
             <InitialCamera preset={first} controlsRef={controlsRef} />
             <PostFx quality={effectiveQuality} />
+            {hudFraming && <HudFraming />}
           </StageCameraContext.Provider>
         </Canvas>
-        {overlay}
+        {overlay && (
+          <div className="contents" data-stage-overlay="">
+            {overlay}
+          </div>
+        )}
       </div>
     </StageCameraContext.Provider>
   );
@@ -148,6 +177,42 @@ function InitialCamera({ preset, controlsRef }: { preset?: CameraPreset; control
     if (c) void c.setLookAt(...preset.position, ...preset.target, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  return null;
+}
+
+/**
+ * Moves the projection centre (a view offset: rendering, picking and tag projection stay consistent) to the middle
+ * of the band the overlay HUD leaves free, easing when the HUD changes (e.g. the pad collapses).
+ */
+function HudFraming() {
+  const gl = useThree((s) => s.gl);
+  const camera = useThree((s) => s.camera);
+  const shift = useRef(0);
+  useFrame((state, dt) => {
+    const cam = state.camera as THREE.PerspectiveCamera;
+    if (!cam.isPerspectiveCamera) return;
+    const { width: W, height: H } = state.size;
+    if (W < 2 || H < 2) return;
+    const { top, bottom } = hudInsets(hudRects(gl.domElement), H);
+    // content moves down by `want` px (up when the bottom HUD is taller): the target sits mid-way between the bands
+    const want = Math.max(-0.2 * H, Math.min(0.2 * H, (top - bottom) / 2));
+    const cur = shift.current;
+    const next = Math.abs(want - cur) < 0.5 ? want : cur + (want - cur) * Math.min(1, dt * 6);
+    shift.current = next;
+    const v = cam.view;
+    if (Math.abs(next) < 0.25) {
+      if (v?.enabled) cam.clearViewOffset();
+    } else if (!v?.enabled || v.fullWidth !== W || v.fullHeight !== H || v.width !== W || v.height !== H || Math.abs(v.offsetY + next) > 0.1 || v.offsetX !== 0) {
+      cam.setViewOffset(W, H, 0, -next, W, H);
+    }
+  });
+  useEffect(
+    () => () => {
+      const cam = camera as THREE.PerspectiveCamera;
+      if (cam.isPerspectiveCamera && cam.view?.enabled) cam.clearViewOffset();
+    },
+    [camera],
+  );
   return null;
 }
 

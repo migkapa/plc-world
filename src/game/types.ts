@@ -73,6 +73,19 @@ export interface MissionInvariant {
 
 export type MissionKind = 'build' | 'troubleshoot' | 'boss';
 
+/**
+ * One proof of a mission objective (see `MissionDef.objectiveTests`):
+ * - `n` — test n (index into `tests`) as a whole;
+ * - `{ test, steps?, from?, to?, observe? }` — only the expect steps of test n that match every given filter (step
+ *   indices, an index range, observables / tags). For a test that checks several objectives: the proof is broken
+ *   when the test fails at one of these steps, holds when it fails after the last one, and is unknown otherwise;
+ * - `{ invariant }` — invariant n (index into `invariants`): broken when any test trips it.
+ */
+export type ObjectiveProof =
+  | number
+  | { test: number; steps?: number[]; from?: number; to?: number; observe?: string[] }
+  | { invariant: number };
+
 export interface MissionDef {
   id: string;
   /** Chapter id (see ChapterDef). */
@@ -91,6 +104,18 @@ export interface MissionDef {
   briefing: string;
   /** Checklist shown in the mission HUD. */
   objectives: string[];
+  /**
+   * What proves each objective: `objectiveTests[i]` lists the proofs of `objectives[i]` (same length). After a
+   * test run the checklist ticks an objective when all its proofs hold, crosses it when one is broken and leaves
+   * it open otherwise. A test failure caused by an invariant is charged to the objectives that list that
+   * invariant. Without this map an objective is ticked only when every test passed.
+   */
+  objectiveTests?: ObjectiveProof[][];
+  /**
+   * Operator-pad controls this mission is about (control ids), shown first; the plant's other controls wait
+   * behind a "More" chip. Default: the controls its tests operate.
+   */
+  controls?: string[];
   /** Instruction mnemonics this mission introduces or practices (shown as chips). */
   concepts: string[];
   /** Starting program (neutral text rungs). Empty array = empty routine with one blank rung. */

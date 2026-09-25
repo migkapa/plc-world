@@ -14,11 +14,12 @@
  * is one mesh (it vibrates).
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { LedColor } from '../../common';
 import type { StackLightProps } from '../../contracts';
-import { F, arcPts, canvasTexture, cylY, lensTints, makeLensMaterial, partsGeo, sharedGeo, uberMat, addScrew, boxGeo, type Parts } from './shared';
+import { useDisposeOnUnmount } from '../../dispose';
+import { F, arcPts, canvasTexture, cylY, lensTints, makeLensMaterial, partsGeo, setLensLit, sharedGeo, uberMat, addScrew, boxGeo, type Parts } from './shared';
 
 export type StackLightSeries = '856T' | '855T';
 
@@ -351,15 +352,13 @@ function LightModule({
     m.roughness = 0.2;
     return m;
   }, [color]);
-  useEffect(() => () => mat.dispose(), [mat]);
-  const tints = useMemo(() => lensTints(color, color === 'white' ? 1.5 : color === 'yellow' ? 1.9 : 2.6), [color]);
+  useDisposeOnUnmount(mat);
+  // a beacon tier is a large diffuser: a slightly hotter core than the 22 mm pilot lights so it reads from afar
+  const tints = useMemo(() => lensTints(color, color === 'white' ? 2 : color === 'yellow' ? 2.5 : 3.4), [color]);
   useFrame(({ clock }) => {
     let lit = getTier(index);
     if (lit && getFlashing?.(index)) lit = Math.floor(clock.elapsedTime * 3) % 2 === 0;
-    if (mat.userData.lit === lit) return;
-    mat.userData.lit = lit;
-    mat.color.copy(lit ? tints.lit : tints.unlit);
-    mat.emissiveIntensity = lit ? tints.litE : tints.unlitE;
+    setLensLit(mat, tints, lit);
   });
   return <mesh geometry={lensGeo(series)} material={mat} position={[0, dims(series).ringH, 0]} castShadow />;
 }
@@ -377,10 +376,10 @@ function Sounder({ series, housing, getHorn, showSoundFx }: { series: StackLight
       ring: new THREE.MeshBasicMaterial({ color: '#ffffff', map: softRingTexture(), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
     };
   }, [showSoundFx]);
-  useEffect(() => () => {
+  useDisposeOnUnmount(fxMats, () => {
     fxMats?.glow.dispose();
     fxMats?.ring.dispose();
-  }, [fxMats]);
+  });
   const slotGlowGeo = useMemo(
     () =>
       showSoundFx

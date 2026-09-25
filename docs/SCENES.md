@@ -24,6 +24,33 @@ General rules
 - Physical interlocks that exist in real hardwired circuits are simulated (e.g. an E-stop drops out a
   contactor even if the PLC output is on).
 
+Demo programs & 3D views
+
+- Demo programs (`SceneDefinition.demoRungs` + `demoTags`) never start a machine by themselves — like the real
+  plant they wait for the operator. `SceneDefinition.demoStart` says how to put them in motion (`'start'` = tap a
+  momentary control, `['hoa', 0]` = set a control first); `applyDemoStart()` / `describeDemoStart()` in
+  `src/sim/demo.ts` apply or describe it. The scene-dev harness applies it automatically (`&start=0` to skip), the
+  sandbox's "Load example" loads the rungs + tags and tells the user how to start. Scenes without `demoStart`
+  (trainer, traffic-light, parking-garage) run on their own.
+- Lamp devices (800F pilot lights / illuminated push buttons, 855T / 856T stack lights) render their own dark,
+  slightly translucent unlit lens and a lit core above the Stage's bloom threshold for every colour — no scene-side
+  lens boosting. Far-view readability halos (`Glow` in `conveyor-sort/kit.tsx`) use `fadeInFrom` so they only show
+  where the lens is a few pixels wide.
+- Field-device cables are opt-in: `cableTo` / `tubes` / `cables` routes (`{ to, via }`, or `'floor'` for a floor
+  conduit stub); without one a device shows no cable beyond its own connector.
+- `ControlLogixRack` / `CompactLogixRack` have a built-in screen-size LOD (`lod`, default 90 px): below it a
+  one-draw-call impostor replaces the live rack. `DistanceLod` (`src/twin/lod.tsx`) is the generic switch.
+- three.js resources a component allocates in `useMemo` are released with `useDisposeOnUnmount()`
+  (`src/twin/dispose.ts`), never with a bare `useEffect` cleanup (React 19 StrictMode's simulated unmount would
+  free a resource the remounted component keeps using). Module-level caches of shared geometries / materials /
+  textures are fine: when a `SceneCanvas` unmounts, `releaseRendererAfterUnmount()` (`src/twin/releaseRenderer.ts`)
+  removes the dead renderer's dispose listeners from every resource it used, disposes it and detaches its canvas.
+- The DOM HUD over a scene (`SceneCanvas overlay`: camera bar, tools, replay caption, operator pad) always paints
+  above everything the canvas layers itself (the `<Canvas>` is its own stacking context). Screen-space layers keep
+  out of it with `hudRects(canvas)` (`src/twin/hud.ts`: the overlay's outermost `pointer-events: auto` boxes, in
+  canvas pixels) — both TagLayers treat those boxes as obstacles. With `hudFraming` (the workspace twin panel) the
+  projection centre moves into the band the HUD leaves free, so camera presets frame their target above the pad.
+
 ---
 
 ## 1. `trainer` — PLC Trainer Bench (ControlLogix)

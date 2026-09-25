@@ -42,24 +42,24 @@ export interface AutoItem {
 export type CommitHow = 'enter' | 'tab' | 'shift-tab' | 'blur';
 
 /**
- * The only selectable suggestion that starts with the typed text (case-insensitive), when the typed
- * text is not itself a suggestion — what Enter takes with `enterTakesSingleMatch`.
+ * What Enter takes with `enterTakesPrefixMatch` when no row is highlighted: the first selectable suggestion that
+ * starts with the typed text (case-insensitive) — the same row Tab completes to — unless the typed text is itself
+ * a suggestion (then it is kept). Action rows such as "New tag" are never taken implicitly.
  */
-export function singlePrefixMatch(items: readonly AutoItem[], value: string): AutoItem | undefined {
+export function prefixMatch(items: readonly AutoItem[], value: string): AutoItem | undefined {
   const typed = value.trim().toLowerCase();
   if (typed === '') return undefined;
   const pickable = items.filter((i) => !i.action && !i.disabled);
   if (pickable.some((i) => i.value.toLowerCase() === typed)) return undefined;
-  const matches = pickable.filter((i) => i.value.toLowerCase().startsWith(typed));
-  return matches.length === 1 ? matches[0] : undefined;
+  return pickable.find((i) => i.value.toLowerCase().startsWith(typed));
 }
 
 /**
  * Text input with a suggestion list.
  *
- * Keys: Enter commits what was TYPED (an exact case-insensitive match is committed in the item's
- * spelling) — it never swaps the text for a longer suggestion, unless the user moved the highlight
- * with ↑/↓, or `enterTakesSingleMatch` is set and exactly one suggestion starts with the typed text.
+ * Keys: Enter commits the row highlighted with ↑/↓; without a highlight it commits what was TYPED (an exact
+ * case-insensitive match in the item's spelling) — or, with `enterTakesPrefixMatch`, the first suggestion that
+ * starts with the typed text (marked "↵").
  * Tab completes to the highlighted row, or to the first suggestion extending the typed text (marked
  * "Tab"). Mouse click picks a row. Esc cancels.
  */
@@ -79,7 +79,8 @@ export interface AutocompleteInputProps {
   error?: string | null;
   /** Line shown above the suggestions (operand name / data type…). */
   header?: ReactNode;
-  footer?: ReactNode;
+  /** Line below the suggestions; a function gets the row Enter will take (highlighted with ↑/↓, or the prefix match). */
+  footer?: ReactNode | ((highlighted: AutoItem | undefined) => ReactNode);
   /** Select the whole text on open. */
   selectAll?: boolean;
   /** Commit when the input loses focus (default true). */
@@ -87,20 +88,27 @@ export interface AutocompleteInputProps {
   listClassName?: string;
   ariaLabel?: string;
   /**
-   * Enter with no highlighted row takes the suggestion when exactly ONE selectable row starts with the
-   * typed text (a prefix of an existing tag → that tag). The typed text is kept when it matches a row
-   * exactly, when several rows match, or when the user highlighted an action row (e.g. "New tag").
+   * Enter with no highlighted row takes the first selectable row that starts with the typed text (like an IDE:
+   * typing "sw" + Enter picks Switch_0, as Tab does). The typed text is kept when it matches a row exactly or
+   * nothing starts with it; action rows (e.g. "New tag") are taken only when highlighted.
    */
-  enterTakesSingleMatch?: boolean;
+  enterTakesPrefixMatch?: boolean;
 }
 
 export function AutocompleteInput(p: AutocompleteInputProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  /** Row highlighted with ↑/↓ (-1: none — Enter commits the typed text). */
-  const [active, setActive] = useState(-1);
   const done = useRef(false);
   const { items, value } = p;
+  /**
+   * Row highlighted with ↑/↓ (-1: none — Enter commits the typed text). The highlight belongs to the list and text
+   * it was made on: typing (or new suggestions) drops it. Derived during render, never reset from an effect — a
+   * setState in a passive effect after every keystroke left an update pending per key, and ~50 keystrokes queued
+   * behind a slow frame tripped React's nested-update limit (#185) and lost a character.
+   */
+  const [hl, setHl] = useState<{ index: number; items: readonly AutoItem[]; value: string }>(() => ({ index: -1, items, value }));
+  const active = hl.items === items && hl.value === value ? hl.index : -1;
+  const moveActive = (next: (a: number) => number): void => setHl((h) => ({ index: next(h.items === items && h.value === value ? h.index : -1), items, value }));
 
   useLayoutEffect(() => {
     const el = inputRef.current;
@@ -111,12 +119,11 @@ export function AutocompleteInput(p: AutocompleteInputProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // typing (or new suggestions) drops the keyboard highlight: Enter means "what I typed" again
-  useEffect(() => setActive(-1), [items, value]);
-
   const token = (value.split(/\s+/).pop() ?? '').toLowerCase();
   /** Tab-completion candidate: the first enabled row that extends the last typed token. */
   const candidate = token === '' ? -1 : items.findIndex((i) => !i.disabled && !i.action && i.value.toLowerCase().startsWith(token) && i.value.toLowerCase() !== token);
+  /** What Enter takes without a highlighted row (`enterTakesPrefixMatch`). */
+  const enterPick = p.enterTakesPrefixMatch && !p.onAccept ? prefixMatch(items, value) : undefined;
 
   useEffect(() => {
     const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${active}"]`);
@@ -145,12 +152,9 @@ export function AutocompleteInput(p: AutocompleteInputProps) {
 
   /** Enter / Tab without a highlighted row: the typed text, in an exact match's spelling. */
   const commitTyped = (how: CommitHow): void => {
-    if (how === 'enter' && p.enterTakesSingleMatch && !p.onAccept) {
-      const single = singlePrefixMatch(items, value);
-      if (single) {
-        accept(single, how);
-        return;
-      }
+    if (how === 'enter' && enterPick) {
+      accept(enterPick, how);
+      return;
     }
     const typed = value.trim().toLowerCase();
     const exact = !p.onAccept && typed !== '' ? items.find((i) => !i.action && !i.disabled && i.value.toLowerCase() === typed) : undefined;
@@ -161,10 +165,10 @@ export function AutocompleteInput(p: AutocompleteInputProps) {
     e.stopPropagation();
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      if (items.length) setActive((a) => (a + 1) % items.length);
+      if (items.length) moveActive((a) => (a + 1) % items.length);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      if (items.length) setActive((a) => (a <= 0 ? items.length - 1 : a - 1));
+      if (items.length) moveActive((a) => (a <= 0 ? items.length - 1 : a - 1));
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const it = active >= 0 ? items[active] : undefined;
@@ -244,9 +248,13 @@ export function AutocompleteInput(p: AutocompleteInputProps) {
                       {it.badge && (
                         <span className="rounded bg-[var(--ld-ov-bg-2)] px-1 text-[9.5px] font-semibold text-[var(--ld-ov-muted)]">{it.badge}</span>
                       )}
-                      {i === candidate && active < 0 && (
-                        <span className="ml-auto rounded border border-[var(--ld-ov-border)] px-1 font-mono text-[9px] leading-[13px] text-[var(--ld-ov-muted)]" title="Press Tab to complete">
-                          Tab
+                      {active < 0 && (it === enterPick || i === candidate) && (
+                        <span
+                          className="ml-auto rounded border border-[var(--ld-ov-border)] px-1 font-mono text-[9px] leading-[13px] text-[var(--ld-ov-muted)]"
+                          title={it === enterPick ? 'Press Enter (or Tab) to use it' : 'Press Tab to complete'}
+                          data-enter-pick={it === enterPick ? '' : undefined}
+                        >
+                          {it === enterPick ? '↵ Tab' : 'Tab'}
                         </span>
                       )}
                     </div>
@@ -257,7 +265,11 @@ export function AutocompleteInput(p: AutocompleteInputProps) {
               ))}
             </div>
           )}
-          {p.footer && <div className="border-t border-[var(--ld-ov-border)] px-2 py-1 text-[10px] text-[var(--ld-ov-muted)]">{p.footer}</div>}
+          {p.footer && (
+            <div className="border-t border-[var(--ld-ov-border)] px-2 py-1 text-[10px] text-[var(--ld-ov-muted)]">
+              {typeof p.footer === 'function' ? p.footer(active >= 0 ? items[active] : enterPick) : p.footer}
+            </div>
+          )}
         </div>
       )}
     </div>

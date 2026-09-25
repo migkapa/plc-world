@@ -23,7 +23,7 @@ function realPair(a: NumSource, b: NumSource): boolean {
   return a.real || b.real;
 }
 
-function compare2(mnemonic: string, name: string, summary: string, symbol: string, test: Test2): InstructionDef {
+function compare2(mnemonic: string, name: string, summary: string, symbol: string, example: string, test: Test2): InstructionDef {
   return {
     mnemonic,
     name,
@@ -40,7 +40,7 @@ function compare2(mnemonic: string, name: string, summary: string, symbol: strin
   in REAL — be careful comparing REALs for exact equality.
 
 \`\`\`
-${mnemonic}(Tank_Level,${mnemonic === 'EQU' || mnemonic === 'NEQ' ? '0' : '85.0'})OTE(${mnemonic === 'EQU' ? 'Tank_Empty' : 'Level_Alarm'});
+${example}
 \`\`\``,
     costUs: 0.1,
     compile(ops) {
@@ -68,12 +68,13 @@ ${mnemonic}(Tank_Level,${mnemonic === 'EQU' || mnemonic === 'NEQ' ? '0' : '85.0'
   };
 }
 
-export const EQU = compare2('EQU', 'Equal', 'Condition: true when Source A = Source B.', '=', (a, b) => a === b);
-export const NEQ = compare2('NEQ', 'Not Equal', 'Condition: true when Source A ≠ Source B.', '≠', (a, b) => a !== b);
-export const LES = compare2('LES', 'Less Than', 'Condition: true when Source A < Source B.', '<', (a, b) => a < b);
-export const LEQ = compare2('LEQ', 'Less Than or Equal', 'Condition: true when Source A ≤ Source B.', '≤', (a, b) => a <= b);
-export const GRT = compare2('GRT', 'Greater Than', 'Condition: true when Source A > Source B.', '>', (a, b) => a > b);
-export const GEQ = compare2('GEQ', 'Greater Than or Equal', 'Condition: true when Source A ≥ Source B.', '≥', (a, b) => a >= b);
+// Examples: integers for (in)equality (exact), REAL levels for the range comparisons.
+export const EQU = compare2('EQU', 'Equal', 'Condition: true when Source A = Source B.', '=', 'EQU(Step_No,3)OTE(Step_3_Active);', (a, b) => a === b);
+export const NEQ = compare2('NEQ', 'Not Equal', 'Condition: true when Source A ≠ Source B.', '≠', 'NEQ(Recipe_Selected,Recipe_Loaded)OTE(Load_Recipe_Lamp);', (a, b) => a !== b);
+export const LES = compare2('LES', 'Less Than', 'Condition: true when Source A < Source B.', '<', 'LES(Tank_Level,20.0)OTE(Fill_Valve);', (a, b) => a < b);
+export const LEQ = compare2('LEQ', 'Less Than or Equal', 'Condition: true when Source A ≤ Source B.', '≤', 'LEQ(Tank_Level,5.0)OTE(Low_Level_Alarm);', (a, b) => a <= b);
+export const GRT = compare2('GRT', 'Greater Than', 'Condition: true when Source A > Source B.', '>', 'GRT(Tank_Level,85.0)OTE(High_Level_Alarm);', (a, b) => a > b);
+export const GEQ = compare2('GEQ', 'Greater Than or Equal', 'Condition: true when Source A ≥ Source B.', '≥', 'GEQ(Box_Count.ACC,6)OTE(Case_Half_Full);', (a, b) => a >= b);
 
 export const LIM: InstructionDef = {
   mnemonic: 'LIM',

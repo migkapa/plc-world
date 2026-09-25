@@ -1,22 +1,21 @@
 /**
- * Small visual-state helpers shared by the `trainer` and `motor-station` views (scene-owned wrappers around
- * shared devices, so an I/O state reads clearly from every camera preset):
+ * Small visual-state helpers shared by the `trainer` and `motor-station` views (scene-owned, so an I/O state reads
+ * clearly from every camera preset). Lamp lenses need no helper: the 800F / 855T / 856T devices render their own
+ * dark unlit lens and a bloom-level lit core.
  *
- *  - <LampBoost>: wraps an 800F pilot light. Unlit, the lens is a dark, desaturated glass (so an "off" amber
- *    or blue lamp no longer reads as lit); lit, every color gets an HDR emissive level high enough to bloom
- *    (not only green) plus a soft additive halo disc in front of the lens.
- *  - <GlowDisc>: the additive halo on its own (status LEDs, beacons).
+ *  - <GlowDisc>: an additive halo disc for non-lamp state cues (contactor window, overload flag, reset button).
  *  - <SoundWaves>: expanding rings in a panel plane while a sounder is on (buzzer, horn).
  */
 import { useFrame } from '@react-three/fiber';
-import { useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Vec3 } from '../../../twin/contracts';
+import { useDisposeOnUnmount } from '../../../twin/dispose';
 import { canvasTexture, kgeo, kmat } from './kit';
 
 export type LampColor = 'green' | 'red' | 'amber' | 'yellow' | 'blue' | 'white';
 
-/** Lit LED colors (same hues as the 800F lens), linear-space luminance ~0.2–0.95. */
+/** Lit LED colors (same hues as the 800F lens). */
 const LIT_HEX: Record<LampColor, string> = {
   green: '#18ff3c',
   amber: '#ff6a00',
@@ -25,27 +24,6 @@ const LIT_HEX: Record<LampColor, string> = {
   blue: '#2a7dff',
   white: '#fff7ea',
 };
-const LENS_HEX: Record<LampColor, string> = {
-  green: '#1c9a45',
-  red: '#c01820',
-  amber: '#e88a10',
-  yellow: '#e9cf2a',
-  blue: '#2458c4',
-  white: '#e6e6e0',
-};
-
-/** Emissive intensity that puts the lit lens well above the bloom threshold (luminance ≈ 2.2). */
-function litIntensity(c: LampColor): number {
-  const col = new THREE.Color(LIT_HEX[c]);
-  const lum = 0.2126 * col.r + 0.7152 * col.g + 0.0722 * col.b;
-  return THREE.MathUtils.clamp(2.2 / Math.max(0.05, lum), 2.6, 11);
-}
-
-/** Dark, desaturated "unlit glass" tint (~20 % value in sRGB). */
-function offColor(c: LampColor): THREE.Color {
-  const col = new THREE.Color(LENS_HEX[c]).multiplyScalar(c === 'white' ? 0.16 : 0.11);
-  return col.lerp(new THREE.Color(0.03, 0.03, 0.03), 0.35);
-}
 
 export function glowTexture(): THREE.Texture {
   return canvasTexture(
@@ -95,63 +73,6 @@ export function GlowDisc({ color, getOn, size, position, gain = 1.6 }: { color: 
   return <mesh ref={ref} geometry={PLANE()} material={glowMaterial(hex, gain)} position={position} scale={[size, size, 1]} visible={false} renderOrder={2} />;
 }
 
-function isLensMaterial(m: unknown): m is THREE.MeshStandardMaterial {
-  if (!(m instanceof THREE.MeshStandardMaterial)) return false;
-  if (!Object.prototype.hasOwnProperty.call(m, 'customProgramCacheKey')) return false;
-  try {
-    return String(m.customProgramCacheKey()).startsWith('lens-core');
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Wraps a <PilotLight800F> (origin = mounting hole, +Z out). Drives the lens material after the device's own
- * update each frame (dark glass when off, bloom-level emissive when on) and adds a halo disc.
- */
-export function LampBoost({ color, getLit, flash = false, children, halo = 0.052 }: { color: LampColor; getLit: () => boolean; flash?: boolean; children: ReactNode; halo?: number }) {
-  const group = useRef<THREE.Group>(null);
-  const lensMesh = useRef<THREE.Mesh | null>(null);
-  const lensMat = useRef<THREE.MeshStandardMaterial | null>(null);
-  const haloRef = useRef<THREE.Mesh>(null);
-  const off = useMemo(() => offColor(color), [color]);
-  const litE = useMemo(() => litIntensity(color), [color]);
-  const find = () => {
-    lensMesh.current = null;
-    lensMat.current = null;
-    group.current?.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!lensMat.current && mesh.isMesh && isLensMaterial(mesh.material)) {
-        lensMesh.current = mesh;
-        lensMat.current = mesh.material as THREE.MeshStandardMaterial;
-      }
-    });
-  };
-  useLayoutEffect(find, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useFrame(({ clock }) => {
-    let lit = getLit();
-    if (lit && flash) lit = Math.floor(clock.elapsedTime * 2) % 2 === 0;
-    if (!lensMat.current || lensMesh.current?.material !== lensMat.current) find();
-    const m = lensMat.current;
-    if (m) {
-      if (lit) {
-        if (m.emissiveIntensity !== litE) m.emissiveIntensity = litE;
-      } else {
-        m.color.copy(off);
-        if (m.emissiveIntensity !== 0) m.emissiveIntensity = 0;
-      }
-    }
-    const h = haloRef.current;
-    if (h && h.visible !== lit) h.visible = lit;
-  });
-  return (
-    <group ref={group}>
-      {children}
-      <mesh ref={haloRef} geometry={PLANE()} material={glowMaterial(LIT_HEX[color], color === 'white' ? 1.1 : 1.7)} position={[0, 0, 0.0108]} scale={[halo, halo, 1]} visible={false} renderOrder={2} />
-    </group>
-  );
-}
-
 function ringTexture(): THREE.Texture {
   return canvasTexture(
     'fx-ring',
@@ -190,7 +111,7 @@ export function SoundWaves({ getOn, r0, r1, color = '#ffb020', period = 0.9, pos
       ),
     [color],
   );
-  useLayoutEffect(() => () => mats.forEach((m) => m.dispose()), [mats]);
+  useDisposeOnUnmount(mats);
   useFrame(({ clock }) => {
     const on = getOn();
     for (let i = 0; i < 3; i++) {

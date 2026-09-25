@@ -7,6 +7,8 @@ export { EndCap5069, END_CAP_5069_WIDTH } from './EndCap5069';
 export type { EndCap5069Props } from './EndCap5069';
 export { CompactLogixRack, layoutCompactLogixRack, RAIL_Y as COMPACT_RACK_RAIL_Y } from './CompactLogixRack';
 export type { CompactRackSlotLayout, CompactLogixRackTwinProps } from './CompactLogixRack';
+export { CompactLogixRackImpostor } from './RackImpostor';
+export type { CompactRackImpostorSlot } from './RackImpostor';
 export { DUCT as COMPACT_RACK_DUCT } from './parts';
 export { createCompactDemoLive } from './demoLive';
 export type { CompactDemoLiveOptions } from './demoLive';

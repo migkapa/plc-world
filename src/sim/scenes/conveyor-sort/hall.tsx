@@ -12,11 +12,12 @@
  *
  * All geometry is built once (cached) and heavily instanced/merged to keep draw calls low.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { boxGeometry, boxMaterial } from '../../../twin/devices';
 import type { Vec3 } from '../../../twin/contracts';
+import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 // ---------------------------------------------------------------------------
 // Small caches
@@ -355,7 +356,7 @@ function Wall({ length, height, position, rotationY }: { length: number; height:
     t.needsUpdate = true;
     return new THREE.MeshStandardMaterial({ map: t, roughness: 0.75, metalness: 0.15 });
   }, [length, height]);
-  useEffect(() => () => m.dispose(), [m]);
+  useDisposeOnUnmount(m);
   return (
     <group position={position} rotation={[0, rotationY, 0]}>
       <mesh material={m} position={[0, height / 2, 0]} receiveShadow>
@@ -488,14 +489,11 @@ export function FactoryHall({ floor, backWallZ, leftWallX, rightWallX, wallHeigh
     // paintFloor is expected to be a stable module-level function
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [x0, x1, z0, z1, seed]);
-  useEffect(
-    () => () => {
-      floorMat.map?.dispose();
-      floorMat.roughnessMap?.dispose();
-      floorMat.dispose();
-    },
-    [floorMat],
-  );
+  useDisposeOnUnmount(floorMat, () => {
+    floorMat.map?.dispose();
+    floorMat.roughnessMap?.dispose();
+    floorMat.dispose();
+  });
   return (
     <group>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[cx, 0, cz]} material={floorMat} receiveShadow userData={{ noOcclude: true }}>
@@ -694,7 +692,7 @@ export function SafetyFence({ runs, height = 1.9 }: SafetyFenceProps) {
     panels.forEach((g) => g.dispose());
     return { posts, feet, frames, merged };
   }, [JSON.stringify(runs), height]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => data.merged?.dispose(), [data]);
+  useDisposeOnUnmount(data, () => data.merged?.dispose());
   const meshMat = mat(
     'hall:fenceMeshMat',
     () =>
@@ -964,7 +962,7 @@ export function Cables({ cables }: { cables: CableSpec[] }) {
     parts.forEach((g) => g.dispose());
     return merged;
   }, [JSON.stringify(cables)]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => geom?.dispose(), [geom]);
+  useDisposeOnUnmount(geom);
   const m = mat('hall:cableMat', () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0 }));
   if (!geom) return null;
   return <mesh geometry={geom} material={m} castShadow receiveShadow />;

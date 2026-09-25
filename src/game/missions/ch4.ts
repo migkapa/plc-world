@@ -136,6 +136,11 @@ blocks the eye for 0.6 s — dozens of scans — but the CTU only counts the **e
       '`Box_Count.ACC` = boxes delivered past `PE_Exit` (a box that stops on the eye is still one box)',
       'The count survives stops, E-stops and restarts',
     ],
+    objectiveTests: [
+      [0, { invariant: 0 }, { invariant: 1 }],
+      [1, 2, 3],
+      [4],
+    ],
     concepts: ['CTU', 'XIC', 'OTE'],
     starter: {
       rungs: ['', ''],
@@ -285,6 +290,12 @@ What Start does while the belt is already running is up to you.`,
       '`Light_Amber` = batch complete',
       'Start after a complete batch resets the counter (RES) and starts a new batch',
       'Stop / E-stop mid-batch pause it without losing the count',
+    ],
+    objectiveTests: [
+      [{ test: 0, steps: [3, 5, 6, 7, 9, 11] }, { invariant: 2 }],
+      [{ test: 0, observe: ['lightAmber'] }, { test: 1, steps: [3, 7, 12] }, { test: 2, steps: [8] }],
+      [{ test: 1, steps: [6, 8, 9, 10, 11] }],
+      [{ test: 2, steps: [5, 6, 7, 10, 11, 12, 13, 14] }, 3, { invariant: 0 }, { invariant: 1 }],
     ],
     concepts: ['CTU', 'RES', 'XIC', 'XIO'],
     starter: {
@@ -448,6 +459,12 @@ that passes power for **one scan only**, on the false→true transition of its r
       '`Meter_1` = `Press_Count` × 10',
       'The red (N.C.) button clears the count',
     ],
+    objectiveTests: [
+      [{ test: 0, steps: [1] }, { test: 1, steps: [2, 8] }, { test: 3, steps: [11] }, { test: 4, steps: [4, 5, 10] }],
+      [2],
+      [{ test: 0, steps: [2] }, { test: 1, steps: [3, 9] }, { test: 3, steps: [12] }, { test: 4, steps: [8] }],
+      [{ test: 4, steps: [7] }],
+    ],
     concepts: ['ONS', 'OSR', 'ADD', 'MUL', 'CLR'],
     starter: {
       rungs: ['XIC(PB_Green)ADD(Press_Count,1,Press_Count);', '', ''],
@@ -580,6 +597,12 @@ scan when \`Entry_PE\` goes from 1 to 0.`,
       'Each car gets its own gate cycle',
       'An arm never comes down on a car',
     ],
+    objectiveTests: [
+      [{ test: 0, steps: [3] }, 1],
+      [{ test: 0, steps: [4] }, 3],
+      [2, 4],
+      [{ invariant: 0 }],
+    ],
     concepts: ['OSF', 'ONS', 'XIC', 'XIO', 'OTE'],
     starter: {
       rungs: ['', '', '', ''],
@@ -700,6 +723,13 @@ twenty minutes looking for a space that didn't exist. The plant manager wants th
       'No entry when full; the exit always works',
       '`Reset_Key` clears the count',
       'No gate hits, never more than 12 cars inside',
+    ],
+    objectiveTests: [
+      [{ test: 0, steps: [5] }, 1, { test: 2, steps: [34] }],
+      [{ test: 0, steps: [3, 4] }, { test: 2, observe: ['openSign', 'fullSign'] }, { test: 3, steps: [8] }, { invariant: 2 }, { invariant: 3 }],
+      [{ test: 2, steps: [15, 28, 31, 35, 38, 39, 42, 47] }, { test: 3, steps: [7] }, { invariant: 1 }],
+      [{ test: 3, steps: [10, 13, 14, 16] }],
+      [{ invariant: 0 }, { invariant: 1 }],
     ],
     concepts: ['CTU', 'CTD', 'RES', 'OSF'],
     starter: {

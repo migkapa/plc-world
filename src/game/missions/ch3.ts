@@ -214,6 +214,12 @@ reaches the preset \`.PRE\` it sets its **done bit** \`.DN\`. The moment the run
       '`Light_0` goes OFF at once when `Switch_0` goes OFF',
       'An interrupted purge starts over from zero',
     ],
+    objectiveTests: [
+      [0, { test: 1, steps: [2] }, 4],
+      [{ test: 1, steps: [3, 4] }, { test: 2, steps: [2] }],
+      [{ test: 2, steps: [5] }, { invariant: 0 }],
+      [3],
+    ],
     concepts: ['TON', 'XIC', 'OTE'],
     starter: {
       rungs: ['', ''],
@@ -330,6 +336,12 @@ goes **false**, it starts timing and \`.DN\` stays ON until \`.ACC\` reaches \`.
       'The fan keeps running 5 s after the heater turns OFF, then stops',
       'The overrun restarts if the heater comes back on',
       'No fan at power-up with the heater OFF',
+    ],
+    objectiveTests: [
+      [1, { test: 3, steps: [6] }, { invariant: 0 }],
+      [2, 4],
+      [{ test: 3, steps: [8, 9] }],
+      [0],
     ],
     concepts: ['TOF', 'XIC', 'OTE'],
     starter: {
@@ -449,6 +461,11 @@ timer B for the dark phase; when B is done it resets A — which resets B — an
       '`Light_4` is dark while `Switch_2` is OFF',
       'Flashing restarts when the alarm comes back',
     ],
+    objectiveTests: [
+      [1, 3, { test: 2, from: 6, to: 16 }],
+      [0, { test: 2, steps: [4, 18] }, { invariant: 0 }],
+      [{ test: 2, from: 6, to: 16 }],
+    ],
     concepts: ['TON', 'XIC', 'XIO', 'OTE'],
     starter: {
       rungs: ['', '', ''],
@@ -555,6 +572,13 @@ Tip: a TON's **\`.TT\`** (timer timing) bit is ON exactly while it is counting.`
       'Stop / E-stop / overload during the warning cancel the start',
       'Stop / E-stop / overload stop a running motor — no restart after a release or reset',
       'No horn when Start is pressed on a running motor',
+    ],
+    objectiveTests: [
+      [0, 1],
+      [{ test: 1, steps: [6] }],
+      [2, 3, 4],
+      [5, 6, 7, { invariant: 0 }, { invariant: 1 }, { invariant: 2 }],
+      [8],
     ],
     concepts: ['TON', 'XIC', 'XIO', 'OTE'],
     starter: {
@@ -759,6 +783,12 @@ For the demo, Dana sets the service interval to **30 s** (\`30000\`); on the rea
       '`Fault_Light` = SERVICE DUE at 30 s of run time (and E-stop / overload as before)',
       'Holding Jog 2 s while stopped resets the meter; a short press or a running motor does not',
     ],
+    objectiveTests: [
+      [0, 1],
+      [2],
+      [{ test: 3, steps: [3, 4, 5, 7, 8] }, 5, { invariant: 0 }, { invariant: 1 }, { invariant: 2 }],
+      [{ test: 3, steps: [10, 11, 14, 15, 17, 18] }, 4],
+    ],
     concepts: ['RTO', 'RES', 'TON'],
     starter: {
       rungs: [SAFE_SEAL, '', '', '', RUN_LIGHT, READY_LIGHT, FAULT_LIGHT],
@@ -957,6 +987,12 @@ Each head shows **exactly one** lamp at a time. \`Dont_Walk\` is lit steadily; \
       'One lamp per head; `Dont_Walk` steady, `Walk` off',
       'Never a conflict',
     ],
+    objectiveTests: [
+      [{ test: 0, observe: ['nsGreen', 'nsYellow', 'nsRed'] }, { test: 1, observe: ['nsGreen', 'nsYellow', 'nsRed'] }],
+      [{ test: 0, observe: ['ewGreen', 'ewYellow', 'ewRed'] }, { test: 1, observe: ['ewGreen', 'ewYellow', 'ewRed'] }, { test: 2, observe: ['carsPassed'] }],
+      [{ test: 0, observe: ['dontWalk'] }, { invariant: 1 }, { invariant: 2 }],
+      [{ invariant: 0 }, { test: 2, observe: ['conflicts'] }],
+    ],
     concepts: ['TON', 'XIC', 'XIO', 'OTE'],
     starter: {
       rungs: ['', '', '', '', '', '', '', '', '', '', '', ''],
@@ -1058,6 +1094,13 @@ What a press *during* WALK does is up to you (we don't test it).`,
       'WALK 6 s, then flashing DON\'T WALK until NS green',
       'One press = one WALK; no WALK without a request',
       'Never WALK with NS green/yellow, never WALK + DON\'T WALK together',
+    ],
+    objectiveTests: [
+      [5, { test: 0, steps: [0] }],
+      [{ test: 1, from: 2, to: 6 }, 2, 3, 4],
+      [{ test: 1, from: 7, to: 27 }],
+      [{ test: 0, steps: [1] }, { test: 1, steps: [28] }],
+      [{ invariant: 0 }, { invariant: 1 }],
     ],
     concepts: ['TON', 'XIC', 'XIO', 'OTE'],
     starter: {

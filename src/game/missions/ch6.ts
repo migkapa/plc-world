@@ -240,6 +240,14 @@ EQU. Every transition is a MOV. Outputs are driven from the step — never latch
       'Stop / E-stop abort to step 0',
       'One complete batch is counted by the plant',
     ],
+    objectiveTests: [
+      [0, { test: 1, steps: [2, 3, 4, 5, 13, 27, 32, 33] }],
+      [{ test: 1, steps: [6, 7, 8] }, { invariant: 0 }],
+      [{ test: 1, steps: [9, 10, 11, 14, 15, 16, 17] }, 3, { invariant: 1 }, { invariant: 2 }],
+      [{ test: 1, steps: [18, 19, 20, 21, 22, 24, 25, 29, 30] }, { invariant: 3 }],
+      [2, { invariant: 4 }, { invariant: 5 }, { invariant: 6 }],
+      [{ test: 1, steps: [23] }],
+    ],
     concepts: ['EQU', 'MOV', 'TON', 'GEQ', 'LES'],
     starter: {
       rungs: ['EQU(Step,0)XIC(Start_PB)MOV(10,Step);', '', '', '', '', '', '', 'EQU(Step,10)OTE(Fill_Valve);', '', '', '', ''],
@@ -427,6 +435,14 @@ Tags \`Track\` (DINT[2]), \`Track_Ctl\` (CONTROL), \`Track_Clock\` (TIMER) and \
       'Pusher retracts on Pusher_Extended — no jams',
       'Zero missorts over 3 minutes and through stops',
     ],
+    objectiveTests: [
+      [0, { invariant: 2 }, { invariant: 3 }],
+      [5],
+      [2, 3],
+      [1, 2, 3],
+      [{ invariant: 1 }],
+      [4, 5, { invariant: 0 }],
+    ],
     concepts: ['BSL', 'TON', 'ONS', 'XIC', 'OTE'],
     starter: {
       rungs: [
@@ -611,6 +627,13 @@ That's the timing sheet of your **Traffic Cycle** (mission 3-6) plus a 2 s all-r
       'All red at power-up, then NS green',
       'Walk only with the side-street green; no conflicts',
     ],
+    objectiveTests: [
+      [1],
+      [1],
+      [1],
+      [0],
+      [{ test: 1, observe: ['walk', 'dontWalk'] }, { invariant: 0 }, { invariant: 1 }],
+    ],
     concepts: ['SQO', 'MOV', 'TON', 'EQU'],
     starter: {
       rungs: ['', '', '', '', '', ...LAMP_RUNGS],
@@ -713,6 +736,13 @@ and back in the morning.
       'NS yellow + EW red flash at 1 Hz, everything else dark',
       'Back to day: 2 s all red, then NS green',
       'Never a conflicting signal',
+    ],
+    objectiveTests: [
+      [0, { test: 1, steps: [0] }, { test: 2, steps: [0] }, { test: 3, steps: [0] }],
+      [{ test: 1, from: 3, to: 9 }, { test: 2, from: 3, to: 7 }],
+      [{ test: 1, from: 11 }, { test: 2, from: 9 }, { test: 3, from: 3, to: 26 }],
+      [{ test: 3, from: 28 }],
+      [{ invariant: 0 }, { invariant: 1 }],
     ],
     concepts: ['SQO', 'RES', 'TON', 'EQU', 'MOV'],
     starter: {

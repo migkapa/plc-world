@@ -122,6 +122,12 @@ in, Stop always wins, E-stop and overload drop the motor with no automatic resta
       'E-stop and overload drop the motor, no automatic restart',
       'Pilot lights keep working',
     ],
+    objectiveTests: [
+      [{ test: 0, steps: [2, 3] }, { test: 1, steps: [2, 9] }, { test: 2, steps: [2] }, { test: 3, steps: [2, 10] }, { test: 4, steps: [2, 13] }],
+      [{ test: 1, steps: [5, 6] }, { test: 2, steps: [5, 8, 11, 13] }, { invariant: 0 }],
+      [{ test: 3, steps: [5, 8] }, { test: 4, steps: [5, 7, 10, 11] }, { invariant: 1 }, { invariant: 2 }],
+      [{ test: 0, steps: [4, 5] }, { test: 1, steps: [7] }, { test: 3, steps: [6] }],
+    ],
     concepts: ['XIC', 'OTE'],
     starter: {
       rungs: ['XIC(Start_PB)[XIC(Stop_PB),XIC(Motor_Starter)]XIC(EStop_OK)XIC(OL_OK)OTE(Motor_Starter);', ...LIGHTS],
@@ -259,6 +265,12 @@ Tip: *Verify* the controller and read the **warnings** too, not only the errors.
       'Jog runs the motor only while held, never seals in',
       'Stop, E-stop and overload stop everything (jog too), no automatic restart',
       'Only one rung writes Motor_Starter',
+    ],
+    objectiveTests: [
+      [0, { test: 3, steps: [2, 5] }],
+      [1, 2, { test: 3, steps: [8, 10] }],
+      [4, 5, 6, { invariant: 0 }, { invariant: 1 }, { invariant: 2 }],
+      [],
     ],
     concepts: ['OTE', 'XIC', 'XIO'],
     starter: {
@@ -436,6 +448,12 @@ alarm unless silenced).`,
       'Light_4 is off without an alarm',
       'Buzzer still sounds with the alarm unless silenced',
     ],
+    objectiveTests: [
+      [0, { test: 2, steps: [7] }, { test: 3, steps: [5] }],
+      [1],
+      [{ test: 2, steps: [1, 5] }, { invariant: 0 }],
+      [{ test: 3, observe: ['buzzer'] }],
+    ],
     concepts: ['TON', 'LES', 'XIO'],
     starter: {
       rungs: ['XIC(Switch_0)TON(Flash_Timer,500,0);', 'XIC(Switch_0)XIC(Flash_Timer.DN)OTE(Light_4);', 'XIC(Switch_0)XIO(Switch_1)OTE(Buzzer);'],
@@ -574,6 +592,12 @@ If a "timer is stuck" online, look at what's (not) resetting it. And many plants
       'At 10 boxes: conveyor stops, amber light on',
       'Start with a full pallet begins a new pallet',
       'A mid-pallet stop keeps the count; Box_Total is never reset',
+    ],
+    objectiveTests: [
+      [2, { test: 0, steps: [13, 14] }, { test: 1, steps: [9, 10] }],
+      [{ test: 0, steps: [5, 11, 12, 15, 16] }, { test: 1, steps: [3] }],
+      [{ test: 1, steps: [6, 7, 8] }],
+      [{ test: 0, steps: [3, 4, 7, 10] }, { test: 1, steps: [10] }, 3, { invariant: 0 }, { invariant: 1 }],
     ],
     concepts: ['CTU', 'ONS', 'ADD', 'RES'],
     starter: {
@@ -759,6 +783,13 @@ Everything else stays as it is.`,
       'Horn on high-high, on LT-101 channel fault, and on LT/LSH disagreement — and only then',
       'The tank never overflows',
     ],
+    objectiveTests: [
+      [{ test: 0, observe: ['fillValve', 'level', 'Fill_Valve'] }, { test: 3, steps: [4, 5, 6] }, { test: 4, observe: ['fillValve', 'runningLight', 'drainValve', 'level'] }],
+      [{ test: 1, observe: ['fillValve', 'level'] }],
+      [{ test: 2, observe: ['fillValve', 'level', 'Fill_Valve'] }, { invariant: 1 }],
+      [{ test: 0, observe: ['alarmHorn'] }, { test: 1, observe: ['alarmHorn'] }, { test: 2, observe: ['alarmHorn'] }, { test: 3, steps: [2] }, { test: 4, observe: ['alarmHorn'] }],
+      [{ invariant: 0 }],
+    ],
     concepts: ['XIO', 'LES', 'GEQ', 'XIC', 'OTE'],
     starter: {
       rungs: [
@@ -925,6 +956,14 @@ Selector: \`HOA_Hand\` = 1 in HAND, \`HOA_Auto\` = 1 in AUTO, both 0 in OFF. \`S
       'Horn only for the overload',
       'RUN light from the contactor feedback',
       'The whole Commissioning Day spec passes',
+    ],
+    objectiveTests: [
+      [{ test: 0, steps: [1] }, { test: 2, steps: [9, 13] }, { test: 4, steps: [8] }, { test: 8, steps: [9] }],
+      [{ test: 4, steps: [3, 6, 11, 13] }, { invariant: 1 }],
+      [1, 3, { test: 10, steps: [12] }],
+      [{ test: 0, steps: [4] }, { test: 2, steps: [5] }, { test: 4, steps: [9] }, { test: 8, steps: [7, 13] }, { test: 9, steps: [8] }],
+      [{ test: 0, steps: [2] }, { test: 2, steps: [4, 8, 12] }],
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, { invariant: 0 }, { invariant: 1 }, { invariant: 2 }, { invariant: 3 }],
     ],
     concepts: ['XIC', 'XIO', 'OTE'],
     starter: {

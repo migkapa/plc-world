@@ -614,7 +614,7 @@ export function ParkingSpace({
     return mergeAll(parts);
   });
   const label = number !== undefined ? String(number) : null;
-  const numMat = label ? sharedMat(`road:numMat:${label}:${color}`, () => new THREE.MeshStandardMaterial({ map: numberTexture(label, color), transparent: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, depthWrite: false })) : null;
+  const numMat = label ? sharedMat(`road:numMat:${label}:${color}`, () => new THREE.MeshStandardMaterial({ map: numberTexture(label, color), transparent: true, roughness: 1, envMapIntensity: 0.35, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, depthWrite: false })) : null;
   const stop = sharedGeo('road:wheelstop', () => {
     const s = new THREE.Shape();
     s.moveTo(-0.1, 0);

@@ -16,8 +16,9 @@
  * center on the ground (x = 0 halfway between the bumpers). Right side = +Z.
  *
  *  - <Car/>       one car (≈ 10 draw calls; geometry & materials shared per style/color).
- *  - <CarFleet/>  many cars in ≈ 23 draw calls total (InstancedMesh per style/part, per-instance paint
- *                 color, solid vs metallic paint meshes, wheel spin/steer, lamp levels).
+ *  - <CarFleet/>  many cars in ≈ 23-31 draw calls total (InstancedMesh per style/part, per-instance paint
+ *                 color, solid vs metallic paint meshes, wheel spin/steer, lamp levels; empty meshes are hidden).
+ *                 Built-in distance LOD (`lodDistance`): far cars use a ~5x lighter body loft and simple wheels.
  */
 import { useFrame } from '@react-three/fiber';
 import { useLayoutEffect, useMemo, useRef } from 'react';
@@ -371,6 +372,29 @@ export function carParts(style: CarStyle): CarParts {
     partsCache.set(style, p);
   }
   return p;
+}
+
+const lodBodyCache = new Map<CarStyle, THREE.BufferGeometry>();
+
+/**
+ * Low-poly body for distant cars (CarFleet LOD): the same loft (silhouette, section rings, atlas UVs, so the same
+ * paint material and window layout) from ~5x fewer stations, without the mirror caps.
+ */
+export function carBodyLod(style: CarStyle): THREE.BufferGeometry {
+  let g = lodBodyCache.get(style);
+  if (!g) {
+    const st = STYLES[style];
+    const S = buildBody(st, 'lod');
+    const parts: THREE.BufferGeometry[] = [S.lower, S.greenhouse];
+    if (st.base === 'hatchback') {
+      const x = st.xRoofRear;
+      const hw = S.ghHalfWidth(x) - st.tumble - 0.1;
+      parts.push(constUv(xf(new THREE.BoxGeometry(0.15, 0.026, 2 * hw), [x - 0.02, S.ghTop(x) + 0.008, 0], [0, 0, -0.16]), UV_PAINT));
+    }
+    g = mergeIdx(parts);
+    lodBodyCache.set(style, g);
+  }
+  return g;
 }
 
 /** Nominal dimensions per style (m). */
@@ -751,6 +775,20 @@ export function unitWheel(): THREE.BufferGeometry {
   return wheelGeo;
 }
 
+let wheelLoGeo: THREE.BufferGeometry | null = null;
+/** Low-poly wheel for distant cars (~6 % of the triangles): tire section on 14 segments + a flat rim face. */
+export function unitWheelLo(): THREE.BufferGeometry {
+  if (wheelLoGeo) return wheelLoGeo;
+  const tire = vc(lathe([[0.69, 0.3], [0.92, 0.33], [1.0, 0.2], [1.0, -0.2], [0.92, -0.33], [0.69, -0.3]], 14), RUBBER);
+  const face = new THREE.CircleGeometry(0.7, 14);
+  face.translate(0, 0, 0.27);
+  const back = new THREE.CircleGeometry(0.7, 14);
+  back.rotateY(Math.PI);
+  back.translate(0, 0, -0.2);
+  wheelLoGeo = mergeVc([tire, vc(face, SPOKE), vc(back, BARREL)]);
+  return wheelLoGeo;
+}
+
 const caliperCache: Record<string, THREE.BufferGeometry> = {};
 /** Brake caliper (unit scale) at the rear-upper side of the disc; `right` = outer face +Z. */
 function caliperGeometry(right: boolean): THREE.BufferGeometry {
@@ -1032,17 +1070,25 @@ export interface CarFleetProps {
    */
   getCar: (i: number, out: CarInstance) => boolean;
   castShadow?: boolean;
+  /**
+   * Low-poly LOD: cars farther than this from the camera (m) use a ~5x lighter body and simple wheels (no brake
+   * calipers). Default 22 m; `false` = always full detail.
+   */
+  lodDistance?: number | false;
 }
 
 const FLEET_STYLES: CarStyle[] = ['sedan', 'hatchback', 'suv', 'taxi'];
-type FleetPart = 'bodySolid' | 'bodyMetal' | 'trim' | 'decals' | 'lamps';
-const FLEET_PARTS: FleetPart[] = ['bodySolid', 'bodyMetal', 'trim', 'decals', 'lamps'];
+type FleetPart = 'bodySolid' | 'bodyMetal' | 'bodySolidLo' | 'bodyMetalLo' | 'trim' | 'decals' | 'lamps';
+const FLEET_PARTS: FleetPart[] = ['bodySolid', 'bodyMetal', 'bodySolidLo', 'bodyMetalLo', 'trim', 'decals', 'lamps'];
+const isBody = (k: FleetPart) => k === 'bodySolid' || k === 'bodyMetal' || k === 'bodySolidLo' || k === 'bodyMetalLo';
 
 function fleetMaterial(style: CarStyle, key: FleetPart): THREE.Material {
   switch (key) {
     case 'bodySolid':
+    case 'bodySolidLo':
       return sharedMat(`car:fleetPaint:${style}:solid`, () => makePaint(style, '#ffffff', false));
     case 'bodyMetal':
+    case 'bodyMetalLo':
       return sharedMat(`car:fleetPaint:${style}:metal`, () => makePaint(style, '#ffffff', true));
     case 'trim':
       return vcMaterial();
@@ -1055,6 +1101,7 @@ function fleetMaterial(style: CarStyle, key: FleetPart): THREE.Material {
 
 function fleetGeometry(style: CarStyle, key: FleetPart): THREE.BufferGeometry {
   const p = carParts(style);
+  if (key === 'bodySolidLo' || key === 'bodyMetalLo') return carBodyLod(style);
   return key === 'bodySolid' || key === 'bodyMetal' ? p.body : p[key];
 }
 
@@ -1064,9 +1111,12 @@ function newInstance(): CarInstance {
 
 const DEFAULT_INSTANCE: CarInstance = newInstance();
 
-export function CarFleet({ capacity, getCar, castShadow = true }: CarFleetProps) {
+export function CarFleet({ capacity, getCar, castShadow = true, lodDistance = 22 }: CarFleetProps) {
   const meshes = useRef<Record<string, THREE.InstancedMesh | null>>({});
   const wheels = useRef<THREE.InstancedMesh>(null);
+  const wheelsLo = useRef<THREE.InstancedMesh>(null);
+  const root = useRef<THREE.Group>(null);
+  const camLocal = useMemo(() => new THREE.Vector3(), []);
   const calR = useRef<THREE.InstancedMesh>(null);
   const calL = useRef<THREE.InstancedMesh>(null);
   const tmp = useMemo(
@@ -1092,15 +1142,20 @@ export function CarFleet({ capacity, getCar, castShadow = true }: CarFleetProps)
       if (!mesh) continue;
       mesh.count = 0;
     }
-    for (const r of [wheels.current, calR.current, calL.current]) if (r) r.count = 0;
+    for (const r of [wheels.current, wheelsLo.current, calR.current, calL.current]) if (r) r.count = 0;
   }, []);
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock, camera }) => {
     const t = clock.elapsedTime;
     const counts = tmp.counts;
     for (const s of FLEET_STYLES) for (const k of FLEET_PARTS) counts[`${s}:${k}`] = 0;
     let wheelN = 0;
+    let wheelLoN = 0;
     let calN = 0;
+    const lod2 = lodDistance === false ? Infinity : lodDistance * lodDistance;
+    // car poses are in the fleet's parent space: bring the camera there
+    const cam = camLocal.copy(camera.position);
+    if (root.current) root.current.worldToLocal(cam);
     const inst = tmp.inst;
     for (let i = 0; i < capacity; i++) {
       Object.assign(inst, DEFAULT_INSTANCE);
@@ -1115,10 +1170,11 @@ export function CarFleet({ capacity, getCar, castShadow = true }: CarFleetProps)
       tmp.s.set(sx, 1, 1);
       tmp.body.compose(tmp.p, tmp.q, tmp.s);
       const paint = CAR_PAINT[v.color];
-      const bodyKey: FleetPart = paint.metallic ? 'bodyMetal' : 'bodySolid';
+      const far = (inst.x - cam.x) ** 2 + (inst.y - cam.y) ** 2 + (inst.z - cam.z) ** 2 > lod2;
+      const bodyKey: FleetPart = paint.metallic ? (far ? 'bodyMetalLo' : 'bodyMetal') : far ? 'bodySolidLo' : 'bodySolid';
       const turn = blinkOn(inst.blinker, 'left', t) || blinkOn(inst.blinker, 'right', t);
       for (const key of FLEET_PARTS) {
-        if ((key === 'bodySolid' || key === 'bodyMetal') && key !== bodyKey) continue;
+        if (isBody(key) && key !== bodyKey) continue;
         const id = `${v.style}:${key}`;
         const mesh = meshes.current[id];
         if (!mesh) continue;
@@ -1145,6 +1201,10 @@ export function CarFleet({ capacity, getCar, castShadow = true }: CarFleetProps)
         tmp.s.setScalar(d.wheelR);
         tmp.w.compose(tmp.p, tmp.q, tmp.s);
         tmp.m.multiplyMatrices(tmp.body, tmp.w);
+        if (far) {
+          wheelsLo.current?.setMatrixAt(wheelLoN++, tmp.m);
+          continue;
+        }
         wheels.current?.setMatrixAt(wheelN++, tmp.m);
         if (w < 2) {
           tmp.e.set(0, steer, 0, 'YXZ');
@@ -1168,10 +1228,14 @@ export function CarFleet({ capacity, getCar, castShadow = true }: CarFleetProps)
         if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       }
     }
-    if (wheels.current) {
-      wheels.current.count = wheelN;
-      wheels.current.visible = wheelN > 0;
-      wheels.current.instanceMatrix.needsUpdate = true;
+    for (const [r, n] of [
+      [wheels.current, wheelN],
+      [wheelsLo.current, wheelLoN],
+    ] as const) {
+      if (!r) continue;
+      r.count = n;
+      r.visible = n > 0;
+      r.instanceMatrix.needsUpdate = true;
     }
     for (const r of [calR.current, calL.current]) {
       if (!r) continue;
@@ -1182,23 +1246,24 @@ export function CarFleet({ capacity, getCar, castShadow = true }: CarFleetProps)
   });
 
   return (
-    <group>
+    <group ref={root}>
       {FLEET_STYLES.map((s) =>
         FLEET_PARTS.map((key) => (
           <instancedMesh
             key={`${s}:${key}`}
             ref={(el) => {
               meshes.current[`${s}:${key}`] = el;
-              if (el && !el.instanceColor && (key === 'bodySolid' || key === 'bodyMetal' || key === 'lamps')) el.setColorAt(0, new THREE.Color(1, 1, 1));
+              if (el && !el.instanceColor && (isBody(key) || key === 'lamps')) el.setColorAt(0, new THREE.Color(1, 1, 1));
             }}
             args={[fleetGeometry(s, key), fleetMaterial(s, key), capacity]}
             castShadow={castShadow && key !== 'decals' && key !== 'lamps'}
-            receiveShadow={key === 'bodySolid' || key === 'bodyMetal'}
+            receiveShadow={isBody(key)}
             frustumCulled={false}
           />
         )),
       )}
       <instancedMesh ref={wheels} args={[unitWheel(), vcMaterial(), capacity * 4]} castShadow={castShadow} frustumCulled={false} />
+      <instancedMesh ref={wheelsLo} args={[unitWheelLo(), vcMaterial(), capacity * 4]} castShadow={castShadow} frustumCulled={false} />
       <instancedMesh ref={calR} args={[caliperMesh(true), vcMaterial(), capacity]} frustumCulled={false} />
       <instancedMesh ref={calL} args={[caliperMesh(false), vcMaterial(), capacity]} frustumCulled={false} />
     </group>

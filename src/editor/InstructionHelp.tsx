@@ -9,7 +9,7 @@ import { parseRung } from '@/plc/neutralText';
 import type { InstructionInfo } from '@/plc/types';
 import { Markdown } from '@/ui/Markdown';
 import { cn } from '@/ui/cn';
-import { exampleFor } from './examples';
+import { detailsWithoutExample, exampleFor } from './examples';
 import { InstrGlyph } from './glyphs';
 import { layoutRung } from './layout';
 import { RungSvg } from './RungSvg';
@@ -118,7 +118,7 @@ export function InstructionHelp({ info, compact, theme = 'dark', locked, classNa
           </tbody>
         </table>
       )}
-      {!compact && def.details && <Markdown source={def.details} className="text-[13px]" />}
+      {!compact && def.details && <Markdown source={detailsWithoutExample(def.details, example)} className="text-[13px]" />}
       <div>
         <div className="mb-1 flex items-center gap-1.5 text-[10.5px] font-semibold tracking-wide text-slate-500 uppercase">
           <BookOpen size={12} /> Example

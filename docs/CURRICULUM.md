@@ -68,6 +68,7 @@ export const CH3_MISSIONS: MissionDef[] = [
     kind: 'build', sceneId: 'motor-station', difficulty: 2, xp: 110,
     briefing: `…story… **The hardware** … **Your task** …`,
     objectives: ['…', '…'],
+    objectiveTests: [[0, 1], [{ test: 2, observe: ['horn'] }, { invariant: 0 }]], // what proves each objective
     concepts: ['TON'],
     starter: { rungs: ['…'], comments: ['…'], tags: [{ name: 'Horn_Timer', dataType: 'TIMER' }] },
     solution: { rungs: ['…'] },
@@ -87,6 +88,13 @@ export const CH3_MISSIONS: MissionDef[] = [
   task** as a short spec. Say explicitly what is *not* tested when behaviour could be ambiguous
   ("What Jog does while running is up to you").
 - **Objectives**: the checklist shown in the HUD; one line per tested behaviour.
+- **objectiveTests**: one proof list per objective (`src/game/objectives.ts`): a test index (the whole test),
+  `{ test, steps?, from?, to?, observe? }` (only those expect steps — for a test that checks several
+  objectives) or `{ invariant }`. The checklist ticks an objective when all its proofs hold, crosses it when
+  one is broken and leaves it open when the test stopped before reaching its steps; an invariant trip is
+  charged to the objectives that list the invariant. `lintObjectives()` requires every expect step and every
+  invariant to prove some objective; the suite checks that the solution ticks all objectives and every wrong
+  answer crosses at least one. Objectives are never paired with tests by position.
 - **Concepts**: instruction mnemonics (they link to the reference page).
 - **Hints**: ≥ 3, progressive — a nudge, then the approach, then (last) essentially the rungs.
 - **Debrief**: what they just learned + a **Field tip** from real plants (why Stop buttons are N.C., why
@@ -217,7 +225,8 @@ The generic suite checks: unique ids / orders / one boss last · scene exists ·
 objectives, ≥ 3 hints, debrief) · `lintMission()` (every control, observable and tag referenced exists;
 selector indexes and value types; expects have conditions) · solution verifies, respects the palette,
 meets par, passes all tests with 3 stars, deterministically · starter fails · wrong answers fail · right
-answers pass.
+answers pass · `lintObjectives()` (objective → test map complete; solution ticks all, each wrong answer
+crosses one).
 
 ---
 

@@ -15,6 +15,11 @@ import { CompactLogix5380Controller, CPX_CTRL, type CompactLogix5380Catalog } fr
 import { END_CAP_5069_WIDTH, EndCap5069 } from './EndCap5069';
 import { M5069, Module5069, type DuctTarget, type Module5069Catalog } from './Module5069';
 import { DinRail, DUCT, WireDuct } from './parts';
+import { CompactLogixRackImpostor, type CompactRackImpostorSlot } from './RackImpostor';
+import { DistanceLod } from '../../../lod';
+
+/** Default on-screen width (CSS px) below which the rack switches to its impostor (same as ControlLogixRack). */
+const CPX_LOD_PX = 90;
 
 const IO_CATALOGS: ReadonlySet<ModuleCatalog> = new Set(['5069-IB16', '5069-OB16', '5069-IF8', '5069-OF4']);
 const CPU_CATALOGS: ReadonlySet<ModuleCatalog> = new Set(['5069-L320ER', '5069-L330ERM']);
@@ -59,6 +64,12 @@ export interface CompactLogixRackTwinProps extends CompactLogixRackProps {
   wiring?: 'all' | 'none' | Record<number, number[]>;
   /** Draw the slotted wire duct below the rack (default true). Without it wires bend back into the panel. */
   wireDuct?: boolean;
+  /**
+   * Built-in level of detail: while the rack is narrower than this many CSS pixels on screen, a one-draw-call
+   * impostor (<CompactLogixRackImpostor>) replaces the live rack (which stays mounted and keeps updating).
+   * Default 90 px; `false` = always live.
+   */
+  lod?: number | false;
 }
 
 export function CompactLogixRack({
@@ -69,6 +80,7 @@ export function CompactLogixRack({
   highlightSlot,
   wiring = 'all',
   wireDuct = true,
+  lod = CPX_LOD_PX,
   position,
   rotation,
   scale,
@@ -84,8 +96,19 @@ export function CompactLogixRack({
   // controller cable end: inside the duct (controller-local coordinates)
   const cableTo = useMemo<[number, number] | undefined>(() => (wireDuct ? [-DUCT.gap, DUCT.depth * 0.55 - RAIL_DEPTH] : undefined), [wireDuct]);
 
-  return (
-    <group position={position} rotation={rotation} scale={scale}>
+  const impostorSlots = useMemo<CompactRackImpostorSlot[]>(
+    () =>
+      layout.slots.map((s) => {
+        const cpu = CPU_CATALOGS.has(s.catalog);
+        const points = wiring === 'all' || wiring === 'none' || doorsOpen ? undefined : wiring[s.slot];
+        const wired = !cpu && (doorsOpen || (wiring === 'all' ? true : wiring === 'none' ? false : !!points?.length));
+        return { x: s.x, width: s.width, cpu, wired };
+      }),
+    [layout, wiring, doorsOpen],
+  );
+
+  const liveRack = (
+    <group>
       <DinRail length={layout.railLength} position={[0, RAIL_Y, 0]} stops={stops} />
       {wireDuct && <WireDuct length={ductLength} position={[0, -DUCT.gap, 0]} />}
       {layout.slots.map((s) => {
@@ -128,6 +151,30 @@ export function CompactLogixRack({
         );
       })}
       <EndCap5069 position={[layout.totalWidth / 2 - END_CAP_5069_WIDTH / 2, 0, RAIL_DEPTH]} />
+    </group>
+  );
+  return (
+    <group position={position} rotation={rotation} scale={scale}>
+      {lod === false ? (
+        liveRack
+      ) : (
+        <DistanceLod
+          minPixels={lod}
+          size={layout.railLength}
+          near={liveRack}
+          far={
+            <CompactLogixRackImpostor
+              slots={impostorSlots}
+              totalWidth={layout.totalWidth}
+              railLength={layout.railLength}
+              railY={RAIL_Y}
+              railDepth={RAIL_DEPTH}
+              stops={stops}
+              wireDuct={wireDuct}
+            />
+          }
+        />
+      )}
     </group>
   );
 }

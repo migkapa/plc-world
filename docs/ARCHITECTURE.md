@@ -57,7 +57,11 @@ src/
     contracts.ts       ★ device component props
     devices/           device components (plc/, operator/, panel/, field/) + index.ts barrel
     live.ts            rackLiveFromController()
-    Stage.tsx          shared <Canvas> setup: lights, environment, post-processing, controls
+    lod.tsx            <DistanceLod> (distance / screen-size LOD; racks and scenes use it)
+    dispose.ts         useDisposeOnUnmount() — StrictMode-safe disposal of memoised three.js resources
+    Stage.tsx          shared <Canvas> setup: lights, environment, post-processing, controls, HUD framing
+    hud.ts             hudRects(): the DOM HUD over a SceneCanvas as seen from inside it (tag chips avoid it)
+    releaseRenderer.ts full WebGLRenderer release after R3F's unmount (no renderer / page DOM left behind)
   editor/              ladder editor, tag monitor, controller organizer (DOM/SVG, no three)
   game/
     types.ts           ★ mission/progress contracts

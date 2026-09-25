@@ -17,6 +17,9 @@ export const TANK_DEMO_RUNGS: string[] = [
   'XIC(Running_Light)XIO(Drain_Valve)XIO(Batch_Done_Light)XIC(LSHH_101)LES(LT_101,60.0)OTE(Fill_Valve);',
   // FCV-101 trims the rest: opening proportional to the remaining level, closed at LSH
   'XIC(Running_Light)XIO(Drain_Valve)XIO(Batch_Done_Light)XIC(LSHH_101)XIO(LSH_101)CPT(FCV_101,(92.0-LT_101)*4.0);',
+  // an analog output is a 0-100 % command: clamp the computed opening (it would read 312 % at a low level, or go
+  // negative above 92 % with a failed LSH)
+  '[GRT(FCV_101,100.0)MOV(100.0,FCV_101),LES(FCV_101,0.0)MOV(0.0,FCV_101)];',
   '[XIO(Running_Light),XIC(Drain_Valve),XIC(Batch_Done_Light),XIO(LSHH_101),XIC(LSH_101)]MOV(0.0,FCV_101);',
   // agitator only with the blades covered
   'XIC(Running_Light)XIC(LSL_101)GEQ(LT_101,12.0)OTE(Mixer);',

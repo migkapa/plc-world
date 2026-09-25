@@ -7,7 +7,7 @@
  * Rendering: the toolbar re-renders only when the controller status it shows changes (mode, key, faults,
  * forces…); the scan-time readout is a separate small component that polls on its own.
  */
-import { AlertOctagon, ChevronDown, KeyRound, Pencil, PlugZap, TriangleAlert, Zap } from 'lucide-react';
+import { AlertOctagon, Check, ChevronDown, KeyRound, MoreHorizontal, Pencil, PlugZap, TriangleAlert, Zap } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { formatVerifyError } from '@/plc/verify';
 import { faultId } from '@/plc/errors';
@@ -125,8 +125,12 @@ function ScanReadout({ controller }: { controller: PlcController }) {
   }, [format]);
   const [last, max, display] = text.split('|');
   return (
-    <span className="truncate" data-testid="scan-readout">
-      Scan <span className="font-mono text-[var(--ld-chrome-text)]">{last} ms</span> · max <span className="font-mono text-[var(--ld-chrome-text)]">{max} ms</span> · {display}
+    <span className="truncate" data-testid="scan-readout" title={`Last scan ${last} ms · max ${max} ms · ${display}`}>
+      Scan <span className="font-mono text-[var(--ld-chrome-text)]">{last} ms</span>
+      <span className="@max-[940px]:hidden">
+        {' '}
+        · max <span className="font-mono text-[var(--ld-chrome-text)]">{max} ms</span> · {display}
+      </span>
     </span>
   );
 }
@@ -144,10 +148,12 @@ const EDITS: Record<EditsState, { label: string; tone: 'neutral' | 'amber-outlin
 
 function Led({ state, label, title }: { state: 'green' | 'red' | 'flashing-red' | 'flashing-green' | 'amber' | 'flashing-amber' | 'off'; label: string; title?: string }) {
   const color = state.includes('green') ? 'bg-emerald-400 shadow-emerald-400/70' : state.includes('red') ? 'bg-red-500 shadow-red-500/70' : state.includes('amber') ? 'bg-amber-400 shadow-amber-400/70' : '';
+  const on = state !== 'off';
   return (
-    <span className="flex items-center gap-1.5 whitespace-nowrap" title={title ?? label}>
-      <span className={cn('inline-block h-2 w-2 rounded-full', state === 'off' ? 'bg-slate-600' : cn(color, 'shadow-[0_0_6px]'), state.startsWith('flashing') && 'ld-blink')} />
-      <span>{label}</span>
+    <span className="flex items-center gap-1.5 whitespace-nowrap" title={`${title ?? label}${on ? '' : ' (off)'}`} data-led={label}>
+      <span className={cn('inline-block h-2 w-2 rounded-full', !on ? 'bg-slate-600' : cn(color, 'shadow-[0_0_6px]'), state.startsWith('flashing') && 'ld-blink')} />
+      {/* narrow toolbars keep only the lights; the label stays for screen readers and in the tooltip */}
+      <span className="@max-[940px]:sr-only">{label}</span>
     </span>
   );
 }
@@ -312,103 +318,147 @@ export function OnlineToolbar({ controller, editsState = 'none', editsTitle, onM
 
   const keyPositions: KeySwitch[] = ['RUN', 'REM', 'PROG'];
 
+  // Narrow toolbars (container queries): below 940 px the status lights become dots with tooltips and the path
+  // hides; below 800 px the key switch and scan time move into the "…" menu; below 640 px the tiles shrink and
+  // below 560 px the forces / edits / faults tiles keep only their icons (label in the tooltip and for screen readers).
+  const moreMenu = (): MenuEntry[] => {
+    const now = controller.getStatus();
+    return [
+      { heading: allowKeySwitch ? 'Key switch' : 'Key switch (turn it on the 3D controller)' },
+      ...keyPositions.map(
+        (k): MenuEntry => ({
+          label: k,
+          icon: now.keySwitch === k ? <Check size={12} /> : <span className="inline-block w-3" />,
+          disabled: !allowKeySwitch || now.keySwitch === k,
+          onSelect: () => controller.setKeySwitch(k),
+        }),
+      ),
+      'sep',
+      { heading: `Path: ${path ?? defaultCommPath(controller)}` },
+      {
+        label: online ? `Scan ${now.lastScanMs.toFixed(3)} ms · max ${now.maxScanMs.toFixed(3)} ms · ${now.displayText}` : 'Not connected',
+        disabled: true,
+        onSelect: () => undefined,
+      },
+    ];
+  };
+
   return (
     <div
       className={cn(
-        'ld-root flex h-11 min-w-0 shrink-0 items-center gap-2 overflow-x-auto border-b border-[var(--ld-chrome-border)] bg-[var(--ld-chrome)] px-2 text-[11px] text-[var(--ld-chrome-muted)] ld-theme-dark',
+        'ld-root @container h-11 min-w-0 shrink-0 border-b border-[var(--ld-chrome-border)] bg-[var(--ld-chrome)] text-[11px] text-[var(--ld-chrome-muted)] ld-theme-dark',
         className,
       )}
-      style={{ scrollbarWidth: 'none' }}
-      role="toolbar"
-      aria-label="Controller online toolbar"
     >
-      {/* mode */}
-      <Tile tone={modeTone} menu onClick={(el) => openMenu(el, modeMenu())} title="Controller mode" className={cn('min-w-[132px] justify-between', faulted && 'ld-blink')}>
-        <span className="flex items-center gap-1.5">
-          {online && running ? (
-            <span className="ld-run-anim inline-block h-3 w-5 rounded-[2px] border border-white/60" aria-hidden />
-          ) : online && faulted ? (
-            <AlertOctagon size={13} />
-          ) : online ? (
-            <span className="inline-block h-3 w-5 rounded-[2px] border border-white/50 bg-white/15" aria-hidden />
-          ) : (
-            <PlugZap size={13} />
-          )}
-          <span>{online ? MODE_TEXT[st.mode] : 'Offline'}</span>
-        </span>
-      </Tile>
-      {/* forces */}
-      <Tile
-        tone={!online || forcesCount === 0 ? 'neutral' : st.forcesEnabled ? 'amber' : 'amber-outline'}
-        menu
-        onClick={(el) => openMenu(el, forcesMenu())}
-        title="I/O forces"
-        className={cn('min-w-[118px] justify-between', online && forcesCount > 0 && !st.forcesEnabled && 'ld-blink')}
+      <div
+        className="flex h-full min-w-0 items-center gap-2 overflow-x-auto px-2"
+        style={{ scrollbarWidth: 'none' }}
+        role="toolbar"
+        aria-label="Controller online toolbar"
       >
-        <span className="flex items-center gap-1.5">
-          <Zap size={12} />
-          {forcesCount === 0 ? 'No Forces' : st.forcesEnabled ? 'Forces Enabled' : 'Forces Disabled'}
+        {/* mode */}
+        <Tile tone={modeTone} menu onClick={(el) => openMenu(el, modeMenu())} title="Controller mode" className={cn('min-w-[132px] justify-between @max-[640px]:min-w-0', faulted && 'ld-blink')}>
+          <span className="flex items-center gap-1.5">
+            {online && running ? (
+              <span className="ld-run-anim inline-block h-3 w-5 rounded-[2px] border border-white/60" aria-hidden />
+            ) : online && faulted ? (
+              <AlertOctagon size={13} />
+            ) : online ? (
+              <span className="inline-block h-3 w-5 rounded-[2px] border border-white/50 bg-white/15" aria-hidden />
+            ) : (
+              <PlugZap size={13} />
+            )}
+            <span>{online ? MODE_TEXT[st.mode] : 'Offline'}</span>
+          </span>
+        </Tile>
+        {/* forces */}
+        <Tile
+          tone={!online || forcesCount === 0 ? 'neutral' : st.forcesEnabled ? 'amber' : 'amber-outline'}
+          menu
+          onClick={(el) => openMenu(el, forcesMenu())}
+          title="I/O forces"
+          className={cn('min-w-[118px] justify-between @max-[640px]:min-w-0', online && forcesCount > 0 && !st.forcesEnabled && 'ld-blink')}
+        >
+          <span className="flex items-center gap-1.5">
+            <Zap size={12} />
+            <span className="@max-[560px]:sr-only">{forcesCount === 0 ? 'No Forces' : st.forcesEnabled ? 'Forces Enabled' : 'Forces Disabled'}</span>
+          </span>
+        </Tile>
+        {/* edits */}
+        <Tile tone={online ? EDITS[editsState].tone : 'neutral'} title={editsTitle ?? EDITS[editsState].title} className="min-w-[104px] @max-[640px]:min-w-0">
+          <span className="flex items-center gap-1.5" data-testid="edits-tile" data-state={editsState}>
+            <Pencil size={11} /> <span className="@max-[560px]:sr-only">{EDITS[editsState].label}</span>
+          </span>
+        </Tile>
+        {/* faults */}
+        <Tile
+          tone={faulted ? 'red' : st.minorFaults.length > 0 ? 'amber-outline' : 'neutral'}
+          menu={faulted || st.minorFaults.length > 0}
+          {...(faulted || st.minorFaults.length > 0 ? { onClick: (el: HTMLElement) => openMenu(el, faultMenu()) } : {})}
+          title={st.majorFault ? st.majorFault.message : 'Controller faults'}
+        >
+          {faulted ? <AlertOctagon size={12} /> : <TriangleAlert size={12} />}
+          <span className={cn(!faulted && '@max-[560px]:sr-only')}>
+          {faulted && st.majorFault ? `Major Fault ${faultId(st.majorFault.type, st.majorFault.code)}` : st.minorFaults.length > 0 ? `${st.minorFaults.length} Minor Fault${st.minorFaults.length === 1 ? '' : 's'}` : 'No Faults'}
         </span>
-      </Tile>
-      {/* edits */}
-      <Tile tone={online ? EDITS[editsState].tone : 'neutral'} title={editsTitle ?? EDITS[editsState].title} className="min-w-[104px]">
-        <span className="flex items-center gap-1.5" data-testid="edits-tile" data-state={editsState}>
-          <Pencil size={11} /> {EDITS[editsState].label}
-        </span>
-      </Tile>
-      {/* faults */}
-      <Tile
-        tone={faulted ? 'red' : st.minorFaults.length > 0 ? 'amber-outline' : 'neutral'}
-        menu={faulted || st.minorFaults.length > 0}
-        {...(faulted || st.minorFaults.length > 0 ? { onClick: (el: HTMLElement) => openMenu(el, faultMenu()) } : {})}
-        title={st.majorFault ? st.majorFault.message : 'Controller faults'}
-      >
-        {faulted ? <AlertOctagon size={12} /> : <TriangleAlert size={12} />}
-        {faulted && st.majorFault ? `Major Fault ${faultId(st.majorFault.type, st.majorFault.code)}` : st.minorFaults.length > 0 ? `${st.minorFaults.length} Minor Fault${st.minorFaults.length === 1 ? '' : 's'}` : 'No Faults'}
-      </Tile>
-      {faulted && (
-        <Button size="xs" variant="danger" onClick={() => controller.clearMajorFault()} className="shrink-0">
-          Clear Majors
-        </Button>
-      )}
-      <div className="mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)]" />
-      {/* status lights */}
-      <div className="grid shrink-0 grid-cols-2 gap-x-3 gap-y-0.5 text-[10.5px] leading-[14px]">
-        <Led state={online && running ? 'green' : 'off'} label="Run Mode" />
-        <Led state={!online ? 'off' : st.ok === 'green' ? 'green' : st.ok === 'off' ? 'off' : 'flashing-red'} label={st.ok === 'green' || !online ? 'Controller OK' : 'Controller Fault'} />
-        <Led state={online ? 'green' : 'off'} label="Energy Storage OK" />
-        <Led state={!online ? 'off' : st.ioLed === 'green' ? 'green' : st.ioLed === 'off' ? 'off' : st.ioLed === 'flashing-red' ? 'flashing-red' : 'flashing-green'} label="I/O OK" title={st.ioLed === 'off' ? 'No I/O modules configured' : 'All I/O connections running'} />
-      </div>
-      <div className="mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)]" />
-      {/* key switch */}
-      <div className="flex shrink-0 items-center gap-1.5" title="Controller key switch">
-        <KeyRound size={13} className="text-[var(--ld-chrome-muted)]" />
-        <div className="flex overflow-hidden rounded-md border border-[var(--ld-chrome-border)]">
-          {keyPositions.map((k) => (
-            <button
-              key={k}
-              type="button"
-              disabled={!allowKeySwitch}
-              onClick={() => controller.setKeySwitch(k)}
-              aria-pressed={st.keySwitch === k}
-              className={cn(
-                'px-1.5 py-0.5 font-mono text-[10px] font-bold',
-                st.keySwitch === k ? 'bg-slate-200 text-slate-900' : 'text-[var(--ld-chrome-muted)]',
-                allowKeySwitch && st.keySwitch !== k && 'cursor-pointer hover:bg-white/10',
-              )}
-            >
-              {k}
-            </button>
-          ))}
+        </Tile>
+        {faulted && (
+          <Button size="xs" variant="danger" onClick={() => controller.clearMajorFault()} className="shrink-0">
+            Clear Majors
+          </Button>
+        )}
+        <div className="mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)]" />
+        {/* status lights */}
+        <div className="grid shrink-0 grid-cols-2 gap-x-3 gap-y-0.5 text-[10.5px] leading-[14px] @max-[940px]:gap-x-1.5" data-testid="status-lights">
+          <Led state={online && running ? 'green' : 'off'} label="Run Mode" />
+          <Led state={!online ? 'off' : st.ok === 'green' ? 'green' : st.ok === 'off' ? 'off' : 'flashing-red'} label={st.ok === 'green' || !online ? 'Controller OK' : 'Controller Fault'} />
+          <Led state={online ? 'green' : 'off'} label="Energy Storage OK" />
+          <Led state={!online ? 'off' : st.ioLed === 'green' ? 'green' : st.ioLed === 'off' ? 'off' : st.ioLed === 'flashing-red' ? 'flashing-red' : 'flashing-green'} label="I/O OK" title={st.ioLed === 'off' ? 'No I/O modules configured' : 'All I/O connections running'} />
         </div>
-      </div>
-      <div className="mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)]" />
-      {/* path & scan */}
-      <div className="flex min-w-0 flex-col leading-[14px]">
-        <span className="truncate">
-          Path: <span className="font-mono text-[var(--ld-chrome-text)]">{path ?? defaultCommPath(controller)}</span>
-        </span>
-        {online ? <ScanReadout controller={controller} /> : <span className="truncate">Not connected</span>}
+        <div className="mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)] @max-[800px]:hidden" />
+        {/* key switch */}
+        <div className="flex shrink-0 items-center gap-1.5 @max-[800px]:hidden" title="Controller key switch" data-testid="key-switch">
+          <KeyRound size={13} className="text-[var(--ld-chrome-muted)]" />
+          <div className="flex overflow-hidden rounded-md border border-[var(--ld-chrome-border)]">
+            {keyPositions.map((k) => (
+              <button
+                key={k}
+                type="button"
+                disabled={!allowKeySwitch}
+                onClick={() => controller.setKeySwitch(k)}
+                aria-pressed={st.keySwitch === k}
+                className={cn(
+                  'px-1.5 py-0.5 font-mono text-[10px] font-bold',
+                  st.keySwitch === k ? 'bg-slate-200 text-slate-900' : 'text-[var(--ld-chrome-muted)]',
+                  allowKeySwitch && st.keySwitch !== k && 'cursor-pointer hover:bg-white/10',
+                )}
+              >
+                {k}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)] @max-[800px]:hidden" />
+        {/* path & scan */}
+        <div className="flex min-w-0 shrink-0 flex-col leading-[14px] @max-[800px]:hidden">
+          <span className="truncate @max-[940px]:hidden">
+            Path: <span className="font-mono text-[var(--ld-chrome-text)]">{path ?? defaultCommPath(controller)}</span>
+          </span>
+          {online ? <ScanReadout controller={controller} /> : <span className="truncate">Not connected</span>}
+        </div>
+        {/* narrow: key switch, path and scan time in a menu */}
+        <button
+          type="button"
+          onClick={(e) => openMenu(e.currentTarget, moreMenu())}
+          className="hidden h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-[var(--ld-chrome-border)] bg-[var(--ld-chrome-2)] px-1.5 text-[var(--ld-chrome-text)] hover:brightness-110 focus-visible:ring-2 focus-visible:ring-sky-400/70 focus-visible:outline-none @max-[800px]:inline-flex"
+          title={`Key switch ${st.keySwitch}, communication path and scan time`}
+          aria-label="More controller status: key switch, path and scan time"
+          data-testid="toolbar-more"
+        >
+          <KeyRound size={12} />
+          <span className="font-mono text-[10px] font-bold">{st.keySwitch}</span>
+          <MoreHorizontal size={13} />
+        </button>
       </div>
       {menu && <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} themeClass="ld-theme-dark" onClose={() => setMenu(null)} />}
       <Modal

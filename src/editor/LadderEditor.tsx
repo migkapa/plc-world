@@ -76,7 +76,7 @@ import type { InstructionNode, PlcController, Rung, RungElement, VerifyError } f
 import { Modal } from '@/ui/Modal';
 import { cn } from '@/ui/cn';
 import { toast } from '@/ui/toast';
-import { AutocompleteInput, CommentEditor, ContextMenu, HoverCard, RungTextEditor, singlePrefixMatch, type AutoItem, type CommitHow, type MenuEntry } from './EditorOverlays';
+import { AutocompleteInput, CommentEditor, ContextMenu, HoverCard, RungTextEditor, type AutoItem, type CommitHow, type MenuEntry } from './EditorOverlays';
 import { RoutineIcon } from './glyphs';
 import { InstructionHelp } from './InstructionHelp';
 import { NewTagDialog, type NewTagRequest } from './NewTagDialog';
@@ -520,13 +520,12 @@ function OperandOverlay({
   const width = Math.max(260, Math.min(360, o.hit.w * zoom + 90));
   const left = Math.min(o.anchor === 'middle' ? o.x * zoom - width / 2 : (o.hit.x + o.hit.w) * zoom - width + 26, maxLeft);
   const types = spec ? spec.types.join(' | ') : 'operand';
-  const single = singlePrefixMatch(items, text);
   return (
     <AutocompleteInput
       value={text}
       onChange={setText}
       items={items}
-      enterTakesSingleMatch
+      enterTakesPrefixMatch
       selectAll={initial === undefined}
       placeholder={spec?.kind === 'display' || spec?.kind === 'imm' ? 'Enter a value' : 'Type a tag name…'}
       header={
@@ -537,12 +536,25 @@ function OperandOverlay({
           <span className="font-mono">{types}</span>
         </span>
       }
-      footer={
-        <span>
-          <b>Enter</b> {single ? <>use <span className="font-mono">{single.value}</span></> : 'as typed'} · <b>Tab</b> complete · <b>↑↓</b> pick · <b>Esc</b> cancel
-          {items.some((i) => i.expandable) ? ' · ▸ members: type “.”' : ''}
-        </span>
-      }
+      footer={(takes) => {
+        // what Enter does right now: the highlighted row, else the first prefix match, else the typed text
+        return (
+          <span>
+            <b>Enter</b>{' '}
+            {takes?.action === 'newTag' ? (
+              'new tag'
+            ) : takes ? (
+              <>
+                {takes.expandable ? 'open' : 'use'} <span className="font-mono">{takes.value}</span>
+              </>
+            ) : (
+              'as typed'
+            )}{' '}
+            · <b>Tab</b> complete · <b>↑↓</b> pick · <b>Esc</b> cancel
+            {items.some((i) => i.expandable) ? ' · ▸ members: type “.”' : ''}
+          </span>
+        );
+      }}
       onCommit={(v, how, item) => onCommit(v, how, item)}
       onCancel={onCancel}
       ariaLabel={`${instr.op} ${spec?.name ?? 'operand'}`}
@@ -778,7 +790,6 @@ export function LadderEditor(props: LadderEditorProps) {
   const [running, setRunning] = useState(false);
   const [faulted, setFaulted] = useState(false);
   const [, setHistVersion] = useState(0);
-  const [announce, setAnnounce] = useState('');
   const [newTag, setNewTag] = useState<NewTagRequest | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1043,7 +1054,6 @@ export function LadderEditor(props: LadderEditorProps) {
     if (sel.legPath) return `${base} · branch level ${sel.legPath.leg}`;
     return `${base}${rungs[i]!.comment ? ` · “${rungs[i]!.comment!.split('\n')[0]}”` : ''}`;
   }, [sel, rungs]);
-  useEffect(() => setAnnounce(selectionInfo), [selectionInfo]);
 
   // scroll the selection into view
   useEffect(() => {
@@ -1442,8 +1452,11 @@ export function LadderEditor(props: LadderEditorProps) {
         out.push({ label: 'Add Branch Around', icon: <GitBranchPlus size={14} />, disabled: ro, onSelect: addBranch });
         const loc = locateElement(rung.elements, instr.id);
         if (loc?.legPath) out.push({ label: 'Add Branch Level', icon: <Plus size={14} />, disabled: ro, onSelect: addLevel });
-        out.push({ label: 'Move Left', shortcut: 'Alt+←', icon: <ArrowLeft size={14} />, disabled: ro || !loc || loc.index === 0, onSelect: () => commit(moveElement(rungsRef.current, rung.id, instr.id, -1)) });
-        out.push({ label: 'Move Right', shortcut: 'Alt+→', icon: <ArrowRight size={14} />, disabled: ro || !loc || loc.index >= loc.series.length - 1, onSelect: () => commit(moveElement(rungsRef.current, rung.id, instr.id, 1)) });
+        // at the end of a branch leg, Move Left / Right steps out of the branch
+        const firstInLeg = !!loc && loc.index === 0;
+        const lastInLeg = !!loc && loc.index >= loc.series.length - 1;
+        out.push({ label: loc?.legPath && firstInLeg ? 'Move Out of Branch (Left)' : 'Move Left', shortcut: 'Alt+←', icon: <ArrowLeft size={14} />, disabled: ro || !loc || (firstInLeg && !loc.legPath), onSelect: () => commit(moveElement(rungsRef.current, rung.id, instr.id, -1)) });
+        out.push({ label: loc?.legPath && lastInLeg ? 'Move Out of Branch (Right)' : 'Move Right', shortcut: 'Alt+→', icon: <ArrowRight size={14} />, disabled: ro || !loc || (lastInLeg && !loc.legPath), onSelect: () => commit(moveElement(rungsRef.current, rung.id, instr.id, 1)) });
         out.push('sep');
       } else if (branch?.kind === 'branch') {
         out.push({ heading: `Branch · ${branch.legs.length} levels` });
@@ -2506,7 +2519,7 @@ export function LadderEditor(props: LadderEditorProps) {
         <span className="font-mono">{rungs.length} rung{rungs.length === 1 ? '' : 's'}</span>
       </div>
       <div aria-live="polite" className="sr-only">
-        {announce}
+        {selectionInfo}
       </div>
       {menu && (
         <ContextMenu

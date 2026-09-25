@@ -20,7 +20,7 @@ import { Button, Modal, toast, useToasts } from '../../ui';
 import { CelebrationModal } from '../celebrate/CelebrationModal';
 import { routes } from '../routes';
 import { BriefingPanel, objectiveStates } from '../workspace/BriefingPanel';
-import { useControlHotkeys } from '../workspace/ControlPad';
+import { splitPadControls, useControlHotkeys } from '../workspace/ControlPad';
 import { recordGameEvent } from '../workspace/gameEvents';
 import { LeftDock, type DockTab } from '../workspace/Docks';
 import { LadderPanel } from '../workspace/LadderPanel';
@@ -28,6 +28,7 @@ import { HintsModal, LockedMission, MissionBar, NotFoundMission, ReplayBanner } 
 import { messagesToVerifyErrors, type ProgramSnapshot } from '../workspace/program';
 import { SpeedControl } from '../workspace/SpeedControl';
 import { controlsUsedByTests } from '../workspace/stepText';
+import { replayCamera } from '../workspace/replayCamera';
 import { TestPanel } from '../workspace/TestPanel';
 import { createTestProgressStore, startTestRun, type TestRunHandle, type TestStatus } from '../workspace/testRun';
 import { TwinPanel } from '../workspace/TwinPanel';
@@ -36,12 +37,14 @@ import { useWorkspaceRuntime } from '../workspace/useWorkspaceRuntime';
 import { WorkspaceLayout } from '../workspace/WorkspaceLayout';
 import '../workspace/anim.css';
 import { PENDING_ROUTINES } from '../workspace/Docks';
+import { useDocumentTitle } from '../useDocumentTitle';
 
 export default function MissionPage() {
   const params = useParams<{ id: string }>();
   const id = decodeURIComponent(params.id ?? '');
   const mission = getMission(id);
   const unlocked = useGame((s) => (mission ? isMissionUnlockedFor(s.profile, mission.id) : false));
+  useDocumentTitle(mission ? `${mission.id} ${mission.title}` : 'Mission not found');
   if (!mission) return <NotFoundMission id={id} />;
   if (!unlocked) return <LockedMission mission={mission} />;
   if (!SCENE_LOGICS[mission.sceneId]) return <NotFoundMission id={id} />;
@@ -93,6 +96,8 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
 
   const usedByTests = useMemo(() => controlsUsedByTests(mission), [mission]);
   const padControls = useMemo(() => scene.controls.filter((c) => c.type !== 'fault'), [scene]);
+  // the controls this mission is about first (its own list, else the ones its tests operate); the rest under "More"
+  const pad = useMemo(() => splitPadControls(padControls, mission.controls ?? usedByTests), [padControls, mission.controls, usedByTests]);
   const faultControls = useMemo(() => scene.controls.filter((c) => c.type === 'fault' && usedByTests.has(c.id)), [scene, usedByTests]);
   useControlHotkeys(ws.runtime, padControls, !replay.replay);
 
@@ -299,6 +304,8 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
     [rep, mission, scene, replaySpeed, replayPaused, setReplaySpeed, setReplayPaused, restartReplay, stopReplay],
   );
   const noFaults = useMemo(() => [], []);
+  // a replay looks at the device its (failing) check is about, not at whatever view the player left
+  const replayFocus = useMemo(() => (rep ? replayCamera(scene.id, mission, rep.index, results[rep.index]) : undefined), [rep, scene.id, mission, results]);
 
   const twin = useMemo(
     () => (
@@ -307,15 +314,17 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
         definition={definition}
         runtime={viewRuntime}
         viewKey={rep?.key ?? 'live'}
-        controls={padControls}
+        controls={pad.primary}
+        moreControls={pad.more}
         faults={live ? faultControls : noFaults}
         padDisabled={!live}
+        focusCamera={replayFocus}
         ioHint="the Briefing tab"
         {...(live ? { tools: speedTools } : {})}
         {...(banner ? { banner } : {})}
       />
     ),
-    [scene, definition, viewRuntime, rep, padControls, live, faultControls, noFaults, speedTools, banner],
+    [scene, definition, viewRuntime, rep, pad, live, faultControls, noFaults, speedTools, banner, replayFocus],
   );
 
   const resetAction = useMemo(

@@ -19,7 +19,8 @@ export {
   type AnalogCatalog1756,
 } from './IoModules';
 export { SlotFiller1756N2, type SlotFiller1756N2Props } from './SlotFiller';
-export { ControlLogixRack, type ControlLogixRackComponentProps, type ControlLogixRackExtraProps } from './Rack';
+export { ControlLogixRack, RACK_LOD_PX, type ControlLogixRackComponentProps, type ControlLogixRackExtraProps } from './Rack';
+export { ControlLogixRackImpostor } from './RackImpostor';
 export {
   DotMatrixDisplay as DotMatrixDisplay1756,
   type DotMatrixDisplayProps as DotMatrixDisplay1756Props,

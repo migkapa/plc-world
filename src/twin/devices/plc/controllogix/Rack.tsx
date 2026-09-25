@@ -20,6 +20,8 @@ import { Controller1756L8, type ControllerCatalog1756 } from './Controller';
 import { MOD_Y0, MOD_Z0, chassisLayout } from './dims';
 import { AnalogModule1756, DigitalModule1756, type AnalogCatalog1756, type DigitalCatalog1756 } from './IoModules';
 import { PowerSupply1756 } from './PowerSupply';
+import { ControlLogixRackImpostor } from './RackImpostor';
+import { DistanceLod } from '../../../lod';
 import type { StatusLedState } from './shared';
 import { SlotFiller1756N2 } from './SlotFiller';
 
@@ -30,6 +32,12 @@ export interface ControlLogixRackExtraProps {
   psDoorOpen?: boolean;
   /** IP address shown by comm modules; default 192.168.1.<10 + slot>. */
   ipForSlot?: (slot: number) => string;
+  /**
+   * Built-in level of detail: while the rack is narrower than this many CSS pixels on screen, a one-draw-call
+   * impostor (<ControlLogixRackImpostor>) replaces the ~100-draw-call live rack (which stays mounted and keeps
+   * updating). Default 90 px; `false` = always live.
+   */
+  lod?: number | false;
 }
 
 export type ControlLogixRackComponentProps = ControlLogixRackProps & ControlLogixRackExtraProps;
@@ -131,6 +139,9 @@ function SlotModule({
   }
 }
 
+/** Default on-screen width (CSS px) below which racks switch to their impostor. */
+export const RACK_LOD_PX = 90;
+
 const IDLE_STATUS = {
   mode: 'PROG',
   keySwitch: 'PROG',
@@ -149,6 +160,7 @@ export function ControlLogixRack({
   wired = false,
   psDoorOpen = false,
   ipForSlot,
+  lod = RACK_LOD_PX,
   position,
   rotation,
   scale,
@@ -171,39 +183,42 @@ export function ControlLogixRack({
     [layout.slots, onSelectModule],
   );
 
+  const liveRack = (
+    <group position={[-layout.width / 2, 0, 0]}>
+      <ControlLogixChassis catalog={catalog} />
+      <PowerSupply1756
+        catalog={hardware.powerSupply ?? '1756-PA72'}
+        position={[layout.psCenterX, MOD_Y0, MOD_Z0]}
+        doorOpen={psDoorOpen}
+        wired={wired}
+      />
+      {Array.from({ length: layout.slots }, (_, slot) => {
+        const mod = bySlot.get(slot);
+        const pos: [number, number, number] = [layout.slotCenterX(slot), MOD_Y0, MOD_Z0];
+        return (
+          <group key={`${slot}:${mod?.catalog ?? 'N2'}`} position={pos}>
+            {mod ? (
+              <SlotModule
+                module={mod}
+                live={rl}
+                doorOpen={doorsOpen}
+                wired={wired}
+                highlighted={highlightSlot === slot}
+                onSelect={selectFns[slot]}
+                ip={ipForSlot ? ipForSlot(slot) : `192.168.1.${10 + slot}`}
+                sideLabel={slot === layout.slots - 1}
+              />
+            ) : (
+              <SlotFiller1756N2 onSelect={selectFns[slot]} highlighted={highlightSlot === slot} />
+            )}
+          </group>
+        );
+      })}
+    </group>
+  );
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      <group position={[-layout.width / 2, 0, 0]}>
-        <ControlLogixChassis catalog={catalog} />
-        <PowerSupply1756
-          catalog={hardware.powerSupply ?? '1756-PA72'}
-          position={[layout.psCenterX, MOD_Y0, MOD_Z0]}
-          doorOpen={psDoorOpen}
-          wired={wired}
-        />
-        {Array.from({ length: layout.slots }, (_, slot) => {
-          const mod = bySlot.get(slot);
-          const pos: [number, number, number] = [layout.slotCenterX(slot), MOD_Y0, MOD_Z0];
-          return (
-            <group key={`${slot}:${mod?.catalog ?? 'N2'}`} position={pos}>
-              {mod ? (
-                <SlotModule
-                  module={mod}
-                  live={rl}
-                  doorOpen={doorsOpen}
-                  wired={wired}
-                  highlighted={highlightSlot === slot}
-                  onSelect={selectFns[slot]}
-                  ip={ipForSlot ? ipForSlot(slot) : `192.168.1.${10 + slot}`}
-                  sideLabel={slot === layout.slots - 1}
-                />
-              ) : (
-                <SlotFiller1756N2 onSelect={selectFns[slot]} highlighted={highlightSlot === slot} />
-              )}
-            </group>
-          );
-        })}
-      </group>
+      {lod === false ? liveRack : <DistanceLod minPixels={lod} size={layout.width} near={liveRack} far={<ControlLogixRackImpostor hardware={hardware} />} />}
     </group>
   );
 }

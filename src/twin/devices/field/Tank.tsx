@@ -380,7 +380,8 @@ attribute float aTop;
 varying vec3 vObj;
 float liqH(vec2 p) {
   float r = clamp(length(p) / uRin, 0.0, 1.0);
-  float a = atan(p.y, p.x);
+  // atan(0, 0) is undefined in GLSL (NaN on some drivers) and the surface has a vertex on the axis
+  float a = dot(p, p) > 1e-12 ? atan(p.y, p.x) : 0.0;
   float h = 0.0022 * sin(p.x * 23.0 + uTime * 1.7) * cos(p.y * 19.0 - uTime * 1.3)
           + 0.0012 * sin((p.x + p.y) * 41.0 + uTime * 2.9);
   h += uSwirl * (0.007 * r * sin(a * 5.0 - uTime * 6.0 + r * 10.0) + 0.028 * (r * r - 0.5));
@@ -647,9 +648,9 @@ export interface TankExtraProps {
   /** Show the agitator drive & impeller (default true). */
   agitator?: boolean;
   /**
-   * Power cables of the agitator motor and the immersion heater (routes in the tank's PARENT coordinates, or
-   * false to stop at the gland). Defaults: agitator cable cleated over the top head and down the back of the
-   * shell into a floor conduit stub; heater cable straight down into a floor stub.
+   * Power cables of the agitator motor and the immersion heater (routes in the tank's PARENT coordinates). Opt-in:
+   * without a route the cable stops at its gland. `'floor'`: agitator cable cleated over the top head and down the
+   * back of the shell into a floor conduit stub; heater cable straight down into a floor stub.
    */
   cables?: { agitator?: CableRoute; heater?: CableRoute };
   /** Live product color (overrides `liquidColor`; ignored while `temperatureTint` is on). Read every frame. */
@@ -815,13 +816,13 @@ export function Tank({
   const heaterQ = useMemo(() => nozzleQuat(n.heater).invert(), [n.heater]);
   const heaterDown = useMemo(() => new THREE.Vector3(0, -1, 0).applyQuaternion(heaterQ), [heaterQ]);
   const heaterRot = Math.atan2(-heaterDown.z, heaterDown.x);
-  // agitator cable default: over the top head, cleated down the back of the shell into a floor stub
+  // agitator cable 'floor': over the top head, cleated down the back of the shell into a floor stub
   const cablePhi = (200 * Math.PI) / 180;
   const cs = Math.sin(cablePhi);
   const cc = Math.cos(cablePhi);
   const hh = (r: number) => L.yT2 + headHeightAt(diameter, r) + 0.03;
   const agitatorRoute: CableRoute = useMemo(() => {
-    if (cables?.agitator !== undefined) return cables.agitator;
+    if (cables?.agitator !== 'floor') return cables?.agitator ?? false;
     // default route is designed in tank coordinates; routes are read in the tank's PARENT coordinates
     const sc = typeof scale === 'number' ? [scale, scale, scale] : (scale ?? [1, 1, 1]);
     const toParent = new THREE.Matrix4().compose(
@@ -844,7 +845,7 @@ export function Tank({
     return { via: via.map(T), to: T(P(a + 0.22, 0.14)) };
   }, [cables?.agitator, cs, cc, a, L, n.agitator.position, position, rotation, scale]); // eslint-disable-line react-hooks/exhaustive-deps
   const agitatorStubPos: Vec3 = [(a + 0.22) * cs, 0.14, (a + 0.22) * cc];
-  const agitatorStub = cables?.agitator === undefined;
+  const agitatorStub = cables?.agitator === 'floor';
 
   return (
     <group ref={root} position={position} rotation={rotation} scale={scale} userData={DEVICE_ROOT} {...clickable(onClick)}>
@@ -979,7 +980,7 @@ export function Tank({
               <mesh geometry={cylY(0.09, 0.03, 32)} material={fm.cast(MOTOR_BLUE)} position={[0, 0.375, 0]} />
               <mesh geometry={sphere(0.008, 10)} material={fm.brass()} position={[0.06, 0.365, 0.06]} />
             </group>
-            {/* cable cleats down the back of the shell (default route) */}
+            {/* cable cleats down the back of the shell ('floor' route) */}
             {agitatorStub &&
               [L.yT2 - 0.1, (L.yT1 + L.yT2) / 2, L.yT1 + 0.25].map((y) => (
                 <group key={y} position={[(a + 0.004) * cs, y, (a + 0.004) * cc]} rotation={[0, cablePhi, 0]}>

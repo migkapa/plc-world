@@ -7,9 +7,10 @@
  *  - glow / smoke sprite textures (canvas, shared).
  */
 import { useFrame, useThree } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { canvasTexture, mulberry } from '../trainer/kit';
+import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 export interface SpriteBuffers {
   /** xyz per point (world units of the parent frame). */
@@ -140,13 +141,8 @@ export function PointSprites({
       }),
     [map, additive],
   );
-  useEffect(
-    () => () => {
-      geo.dispose();
-      mat.dispose();
-    },
-    [geo, mat],
-  );
+  useDisposeOnUnmount(geo);
+  useDisposeOnUnmount(mat);
   const gl = useThree((s) => s.gl);
   const tmp = useMemo(() => new THREE.Vector2(), []);
   const upd = useRef(update);

@@ -10,7 +10,7 @@ import { useGame } from '../../game/store';
 import { useSceneOverlay } from '../../sim/scenes/overlay';
 import type { ControlDef, SceneDefinition, SceneLogic, SimRuntime } from '../../sim/types';
 import { SceneCanvas, useStageCamera } from '../../twin/Stage';
-import { cn } from '../../ui';
+import { cn, hasWebGL } from '../../ui';
 import { ControlPad, FaultList } from './ControlPad';
 import { modalOpen, useControllerTick, useRuntimeValue } from './hooks';
 
@@ -32,18 +32,6 @@ class ViewBoundary extends Component<{ fallback: (error: Error) => ReactNode; ch
   override render(): ReactNode {
     return this.state.error ? this.props.fallback(this.state.error) : this.props.children;
   }
-}
-
-let webglOk: boolean | undefined;
-function hasWebGL(): boolean {
-  if (webglOk !== undefined) return webglOk;
-  try {
-    const c = document.createElement('canvas');
-    webglOk = !!(c.getContext('webgl2') ?? c.getContext('webgl'));
-  } catch {
-    webglOk = false;
-  }
-  return webglOk;
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +59,26 @@ function CameraBar() {
       ))}
     </div>
   );
+}
+
+/**
+ * Fly to a camera preset while `id` is set (e.g. the device a replayed test checks) and back to the player's own
+ * view when it clears or the panel unmounts.
+ */
+function CameraFocus({ id }: { id?: string | undefined }) {
+  const cam = useStageCamera();
+  const camRef = useRef(cam);
+  camRef.current = cam;
+  useEffect(() => {
+    const api = camRef.current;
+    if (!id || !api.presets.some((p) => p.id === id)) return;
+    const prev = api.current;
+    if (prev !== id) api.goTo(id);
+    return () => {
+      if (prev && prev !== id) camRef.current.goTo(prev);
+    };
+  }, [id]);
+  return null;
 }
 
 function ShowTagsToggle() {
@@ -166,6 +174,8 @@ export interface TwinPanelProps {
   viewKey?: string;
   /** Operator controls shown on the pad. */
   controls: ReadonlyArray<ControlDef>;
+  /** Further pad controls behind a "More" chip (plant controls the mission does not use). */
+  moreControls?: ReadonlyArray<ControlDef>;
   /** Fault controls shown in the Instructor menu. */
   faults?: ReadonlyArray<ControlDef>;
   /** Top-right tools (speed control…). */
@@ -174,6 +184,8 @@ export interface TwinPanelProps {
   banner?: ReactNode;
   /** Disable the pad (replays). */
   padDisabled?: boolean;
+  /** Camera preset to show while set (a replay looks at the device its test checks); cleared → the player's view. */
+  focusCamera?: string | undefined;
   /** Where the live I/O table is shown, for the fallback text (e.g. "the Briefing tab"). */
   ioHint?: string;
   className?: string;
@@ -204,18 +216,19 @@ function Loading() {
   );
 }
 
-function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, faults = [], tools, banner, padDisabled, ioHint = 'the left panel', className }: TwinPanelProps) {
+function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, moreControls, faults = [], tools, banner, padDisabled, focusCamera, ioHint = 'the left panel', className }: TwinPanelProps) {
   const quality = useGame((s) => s.profile.settings.quality);
   const [webgl] = useState(() => hasWebGL());
   const rootRef = useRef<HTMLDivElement>(null);
-  // pad size follows the panel height: full block, two compact rows, or one scrolling row
+  // pad size follows the panel height: full block, two compact rows, or one scrolling row (a disabled pad — during a
+  // replay — shrinks to one row in a short panel: it only shows the control states, the 3D view needs the room)
   const [padMode, setPadMode] = useState<'full' | 'compact' | 'row'>('full');
   useEffect(() => {
     const el = rootRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
       const h = el.clientHeight;
-      setPadMode(h < 330 ? 'row' : h < 470 ? 'compact' : 'full');
+      setPadMode(h < 290 ? 'row' : h < 470 ? 'compact' : 'full');
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -264,6 +277,7 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, faults =
     <div className="pointer-events-none absolute inset-0 flex flex-col justify-between gap-2 p-2">
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {withCamera && <CameraFocus id={focusCamera} />}
           {withCamera && <CameraBar />}
           {withCamera && <ShowTagsToggle />}
         </div>
@@ -277,7 +291,7 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, faults =
       {banner && <div className="pointer-events-auto mx-auto -mt-1 max-w-[92%]">{banner}</div>}
       <div className="flex-1" />
       <div className="flex items-end justify-start">
-        <ControlPad runtime={runtime} controls={controls} disabled={!!padDisabled} compact={padMode !== 'full'} singleRow={padMode === 'row'} className="max-w-[min(100%,56rem)]" />
+        <ControlPad runtime={runtime} controls={controls} {...(moreControls ? { moreControls } : {})} disabled={!!padDisabled} compact={padMode !== 'full'} singleRow={padMode === 'row' || (!!padDisabled && padMode === 'compact')} className="max-w-[min(100%,56rem)]" />
       </div>
     </div>
   );
@@ -297,7 +311,7 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, faults =
           )}
           resetKey={viewKey}
         >
-          <SceneCanvas cameras={definition.cameras} lighting={definition.environment ?? 'hall'} quality={quality} overlay={overlay(true)} className="absolute inset-0">
+          <SceneCanvas cameras={definition.cameras} lighting={definition.environment ?? 'hall'} quality={quality} overlay={overlay(true)} hudFraming className="absolute inset-0">
             <Suspense fallback={null}>
               <View key={viewKey} state={runtime.state} runtime={runtime} />
             </Suspense>

@@ -5,11 +5,12 @@
  *
  * Points are in the parent's coordinates (meters).
  */
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import * as THREE from 'three';
 import type { Vec3 } from '../../contracts';
 import { F, Parts, cylZ, sharedMat, uberMat } from '../operator/shared';
+import { useDisposeOnUnmount } from '../../dispose';
 
 export interface WireProps {
   points: Vec3[];
@@ -108,13 +109,8 @@ export function Wire({ points, color = '#1f4fd1', radius = 0.0011, bendRadius = 
     }
     return { geo: g, ferruleGeo: fg };
   }, [key, radius, bendRadius, color, ferrules, ferruleColor]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(
-    () => () => {
-      geo.dispose();
-      ferruleGeo?.dispose();
-    },
-    [geo, ferruleGeo],
-  );
+  useDisposeOnUnmount(geo);
+  useDisposeOnUnmount(ferruleGeo);
   return (
     <group>
       <mesh geometry={geo} material={wiresMat()} castShadow />
@@ -178,13 +174,10 @@ export function WireBundle({ points, colors, radius = 0.0011, bendRadius = 0.02,
     }
     return { wiresGeo, tiesGeo };
   }, [key, radius, bendRadius, tieSpacing]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(
-    () => () => {
-      built.wiresGeo?.dispose();
-      built.tiesGeo?.dispose();
-    },
-    [built],
-  );
+  useDisposeOnUnmount(built, () => {
+    built.wiresGeo?.dispose();
+    built.tiesGeo?.dispose();
+  });
   return (
     <group>
       {built.wiresGeo && <mesh geometry={built.wiresGeo} material={wiresMat()} castShadow />}
@@ -211,7 +204,7 @@ export function Wires({ wires, bendRadius = 0.008 }: WiresProps) {
     parts.forEach((p) => p.dispose());
     return merged;
   }, [key, bendRadius]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => geo?.dispose(), [geo]);
+  useDisposeOnUnmount(geo);
   if (!geo) return null;
   return <mesh geometry={geo} material={wiresMat()} castShadow />;
 }

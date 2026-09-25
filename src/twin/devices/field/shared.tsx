@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Vec3 } from '../../contracts';
+import { useDisposeOnUnmount } from '../../dispose';
 
 export const TAU = Math.PI * 2;
 
@@ -588,7 +589,7 @@ export function Cable({
     );
     return new THREE.TubeGeometry(curve, segments ?? Math.max(12, points.length * 14), radius, 10, false);
   }, [key, radius, segments]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => g.dispose(), [g]);
+  useDisposeOnUnmount(g);
   return <mesh geometry={g} material={material ?? fm.cable(color)} castShadow />;
 }
 
@@ -716,7 +717,7 @@ export function useDisplayTexture(
   const last = useRef({ v: Number.NaN, time: -1 });
   const drawRef = useRef(draw);
   drawRef.current = draw;
-  useEffect(() => () => d.t.dispose(), [d]);
+  useDisposeOnUnmount(d, () => d.t.dispose());
   useFrame(({ clock }) => {
     const raw = getValue();
     const v = Number.isFinite(raw) ? Math.round(raw / step) * step : raw;
@@ -902,13 +903,14 @@ export function Merge({ children, position, rotation, scale }: { children: React
 // ---------------------------------------------------------------------------
 
 /**
- * Where a device's cable / hose goes.
+ * Where a device's cable / hose goes (cables are OPT-IN: a device placed without a route shows none).
  *  - `{ to, via? }`: end point (and optional intermediate points) in the device's PARENT coordinates — the same
  *    space as its `position` prop (e.g. a junction-box gland in the machine frame).
- *  - `false`: the cable stops at the device connector (the scene routes its own cable from there).
- *  - `undefined` (default): the cable drops to the floor (world y = 0) into a conduit stub-up.
+ *  - `'floor'`: the cable drops to the floor (world y = 0) into a conduit stub-up.
+ *  - `false` / `undefined` (default): the cable stops at the device connector (the scene routes its own cable from
+ *    there, or there is none). A device may still draw its own built-in path (e.g. a cordset down its post).
  */
-export type CableRoute = false | { to: Vec3; via?: Vec3[] };
+export type CableRoute = false | 'floor' | { to: Vec3; via?: Vec3[] };
 
 /** userData marker for a device's outermost group (defines the parent space of CableRoute points). */
 export const DEVICE_ROOT = { deviceRoot: true } as const;
@@ -960,7 +962,7 @@ export function RoutedCable({
   lead?: number;
   /** Extra droop of the default route (m). */
   sag?: number;
-  /** Device-specific default path (local coordinates, like `from`) used when `route` is undefined. */
+  /** Device-specific built-in path (local coordinates, like `from`) used when `route` is undefined. */
   path?: Vec3[];
   /**
    * Thinner cables bundled with this one (e.g. sensor leads cable-tied to a pneumatic tube): each runs through
@@ -974,17 +976,18 @@ export function RoutedCable({
   const stub = useRef<THREE.Group>(null);
   const key = JSON.stringify([from, dir, route, radius, lead, sag, path, companions]);
   const comp = useRef<(THREE.Mesh | null)[]>([]);
+  const none = route === false || (route === undefined && !path);
   useLayoutEffect(() => {
     const w = wrap.current;
     const m = mesh.current;
-    if (!w || !m || route === false) return;
+    if (!w || !m || none) return;
     w.updateWorldMatrix(true, false);
     const toLocal = w.matrixWorld.clone().invert();
     const toWorld = w.matrixWorld;
     const s = _w0.set(...from).applyMatrix4(toWorld).clone();
     const d = _wd.set(...dir).transformDirection(toWorld).clone();
     const pts: THREE.Vector3[] = [s, s.clone().addScaledVector(d, lead)];
-    if (route) {
+    if (typeof route === 'object') {
       // the device root's ref is attached only after this (child) layout effect runs: find it by its marker
       let r: THREE.Object3D | null = rootRef?.current ?? null;
       if (!r) {
@@ -994,11 +997,11 @@ export function RoutedCable({
       const parentWorld = r?.parent ? (r.parent.updateWorldMatrix(true, false), r.parent.matrixWorld) : new THREE.Matrix4();
       for (const v of [...(route.via ?? []), route.to]) pts.push(new THREE.Vector3(...v).applyMatrix4(parentWorld));
       if (stub.current) stub.current.visible = false;
-    } else if (path) {
+    } else if (path && route !== 'floor') {
       for (const v of path) pts.push(new THREE.Vector3(...v).applyMatrix4(toWorld));
       if (stub.current) stub.current.visible = false;
     } else {
-      // default: drop to the floor into a conduit stub-up
+      // 'floor': drop to the floor into a conduit stub-up
       const h = _w1.set(d.x, 0, d.z);
       if (h.lengthSq() < 0.09) {
         // cable leaves (nearly) vertically: step out toward the device's local -Z (behind it)
@@ -1062,7 +1065,7 @@ export function RoutedCable({
       });
     };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (route === false) return null;
+  if (none) return null;
   return (
     <group ref={wrap}>
       <mesh ref={mesh} material={fm.cable(color)} castShadow />

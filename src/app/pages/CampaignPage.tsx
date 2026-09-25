@@ -15,6 +15,7 @@ import { MissionCard } from '../campaign/MissionCard';
 import { campaignComplete, nextPlayableMission } from '../campaign/progress';
 import { fmt, usePlayerSummary } from '../hud/player';
 import { useReducedMotion } from '../hud/prefs';
+import { useDocumentTitle } from '../useDocumentTitle';
 
 function useIsDocked(): boolean {
   const q = '(min-width: 1280px)';
@@ -29,6 +30,7 @@ function useIsDocked(): boolean {
 }
 
 export default function CampaignPage() {
+  useDocumentTitle('Campaign');
   const profile = useGame((s) => s.profile);
   const summary = usePlayerSummary();
   const reduced = useReducedMotion();

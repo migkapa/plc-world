@@ -3,8 +3,8 @@
  * selector = segmented, analog = slider, fault = instructor toggle) plus keyboard shortcuts from
  * `ControlDef.key` (active while focus is not in a text field or the ladder editor).
  */
-import { ChevronDown, ChevronUp, Gamepad2, Keyboard, OctagonAlert, SlidersHorizontal, Wrench } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Gamepad2, Keyboard, MoreHorizontal, OctagonAlert, SlidersHorizontal, Wrench } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import { sfx } from '../../audio/sfx';
 import type { ControlDef, SimRuntime } from '../../sim/types';
 import { Kbd, cn } from '../../ui';
@@ -283,7 +283,10 @@ export function ControlWidget({ c, runtime, instructor }: { c: ControlDef; runti
 
 export interface ControlPadProps {
   runtime: SimRuntime;
+  /** Controls shown first (a mission's controls). */
   controls: ReadonlyArray<ControlDef>;
+  /** Further controls behind a "More (N)" chip (the plant's controls the mission does not use). */
+  moreControls?: ReadonlyArray<ControlDef>;
   className?: string;
   /** Start collapsed (small screens). */
   defaultCollapsed?: boolean;
@@ -294,6 +297,18 @@ export interface ControlPadProps {
   compact?: boolean;
   /** With `compact`: a single horizontally scrolling row (very short 3D panels). */
   singleRow?: boolean;
+}
+
+/**
+ * Split a plant's pad controls for a mission: the controls it uses (`ids`, in the plant's order) first, the rest
+ * behind "More". Without ids (sandbox) or when nothing matches, every control is primary.
+ */
+export function splitPadControls(controls: ReadonlyArray<ControlDef>, ids: ReadonlySet<string> | ReadonlyArray<string> | undefined): { primary: ControlDef[]; more: ControlDef[] } {
+  const want = ids ? new Set(ids) : undefined;
+  if (!want || want.size === 0) return { primary: [...controls], more: [] };
+  const primary = controls.filter((c) => want.has(c.id));
+  if (primary.length === 0) return { primary: [...controls], more: [] };
+  return { primary, more: controls.filter((c) => !want.has(c.id)) };
 }
 
 /** Shown while the ladder (or a text field) has the keyboard: the pad's key chips do nothing then. */
@@ -309,13 +324,64 @@ function KeysPausedNote({ compact }: { compact?: boolean }) {
   );
 }
 
+/** "More (N)" / "Less" chip that reveals the controls the mission does not use. */
+function MoreChip({ count, open, onToggle }: { count: number; open: boolean; onToggle(): void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      title={open ? 'Hide the controls this mission does not use' : `Show ${count} more control${count === 1 ? '' : 's'} of this plant (not used by this mission)`}
+      className="flex h-9 shrink-0 cursor-pointer items-center gap-1 rounded-lg border border-dashed border-white/20 px-2 text-[11px] font-semibold whitespace-nowrap text-slate-300 hover:border-white/40 hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-sky-400/70 focus-visible:outline-none"
+      data-testid="pad-more"
+    >
+      {open ? (
+        <>
+          <ChevronLeft size={13} /> Less
+        </>
+      ) : (
+        <>
+          <MoreHorizontal size={13} /> More ({count})
+        </>
+      )}
+    </button>
+  );
+}
+
+/** Whether a scroll container's content overflows it (re-checked when it or its children resize). */
+function useOverflow(ref: RefObject<HTMLElement | null>, axis: 'x' | 'y', deps: readonly unknown[]): boolean {
+  const [over, setOver] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setOver(axis === 'y' ? el.scrollHeight > el.clientHeight + 2 : el.scrollWidth > el.clientWidth + 2);
+    check();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return over;
+}
+
 /** Floating operator panel (rendered as an overlay over the 3D view). */
-export function ControlPad({ runtime, controls, className, defaultCollapsed, title = 'Operator panel', disabled, compact, singleRow }: ControlPadProps) {
+export function ControlPad({ runtime, controls, moreControls = [], className, defaultCollapsed, title = 'Operator panel', disabled, compact, singleRow }: ControlPadProps) {
   const [collapsed, setCollapsed] = useState(!!defaultCollapsed);
+  const [showMore, setShowMore] = useState(false);
+  // compact pad: the user asked to see every row (it grows over the 3D view instead of clipping)
+  const [grown, setGrown] = useState(false);
+  const [atEnd, setAtEnd] = useState(false);
   const focusPaused = useHotkeysPaused();
-  if (controls.length === 0) return null;
-  const keysPaused = focusPaused && !disabled && controls.some((c) => c.key);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const all = showMore ? [...controls, ...moreControls] : controls;
+  const overflowing = useOverflow(scrollRef, singleRow ? 'x' : 'y', [compact, singleRow, collapsed, all.length, grown]);
+  if (controls.length + moreControls.length === 0) return null;
+  const keysPaused = focusPaused && !disabled && [...controls, ...moreControls].some((c) => c.key);
+  const more = moreControls.length > 0 ? <MoreChip count={moreControls.length} open={showMore} onToggle={() => setShowMore((v) => !v)} /> : null;
   if (compact) {
+    const clampRows = !singleRow && !grown;
     return (
       <div
         className={cn('pointer-events-auto flex max-w-full items-start gap-1 rounded-xl border border-white/10 bg-slate-950/75 p-1 shadow-2xl backdrop-blur-md', keysPaused && '[&_kbd]:opacity-30', className)}
@@ -336,15 +402,52 @@ export function ControlPad({ runtime, controls, className, defaultCollapsed, tit
         </button>
         {!collapsed && (
           <div
-            className={cn('flex min-w-0 gap-1', singleRow ? 'flex-nowrap overflow-x-auto pb-0.5' : 'max-h-[4.9rem] flex-wrap overflow-y-auto', disabled && 'pointer-events-none opacity-50')}
-            style={{ scrollbarWidth: 'thin' }}
+            ref={scrollRef}
+            className={cn(
+              'flex min-w-0 gap-1',
+              singleRow ? 'flex-nowrap overflow-x-auto pb-0.5' : clampRows ? 'max-h-[4.9rem] flex-wrap overflow-y-auto' : 'max-h-[60vh] flex-wrap overflow-y-auto',
+              disabled && 'pointer-events-none opacity-50',
+            )}
+            style={{
+              scrollbarWidth: 'thin',
+              ...(singleRow && overflowing && !atEnd ? { maskImage: 'linear-gradient(to right, #000 calc(100% - 36px), transparent)', WebkitMaskImage: 'linear-gradient(to right, #000 calc(100% - 36px), transparent)' } : {}),
+              ...(clampRows && overflowing ? { maskImage: 'linear-gradient(to bottom, #000 calc(100% - 14px), rgba(0,0,0,.35))', WebkitMaskImage: 'linear-gradient(to bottom, #000 calc(100% - 14px), rgba(0,0,0,.35))' } : {}),
+            }}
+            onScroll={singleRow ? (e) => setAtEnd(e.currentTarget.scrollLeft + e.currentTarget.clientWidth >= e.currentTarget.scrollWidth - 4) : undefined}
             data-single-row={singleRow ? '' : undefined}
+            data-overflowing={overflowing ? '' : undefined}
           >
             {keysPaused && <KeysPausedNote compact />}
-            {controls.map((c) => (
+            {all.map((c) => (
               <ControlWidget key={c.id} c={c} runtime={runtime} />
             ))}
+            {more}
           </div>
+        )}
+        {!collapsed && singleRow && overflowing && (
+          <button
+            type="button"
+            onClick={() => scrollRef.current?.scrollBy({ left: atEnd ? -scrollRef.current.scrollWidth : scrollRef.current.clientWidth * 0.8, behavior: 'smooth' })}
+            title={atEnd ? 'Back to the first controls' : 'More controls to the right'}
+            aria-label={atEnd ? 'Scroll the operator panel back' : 'Scroll the operator panel to see more controls'}
+            className="flex h-9 shrink-0 cursor-pointer items-center rounded-lg px-1 text-slate-300 hover:bg-white/10 hover:text-white"
+            data-testid="pad-scroll"
+          >
+            {atEnd ? <ChevronLeft size={15} /> : <ChevronRight size={15} />}
+          </button>
+        )}
+        {!collapsed && !singleRow && (overflowing || grown) && (
+          <button
+            type="button"
+            onClick={() => setGrown((v) => !v)}
+            aria-expanded={grown}
+            title={grown ? 'Show two rows' : 'Some controls are hidden below: show all rows'}
+            className="flex h-9 shrink-0 cursor-pointer items-center gap-1 rounded-lg px-1.5 text-[11px] font-semibold whitespace-nowrap text-amber-200 hover:bg-white/10 hover:text-white"
+            data-testid="pad-grow"
+          >
+            {grown ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+            {grown ? 'Fewer' : 'All'}
+          </button>
         )}
       </div>
     );
@@ -369,10 +472,11 @@ export function ControlPad({ runtime, controls, className, defaultCollapsed, tit
         </span>
       </button>
       {!collapsed && (
-        <div className={cn('flex max-h-44 flex-wrap gap-1.5 overflow-y-auto px-2 pb-2', disabled && 'pointer-events-none opacity-50')}>
-          {controls.map((c) => (
+        <div ref={scrollRef} className={cn('flex max-h-44 flex-wrap gap-1.5 overflow-y-auto px-2 pb-2', disabled && 'pointer-events-none opacity-50')}>
+          {all.map((c) => (
             <ControlWidget key={c.id} c={c} runtime={runtime} />
           ))}
+          {more}
         </div>
       )}
     </div>

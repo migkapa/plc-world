@@ -7,7 +7,7 @@
  * between them (feeder → breakers → PSU → MOD / SA power, rack duct → riser → I/O terminals → gland plate →
  * conduit into the floor toward the gates, loops and photo-eyes).
  *
- * Far away the panel interior swaps to an impostor; roof, walls, glass and the closed panel door block
+ * Far away the panel interior swaps to an impostor (the rack to its own built-in one); roof, walls, glass and the closed panel door block
  * clicks, so hidden devices can only be operated from where they can be seen.
  */
 import { useMemo, useRef, useState } from 'react';
@@ -32,7 +32,7 @@ import {
 import { rackLiveFromController } from '../../../twin/live';
 import type { SimRuntime } from '../../types';
 import { canvasTexture, Conduit, FONT, IoTag, ioLine, kgeo, kmat, textLine, type TagGroup } from '../trainer/kit';
-import { DistanceSwitch } from '../trainer/rackLod';
+import { DistanceLod } from '../../../twin/lod';
 import { ClickBlocker, KeySwitch800F, StaticInstances, useDisposeOnUnmount, useNoCastShadow, type InstXf } from '../traffic-light/cityKit';
 import { CURB, SITE } from './site';
 
@@ -195,7 +195,8 @@ function ControlPanel({ runtime }: { runtime: SimRuntime }) {
         nameplate={'GATE CONTROL\nGCP-1'}
         backplate="white"
       >
-        <DistanceSwitch distance={6} near={<PanelInterior runtime={runtime} live={live} layout={layout} />} far={<PanelImpostor />} />
+        <PanelRack runtime={runtime} live={live} />
+        <DistanceLod distance={6} near={<PanelInterior layout={layout} />} far={<PanelImpostor />} />
       </Enclosure>
       {/* the closed door blocks clicks on the devices behind it */}
       <ClickBlocker position={[P.x - P.size[2] + 0.01, P.y + P.size[1] / 2, P.z]} size={[0.01, P.size[1] - 0.02, P.size[0] - 0.02]} getEnabled={closed} />
@@ -217,8 +218,7 @@ const GY = '#9bbf2a';
 
 type RackLayout = ReturnType<typeof layoutCompactLogixRack>;
 
-function PanelInterior({ runtime, live, layout }: { runtime: SimRuntime; live: ReturnType<typeof rackLiveFromController>; layout: RackLayout }) {
-  const hardware = runtime.scene.hardware;
+function PanelInterior({ layout }: { layout: RackLayout }) {
   const ioLabels = ['I0', 'I1', 'I2', 'I3', 'I4', 'I5', '0V', '0V', 'O0', 'O1', 'O2', 'O3', '0V', '0V', 'PE', 'PE'];
   const ioColors = ioLabels.map((l) => (l === '0V' ? TB_COLORS.blue : TB_COLORS.gray));
   const pwrLabels = ['L1', 'L1', 'N', 'N', '+24', '+24', '0V', '0V', 'PE'];
@@ -237,7 +237,6 @@ function PanelInterior({ runtime, live, layout }: { runtime: SimRuntime; live: R
         <PowerSupply1606 position={[PSU_X, 0, 0]} width={0.04} rating="24V DC 5A 120W" catalog="1606-XLS120E" getOk={() => true} />
         <TerminalBlocks1492 count={pwrLabels.length} labels={pwrLabels} colors={pwrColors} position={[0.02, 0, 0]} />
       </DinRail>
-      <CompactLogixRack hardware={hardware} live={live} wiring={{ 1: [0, 1, 2, 3, 4, 5], 2: [0, 1, 2, 3] }} position={[RACK.x, RACK.y, 0]} />
       {layout.slots.map((s) => (
         <IoTag
           key={s.slot}
@@ -320,12 +319,23 @@ function buildPanelWires(layout: RackLayout) {
   return { single, bundles };
 }
 
+/** The CompactLogix rack (outside the interior LOD: it has its own built-in impostor). */
+function PanelRack({ runtime, live }: { runtime: SimRuntime; live: ReturnType<typeof rackLiveFromController> }) {
+  const g = useRef<THREE.Group>(null);
+  useNoCastShadow(g);
+  return (
+    <group ref={g}>
+      <CompactLogixRack hardware={runtime.scene.hardware} live={live} wiring={RACK_WIRING} position={[RACK.x, RACK.y, 0]} />
+    </group>
+  );
+}
+
+const RACK_WIRING = { 1: [0, 1, 2, 3, 4, 5], 2: [0, 1, 2, 3] };
+
 function PanelImpostor() {
-  const dark = kmat('pg:impDark', () => new THREE.MeshStandardMaterial({ color: '#1d2023', roughness: 0.55 }));
   const light = kmat('pg:impLight', () => new THREE.MeshStandardMaterial({ color: '#c9ccce', roughness: 0.6 }));
   return (
     <group>
-      <mesh geometry={unitBox()} material={dark} position={[RACK.x, RACK.y + 0.072, 0.075]} scale={[0.155, 0.145, 0.14]} />
       <mesh geometry={unitBox()} material={light} position={[-0.12, RAIL1_Y, 0.05]} scale={[0.2, 0.12, 0.1]} />
       <mesh geometry={unitBox()} material={light} position={[0, TOP_DUCT_Y, 0.03]} scale={[0.5, 0.04, 0.06]} />
       <mesh geometry={unitBox()} material={light} position={[RISER_X, -0.01, 0.03]} scale={[0.04, 0.66, 0.06]} />

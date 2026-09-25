@@ -113,7 +113,11 @@ describe('LadderPanel edits tile', () => {
     const { editor, ws } = mountPanel(['XIC(Switch_0)OTE(Light_0);']);
     const id = ws().rungs[0]!.id;
     const tile = (): string | null => screen.getByTestId('edits-tile').getAttribute('data-state');
+    const statusText = (): string => screen.queryAllByRole('status').map((e) => e.textContent ?? '').join('|');
     expect(tile()).toBe('none');
+    // no false "Edits applied online" status for assistive tech on page load
+    expect(statusText()).not.toMatch(/applied/i);
+    expect(screen.getByTestId('edits-applied').getAttribute('aria-hidden')).toBe('true');
     // an undefined tag → pending (last good logic keeps running)
     act(() => editor.current!.editRungText(id));
     let ta = screen.getByRole('textbox', { name: 'Rung neutral text' });
@@ -128,7 +132,9 @@ describe('LadderPanel edits tile', () => {
     fireEvent.keyDown(ta, { key: 'Enter' });
     act(() => void vi.advanceTimersByTime(EDIT_DEBOUNCE_MS + 10));
     expect(tile()).toBe('applied');
+    expect(statusText()).toMatch(/Edits applied online/);
     act(() => void vi.advanceTimersByTime(3000));
     expect(tile()).toBe('none');
+    expect(statusText()).not.toMatch(/applied/i);
   });
 });

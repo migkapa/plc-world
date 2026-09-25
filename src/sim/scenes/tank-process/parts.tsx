@@ -5,7 +5,7 @@
  * effects live in ./fx.tsx.
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import {
   EStop800FM,
@@ -23,6 +23,7 @@ import { Instances, paint, steel, stripeMaterial, unitBox, unitCylY, WallSign, Y
 import { Glow, IoHotspot, momentaryControl, toggleControl } from '../conveyor-sort/kit';
 import { SKID, SKID_H, TANK_D, TANK_H, TL, ZI } from './layout';
 import type { TankProcessState } from './logic';
+import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 export { SKID_H, TANK_D, TANK_H, TL, ZI };
 
@@ -225,13 +226,8 @@ export function FeedTank({ state }: { state: TankProcessState }) {
     [],
   );
   const water = useMemo(() => new THREE.MeshStandardMaterial({ color: '#5e8fae', roughness: 0.3, transparent: true, opacity: 0.55 }), []);
-  useEffect(
-    () => () => {
-      hdpe.dispose();
-      water.dispose();
-    },
-    [hdpe, water],
-  );
+  useDisposeOnUnmount(hdpe);
+  useDisposeOnUnmount(water);
   const { x, z, r, h, base } = FEED;
   return (
     <group position={[x, 0, z]}>
@@ -451,7 +447,7 @@ export function IbcTote({ position, rotationY = 0 }: { position: Vec3; rotationY
     return out;
   }, []);
   const bottle = useMemo(() => new THREE.MeshPhysicalMaterial({ color: '#f1efe6', roughness: 0.5, transparent: true, opacity: 0.85 }), []);
-  useEffect(() => () => bottle.dispose(), [bottle]);
+  useDisposeOnUnmount(bottle);
   return (
     <group position={position} rotation={[0, rotationY, 0]}>
       <mesh position={[0, 0.075, 0]} material={paint('#23272b', 0.6, 0.3)} castShadow receiveShadow>
@@ -556,9 +552,9 @@ export function OperatorPanel({ state, runtime }: { state: TankProcessState; run
           </group>
         }
       />
-      {/* lit lamps stay readable from the overview */}
-      <Glow get={() => state.runningLight} color="#ffab1a" position={lamp('running')} size={0.09} />
-      <Glow get={() => state.batchDoneLight} color="#2dff5a" position={lamp('done')} size={0.09} intensity={1.2} />
+      {/* lit lamps stay readable from the overview (up close the 800F lenses bloom on their own) */}
+      <Glow get={() => state.runningLight} color="#ffab1a" position={lamp('running')} size={0.09} fadeInFrom={2.5} />
+      <Glow get={() => state.batchDoneLight} color="#2dff5a" position={lamp('done')} size={0.09} intensity={1.2} fadeInFrom={2.5} />
       <IoHotspot runtime={runtime} device="light-running" group="OP-101" size={[0.05, 0.06, 0.05]} {...hs('running', -1, 0.01)} />
       <IoHotspot runtime={runtime} device="light-done" group="OP-101" size={[0.05, 0.06, 0.05]} {...hs('done', -1, -0.03)} />
       <IoHotspot runtime={runtime} device="pb-start" group="OP-101" size={[0.06, 0.07, 0.06]} {...hs('start', -1, 0.012)} press={start} />
@@ -584,7 +580,7 @@ export function AlarmBeacon({ state, runtime, position }: { state: TankProcessSt
   return (
     <group position={position}>
       <StackLight856T tiers={['red']} mount="pole" poleLength={pole} getTier={() => state.alarmHorn} getFlashing={() => true} getHorn={() => state.alarmHorn} showSoundFx />
-      <Glow get={() => state.alarmHorn} color="#ff2a14" position={[0, topY, 0]} size={0.3} flash />
+      <Glow get={() => state.alarmHorn} color="#ff2a14" position={[0, topY, 0]} size={0.3} flash fadeInFrom={3} />
       <IoHotspot runtime={runtime} device="horn" title="AH-101 beacon / horn" size={[0.1, 0.5, 0.1]} position={[0, 0.25, 0]} anchor={[0.08, 0.46, 0]} />
     </group>
   );

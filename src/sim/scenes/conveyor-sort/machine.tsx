@@ -935,9 +935,10 @@ export function LineStackLight({ state }: { state: ConveyorSortState }) {
         mount="pole"
         poleLength={STACK.pole}
       />
-      <Glow get={() => state.lightRed} color="#ff2a14" position={[STACK.x, stackTierY(0), STACK.z]} size={0.26} grow={0.09} intensity={2} />
-      <Glow get={() => state.lightAmber} color="#ffab1a" position={[STACK.x, stackTierY(1), STACK.z]} size={0.26} grow={0.09} intensity={2} />
-      <Glow get={() => state.lightGreen} color="#2dff5a" position={[STACK.x, stackTierY(2), STACK.z]} size={0.26} grow={0.09} intensity={1.5} />
+      {/* the 855T tiers bloom on their own up close; from the overview a halo keeps the state readable */}
+      <Glow get={() => state.lightRed} color="#ff2a14" position={[STACK.x, stackTierY(0), STACK.z]} size={0.26} grow={0.09} intensity={2} fadeInFrom={2.5} />
+      <Glow get={() => state.lightAmber} color="#ffab1a" position={[STACK.x, stackTierY(1), STACK.z]} size={0.26} grow={0.09} intensity={2} fadeInFrom={2.5} />
+      <Glow get={() => state.lightGreen} color="#2dff5a" position={[STACK.x, stackTierY(2), STACK.z]} size={0.26} grow={0.09} intensity={1.5} fadeInFrom={2.5} />
     </group>
   );
 }

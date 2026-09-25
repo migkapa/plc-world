@@ -3,7 +3,8 @@ import type { Preview } from '../../../../dev/gallery';
 import type { HardwareConfig } from '../../../../plc/types';
 import { materials } from '../../../common';
 import { CompactLogix5380Controller } from './CompactLogix5380Controller';
-import { CompactLogixRack } from './CompactLogixRack';
+import { CompactLogixRack, layoutCompactLogixRack, RAIL_Y } from './CompactLogixRack';
+import { CompactLogixRackImpostor } from './RackImpostor';
 import { createCompactDemoLive } from './demoLive';
 import { Module5069, type Module5069Catalog } from './Module5069';
 import { DUCT, WireDuct } from './parts';
@@ -50,6 +51,30 @@ function TrafficRack() {
       <PreviewShadowTuning />
       <Backplate w={0.36} h={0.32} />
       <CompactLogixRack hardware={TRAFFIC_HW} live={live} wiring={TRAFFIC_WIRING} onSelectModule={setSel} highlightSlot={sel} />
+    </group>
+  );
+}
+
+/** Built-in LOD check: live rack (left) vs its impostor (right), same wiring. */
+function RackVsImpostor() {
+  const live = useMemo(() => createCompactDemoLive({ hardware: TRAFFIC_HW, pattern: 'traffic', initialKey: 'REM' }), []);
+  const L = useMemo(() => layoutCompactLogixRack(TRAFFIC_HW.modules), []);
+  const first = L.slots[0]!;
+  return (
+    <group>
+      <PreviewShadowTuning />
+      <CompactLogixRack hardware={TRAFFIC_HW} live={live} wiring={TRAFFIC_WIRING} lod={false} position={[-0.17, 0, 0]} />
+      <group position={[0.17, 0, 0]}>
+        <CompactLogixRackImpostor
+          slots={L.slots.map((s) => ({ x: s.x, width: s.width, cpu: s.slot === 0, wired: s.slot !== 0 && !!(TRAFFIC_WIRING as Record<number, number[]>)[s.slot]?.length }))}
+          totalWidth={L.totalWidth}
+          railLength={L.railLength}
+          railY={RAIL_Y}
+          railDepth={0.0075}
+          stops={[first.x - first.width / 2 - 0.0052, L.totalWidth / 2 + 0.0052]}
+          wireDuct
+        />
+      </group>
     </group>
   );
 }
@@ -115,6 +140,11 @@ const modCam = { position: [0.13, 0.15, 0.33] as [number, number, number], targe
 const wiredModCam = { position: [0.16, 0.12, 0.36] as [number, number, number], target: [0, 0.03, 0.07] as [number, number, number], fov: 35 };
 
 export const previews: Record<string, Preview> = {
+  CPX_Rack_vs_Impostor: {
+    Component: () => <RackVsImpostor />,
+    camera: { position: [0.05, 0.12, 0.75], target: [0, 0.03, 0.05] },
+    description: 'Built-in LOD: live traffic rack (left) vs the one-draw-call impostor it shows below ~90 px (right)',
+  },
   CPX_Rack_Traffic: {
     Component: TrafficRack,
     camera: rackCam,

@@ -3,7 +3,7 @@
  * "Try it" playground (ladder + inputs + timing diagram), and the glossary (/reference/glossary).
  */
 import { ArrowLeft, ArrowRight, BookA, BookOpen, ChevronLeft, FlaskConical, Map as MapIcon, Zap } from 'lucide-react';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useLocation, useParams } from 'wouter';
 import { InstructionHelp } from '../../editor';
 import { MISSIONS } from '../../game/missions';
@@ -11,7 +11,6 @@ import { useGame } from '../../game/store';
 import { INSTRUCTION_CATEGORIES, INSTRUCTIONS, instructionsByCategory } from '../../plc/instructions';
 import { cn } from '../../ui';
 import { useReducedMotion } from '../hud/prefs';
-import { Glossary } from '../reference/Glossary';
 import { GLOSSARY, glossaryHref, parseGlossaryParam } from '../reference/glossaryData';
 import { InlineMd } from '../reference/InlineMd';
 import { ALL_MNEMONICS, CATEGORY_STYLE, InstructionList, MnemonicBadge, matchInstruction } from '../reference/InstructionList';
@@ -19,7 +18,11 @@ import { Playground } from '../reference/Playground';
 import { playgroundFor } from '../reference/playgrounds';
 import { useMedia } from '../reference/useMedia';
 import { routes } from '../routes';
+import { useDocumentTitle } from '../useDocumentTitle';
 import '../showroom/showroom.css';
+
+// the glossary (and the showroom catalog its device links read) loads only when the glossary is opened
+const Glossary = lazy(() => import('../reference/Glossary').then((m) => ({ default: m.Glossary })));
 
 const VIEWED_KEY = 'plc-world-reference-viewed-v1';
 
@@ -49,6 +52,7 @@ export default function ReferencePage() {
   const glossaryTerm = glossaryRoute?.term;
   const mnemonic = raw && !glossary ? raw.toUpperCase() : undefined;
   const info = mnemonic ? INSTRUCTIONS[mnemonic] : undefined;
+  useDocumentTitle(glossary ? 'Glossary · Reference' : info ? `${info.mnemonic} ${info.name} · Reference` : 'Instruction reference');
   const desktop = useMedia('(min-width: 1024px)');
   const reducedMotion = useReducedMotion();
   const recordEvent = useGame((s) => s.recordEvent);
@@ -71,7 +75,9 @@ export default function ReferencePage() {
   }, [raw, glossaryTerm]);
 
   const main = glossary ? (
-    <Glossary reducedMotion={reducedMotion} term={glossaryTerm} />
+    <Suspense fallback={<div className="p-6 text-sm text-slate-500">Loading the glossary…</div>}>
+      <Glossary reducedMotion={reducedMotion} {...(glossaryTerm ? { term: glossaryTerm } : {})} />
+    </Suspense>
   ) : info ? (
     <Detail mnemonic={info.mnemonic} compact={!desktop} />
   ) : (

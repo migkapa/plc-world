@@ -8,3 +8,4 @@ export { Markdown } from './Markdown';
 export { Stars, ProgressBar, Tabs, LedDot, type TabDef } from './misc';
 export { GameIcon, gameIcon } from './GameIcon';
 export { useFocusTrap, tabbables, type FocusTrapOptions } from './focusTrap';
+export { hasWebGL } from './webgl';

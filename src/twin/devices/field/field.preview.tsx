@@ -609,7 +609,7 @@ function TankMixing({ cutaway = true }: { cutaway?: boolean }) {
   const gx = TJB_POS[0];
   return (
     <group>
-      <Tank getLevel={tankLevel} getTemperature={tankTemp} getAgitatorRpm={() => 70} getHeaterOn={() => tankTemp() < 60} cutaway={cutaway} />
+      <Tank getLevel={tankLevel} getTemperature={tankTemp} temperatureTint getAgitatorRpm={() => 70} getHeaterOn={() => tankTemp() < 60} cutaway={cutaway} cables={{ agitator: 'floor', heater: 'floor' }} />
       <OnNozzle nozzle={n.lt}>
         <LevelTransmitter
           getValue={tankLevel}

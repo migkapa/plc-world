@@ -58,6 +58,10 @@ class Sfx {
   /** Ensure the audio context exists and is running; returns null in non-browser environments. */
   private ensure(): AudioContext | null {
     if (typeof window === 'undefined' || typeof AudioContext === 'undefined') return null;
+    // Browsers keep audio suspended until the first user gesture (and warn on every attempt to start it):
+    // stay silent until then instead of creating / resuming a context that cannot play.
+    const activation = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation;
+    if (activation && !activation.hasBeenActive) return null;
     if (!this.ctx) {
       this.ctx = new AudioContext();
       this.master = this.ctx.createGain();

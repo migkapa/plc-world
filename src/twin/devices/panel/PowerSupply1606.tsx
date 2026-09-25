@@ -9,10 +9,11 @@
  * Performance: housing + terminals = one merged mesh, + label quad + 2 LEDs.
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import * as THREE from 'three';
 import type { Placement } from '../../contracts';
 import { F, LEGEND_FONT, LIT_HEX, NARROW_FONT, boxGeo, canvasTexture, cylZ, fitText, mats, partsGeo, planeGeo, roundedBox, sharedMat, uberMat, type Parts } from '../operator/shared';
+import { useDisposeOnUnmount } from '../../dispose';
 
 export interface PowerSupply1606Props extends Placement {
   /** DC OK LED state (default: always on). */
@@ -123,10 +124,10 @@ export function PowerSupply1606({ getOk, getOverload, catalog = '1606-XLS240E', 
     }),
     [],
   );
-  useEffect(() => () => {
+  useDisposeOnUnmount(leds, () => {
     leds.ok.dispose();
     leds.ovl.dispose();
-  }, [leds]);
+  });
   useFrame(() => {
     const ok = getOk ? getOk() : true;
     if (leds.ok.userData.on !== ok) {

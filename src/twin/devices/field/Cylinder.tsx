@@ -170,10 +170,10 @@ export interface CylinderExtraProps {
   flange?: boolean;
   /**
    * Tubing ends in CYLINDER coordinates for the rear (extend, blue) and front (retract, black) ports (e.g. the
-   * valve's A/B fittings); default: both tubes, with the reed-switch leads tied to them, drop into a floor
-   * conduit stub; `false` hides the tubes (the leads then end at the rear cap).
+   * valve's A/B fittings), or `'floor'`: both tubes, with the reed-switch leads tied to them, drop into a floor
+   * conduit stub. Default (`undefined` / `false`): no tubes (the leads end at the rear cap).
    */
-  tubes?: { rear: Vec3; front: Vec3 } | false;
+  tubes?: { rear: Vec3; front: Vec3 } | 'floor' | false;
   onClick?: () => void;
 }
 
@@ -216,7 +216,8 @@ export function PneumaticCylinder({
 
   const rearPort: Vec3 = [0, p / 2, zRearCap];
   const frontPort: Vec3 = [0, p / 2, zFrontCap];
-  const tubeEnds = tubes ? tubes : null;
+  const tubeEnds = typeof tubes === 'object' ? tubes : null;
+  const hasTubes = !!tubes;
 
   const pusherMat = fm.plastic('#e9ebe6', 0.55);
 
@@ -240,7 +241,7 @@ export function PneumaticCylinder({
     [tubeEnds.front[0], tubeEnds.front[1] - 0.02, (frontPort[2] + tubeEnds.front[2]) / 2],
     tubeEnds.front,
   ] : undefined) as Vec3[] | undefined;
-  const route: CableRoute | undefined = tubes === false ? false : undefined;
+  const route: CableRoute | undefined = !hasTubes ? false : tubes === 'floor' ? 'floor' : undefined;
 
   return (
     <group position={position} rotation={rotation} scale={scale} userData={DEVICE_ROOT} {...clickable(onClick)}>
@@ -264,7 +265,7 @@ export function PneumaticCylinder({
         companions={leads.map((l, i) => ({ lead: l, joinAt: 0.16, offset: [0.0056, (i - 0.5) * 0.004] as [number, number], radius: 0.0014, color: '#2b2d30' }))}
       />
       <RoutedCable route={route} path={frontTube} from={[frontPort[0], frontPort[1] + 0.02, frontPort[2]]} dir={[0, 1, 0]} radius={0.004} color="#1a1b1d" lead={0.02} sag={0.02} />
-      {tubes === false &&
+      {!hasTubes &&
         leads.map((l, i) => <Cable key={i} radius={0.0014} color="#2b2d30" points={[...l.slice(0, 3), [reedX + 0.004, -0.004 - i * 0.003, behind - 0.004]]} />)}
       {/* reed switches in the side slot (+X face) */}
       <ReedSwitch position={[reedX, 0, reedZ[0]!]} get={getExtendedSensor} />

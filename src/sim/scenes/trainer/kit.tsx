@@ -25,8 +25,10 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { sfx, type LoopName, type SfxName } from '../../../audio/sfx';
 import type { Vec3 } from '../../../twin/contracts';
 import { filletedPath } from '../../../twin/devices/panel/Wire';
+import { hitsHud, hudRects, type HudRect } from '../../../twin/hud';
 import type { SimRuntime } from '../../types';
 import { useSceneOverlay } from '../overlay';
+import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 // ---------------------------------------------------------------------------
 // Caches (geometry / material / texture shared across mounts)
@@ -542,7 +544,7 @@ export function Tube({
     const len = path.getLength();
     return new THREE.TubeGeometry(path, Math.min(400, Math.max(6, Math.round(len / 0.03))), radius, radial, false);
   }, [key, radius, bend, radial]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => geo.dispose(), [geo]);
+  useDisposeOnUnmount(geo);
   return <mesh geometry={geo} material={material} castShadow={castShadow} />;
 }
 
@@ -1142,7 +1144,8 @@ const clamp = (v: number, lo: number, hi: number) => (hi < lo ? (lo + hi) / 2 : 
  * `pinStyle` selects what `showTags` pins: 'chip' (legacy: full chips for devices within 6 m, stacked
  * upward) or 'pill' (compact value pills placed beside/below each device without covering other devices;
  * devices too small on screen collapse into one summary chip per TagGroup). Hovering always shows the full
- * chip. All chips are clamped to the viewport.
+ * chip. All chips are clamped to the viewport and keep out of the DOM HUD over the canvas (camera bar, tools,
+ * replay caption, operator pad: see twin/hud.ts); the layer itself sits below that HUD.
  */
 export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { children: ReactNode; occluders?: Array<[Vec3, Vec3]>; pinStyle?: 'chip' | 'pill' }) {
   const gl = useThree((s) => s.gl);
@@ -1159,6 +1162,7 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
     const parent = gl.domElement.parentElement;
     if (!parent) return;
     const c = document.createElement('div');
+    // stacked inside the canvas' own stacking context (see SceneCanvas): above the 3D view, below the DOM HUD
     c.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:5;';
     c.dataset.plcwTags = '1';
     parent.appendChild(c);
@@ -1199,6 +1203,7 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
     cands.length = 0;
     const W = size.width;
     const H = size.height;
+    const hud = hudRects(gl.domElement);
 
     for (const e of reg.entries.values()) {
       const hovered = reg.hovered === e.id;
@@ -1357,9 +1362,16 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
           if (!moved) break;
         }
       }
-      // keep the box inside the viewport; the leader runs from the box down to the device
-      const x = clamp(e.x, e.w / 2 + EDGE, W - e.w / 2 - EDGE);
-      const bottom = clamp(e.y - 6 - nudge, e.h + EDGE, H - EDGE);
+      // keep the box inside the viewport and out of the HUD; the leader runs from the box down to the device
+      let x = clamp(e.x, e.w / 2 + EDGE, W - e.w / 2 - EDGE);
+      let bottom = clamp(e.y - 6 - nudge, e.h + EDGE, H - EDGE);
+      if (hud.length > 0 && hitsHud({ x: x - e.w / 2, y: bottom - e.h, w: e.w, h: e.h }, hud)) {
+        const alt = chipOutsideHud(e, x, bottom, hud, e.id === reg.hovered ? null : rects, W, H);
+        if (alt) {
+          x = alt[0];
+          bottom = alt[1];
+        }
+      }
       const lead = Math.max(0, e.y - bottom);
       rects.push({ x: x - e.w / 2, y: bottom - e.h, w: e.w, h: e.h });
       if (Math.abs(x - e.lx) > 0.3 || Math.abs(bottom - e.ly) > 0.3 || lead !== e.lnudge) {
@@ -1387,7 +1399,8 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
       gc.collapse = n > 0 && sum / n < (gc.g.collapseBelow ?? PIN_MIN_PX * 2.2);
       if (gc.collapse) for (const m of gc.members) if (m.vis) m.vis = false;
     }
-    // device footprints are obstacles, so pills never cover a lamp or button
+    // the HUD and the device footprints are obstacles: pills never cover a control, a lamp or a button
+    for (const h of hud) rects.push(h);
     for (const e of cands) {
       if (!e.vis) continue;
       const r = e.pr * 0.85;
@@ -1439,11 +1452,13 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
       let n = 0;
       let sx = 0;
       let top = Infinity;
+      let low = -Infinity;
       for (const m of gc.members) {
         if (m.stamp !== stamp) continue;
         n++;
         sx += m.cx;
         top = Math.min(top, m.cy - m.pr);
+        low = Math.max(low, m.cy + m.pr);
       }
       if (n === 0) {
         if (gc.shown) {
@@ -1464,21 +1479,11 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
       }
       gc.shown = true;
       const cx0 = sx / n - gc.w / 2;
-      const cy0 = clamp(top - 6 - gc.h, EDGE, H - gc.h - EDGE);
-      const free = (c: Rect) => !rects.some((o) => overlaps(c, o, 2));
-      let cand: Rect = { x: clamp(cx0, EDGE, W - gc.w - EDGE), y: cy0, w: gc.w, h: gc.h };
-      // beside the preferred spot first (keeps the chip next to its devices), then stack upward
-      for (const dx of [0, gc.w * 0.55, -gc.w * 0.55, gc.w * 1.05, -gc.w * 1.05]) {
-        const c = { x: clamp(cx0 + dx, EDGE, W - gc.w - EDGE), y: cy0, w: gc.w, h: gc.h };
-        if (free(c)) {
-          cand = c;
-          break;
-        }
-      }
-      for (let iter = 0; iter < 6 && !free(cand); iter++) {
-        for (const o of rects) if (overlaps(cand, o, 2)) cand.y = o.y - cand.h - 3;
-      }
-      cand.y = clamp(cand.y, EDGE, H - gc.h - EDGE);
+      const cand = placeGroupChip(cx0, top - 6 - gc.h, low + 6, gc.w, gc.h, rects, hud, W, H);
+      // no spot outside the HUD: better no summary than one covering a control (kept measured, just invisible)
+      const vis = cand ? '' : 'hidden';
+      if (gc.el.style.visibility !== vis) gc.el.style.visibility = vis;
+      if (!cand) continue;
       rects.push(cand);
       if (Math.abs(cand.x - gc.lx) > 0.3 || Math.abs(cand.y - gc.ly) > 0.3) {
         gc.lx = cand.x;
@@ -1515,7 +1520,71 @@ function setPill(e: TagEntry, wide: boolean) {
   if (!e.pillShown) e.pill.style.display = 'none';
 }
 
-/** First free spot around the device footprint: below, right, left, above (null when all are taken). */
+/**
+ * Summary chip of a collapsed TagGroup: above its devices (preferred), beside that spot, below the devices, then
+ * further up / down and sideways; the first spot free of other chips and of the HUD. Without a free spot, the one
+ * that overlaps other chips least (if that overlap is small); null otherwise.
+ */
+function placeGroupChip(cx0: number, above: number, below: number, w: number, h: number, rects: Rect[], hud: HudRect[], W: number, H: number): Rect | null {
+  const half = (h + 3) / 2;
+  const ys: number[] = [];
+  for (const k of [0, 1, 2, 3, 4, 6, 8]) {
+    ys.push(above - k * half, below + k * half);
+    if (k > 0) ys.push(above + k * half, below - k * half);
+  }
+  // snapped to the HUD: right below a top band / right above a bottom band (where the free space usually is)
+  for (const r of hud) ys.push(r.y + r.h + 4, r.y - h - 4);
+  const dxs = [0, w * 0.3, -w * 0.3, w * 0.55, -w * 0.55, w * 0.8, -w * 0.8, w * 1.05, -w * 1.05, w * 1.6, -w * 1.6, w * 2.2, -w * 2.2];
+  let best: Rect | null = null;
+  let bestArea = Infinity;
+  for (const y of ys) {
+    if (y < EDGE - 2 * half || y > H - EDGE) continue; // off screen: clamping would only pile chips on the edge
+    for (const dx of dxs) {
+      const c = { x: clamp(cx0 + dx, EDGE, W - w - EDGE), y: clamp(y, EDGE, H - h - EDGE), w, h };
+      if (hitsHud(c, hud)) continue;
+      let area = 0;
+      for (const o of rects) {
+        if (!overlaps(c, o, 2)) continue;
+        area += Math.max(1, (Math.min(c.x + c.w, o.x + o.w) - Math.max(c.x, o.x)) * (Math.min(c.y + c.h, o.y + o.h) - Math.max(c.y, o.y)));
+      }
+      if (area === 0) return c;
+      if (area < bestArea) {
+        best = c;
+        bestArea = area;
+      }
+    }
+  }
+  // a small overlap keeps the summary readable; one mostly covering another chip is not shown
+  return bestArea <= 0.35 * w * h ? best : null;
+}
+
+/**
+ * A full chip whose default spot (centred above its anchor) hits the HUD: below a top band, above a bottom band,
+ * or beside the anchor. With `rects` (pinned chips) the spot must not cover an already placed chip either.
+ * Returns [centre x, box bottom] or null.
+ */
+function chipOutsideHud(e: TagEntry, x: number, bottom: number, hud: HudRect[], rects: Rect[] | null, W: number, H: number): [number, number] | null {
+  const ok = (cx: number, b: number): boolean => {
+    const r = { x: cx - e.w / 2, y: b - e.h, w: e.w, h: e.h };
+    return !hitsHud(r, hud) && (!rects || !rects.some((o) => overlaps(r, o, 2)));
+  };
+  const cands: [number, number][] = [];
+  for (const h of hud) {
+    cands.push([x, h.y + h.h + 4 + e.h]); // below a band at the top
+    cands.push([x, h.y - 4]); // above a band at the bottom
+  }
+  const side = e.w / 2 + 14;
+  const mid = e.y + e.h / 2;
+  cands.push([e.x + side, mid], [e.x - side, mid], [e.x + side, bottom], [e.x - side, bottom]);
+  for (const [cx, b] of cands) {
+    const cx1 = clamp(cx, e.w / 2 + EDGE, W - e.w / 2 - EDGE);
+    const b1 = clamp(b, e.h + EDGE, H - EDGE);
+    if (ok(cx1, b1)) return [cx1, b1];
+  }
+  return null;
+}
+
+/** First free spot around the device footprint: below, right, left, above, then the corners (null when all are taken). */
 function placePill(e: TagEntry, rects: Rect[], W: number, H: number): Rect | null {
   const r = e.pr * 0.85 + 2;
   const spots: [number, number][] = [
@@ -1523,6 +1592,10 @@ function placePill(e: TagEntry, rects: Rect[], W: number, H: number): Rect | nul
     [e.cx + r, e.cy - e.ph / 2],
     [e.cx - r - e.pw, e.cy - e.ph / 2],
     [e.cx - e.pw / 2, e.cy - r - e.ph],
+    [e.cx + r * 0.7, e.cy + r * 0.7],
+    [e.cx - r * 0.7 - e.pw, e.cy + r * 0.7],
+    [e.cx + r * 0.7, e.cy - r * 0.7 - e.ph],
+    [e.cx - r * 0.7 - e.pw, e.cy - r * 0.7 - e.ph],
   ];
   for (const [sx, sy] of spots) {
     const cand = { x: clamp(sx, EDGE, W - e.pw - EDGE), y: clamp(sy, EDGE, H - e.ph - EDGE), w: e.pw, h: e.ph };

@@ -11,10 +11,11 @@
  * `finish`: 'stainless' (polished), 'painted' (with `color`), 'pvc' (gray Sch.80).
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Placement, Vec3 } from '../../contracts';
 import { cylY, fm, geo, hexGeo, Merge, TAU } from './shared';
+import { useDisposeOnUnmount } from '../../dispose';
 
 export type PipeFinish = 'stainless' | 'painted' | 'pvc';
 
@@ -191,7 +192,7 @@ export function SightGlass({
 }: Placement & { height?: number; getLevel: () => number; standoff?: number; liquidColor?: string; getColor?: () => THREE.ColorRepresentation }) {
   const col = useRef<THREE.Mesh>(null);
   const liqMat = useMemo(() => new THREE.MeshStandardMaterial({ color: liquidColor, roughness: 0.15, transparent: true, opacity: 0.85 }), [liquidColor]);
-  useEffect(() => () => liqMat.dispose(), [liqMat]);
+  useDisposeOnUnmount(liqMat);
   useFrame(() => {
     const c = col.current;
     if (!c) return;

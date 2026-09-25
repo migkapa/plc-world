@@ -6,8 +6,10 @@ import { FeatureCards } from '../home/FeatureCards';
 import { HomeFooter } from '../home/HomeFooter';
 import { HomeHero } from '../home/HomeHero';
 import { PlayerStrip } from '../home/PlayerStrip';
+import { useDocumentTitle } from '../useDocumentTitle';
 
 export default function HomePage() {
+  useDocumentTitle();
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden bg-[#0b0f14]">
       <HomeHero />

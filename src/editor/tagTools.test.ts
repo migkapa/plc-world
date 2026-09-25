@@ -3,7 +3,7 @@ import { createController } from '@/plc/controller';
 import { INSTRUCTION_DEFS } from '@/plc/instructions';
 import { createProjectForScene } from '@/sim/project';
 import { trainerLogic } from '@/sim/scenes';
-import { detailsRungs, exampleFor } from './examples';
+import { detailsRungs, detailsWithoutExample, exampleFor } from './examples';
 import { instructionsOf, parseRung } from '@/plc/neutralText';
 import {
   createLiveReader,
@@ -195,5 +195,24 @@ describe('examples', () => {
     expect(exampleFor('TON')).toBe('XIC(Start_PB)TON(Start_Delay,3000,0);');
     expect(exampleFor('MEQ')).toBe('MEQ(Local:1:I.Data,16#000F,2#0101)OTE(Pattern_Found);');
     expect(exampleFor('OTE')).toBe('[XIC(Start_PB),XIC(Motor)]XIC(Stop_PB)OTE(Motor);');
+  });
+
+  it('the help card notes drop the code block that the Example block already shows (no duplicate rung)', () => {
+    for (const [op, def] of Object.entries(INSTRUCTION_DEFS)) {
+      const ex = exampleFor(op);
+      const notes = detailsWithoutExample(def.details ?? '', ex);
+      const blocks = [...notes.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]!.trim());
+      expect(blocks, op).not.toContain(ex); // a multi-rung block (e.g. OTL + OTU) may still contain it
+      expect(notes.length, op).toBeGreaterThan(0);
+    }
+    // XIO: the prose stays, the one-rung block goes; the wording does not call XIO "the N.C. contact"
+    const xio = detailsWithoutExample(INSTRUCTION_DEFS.XIO!.details!, exampleFor('XIO'));
+    expect(xio).toMatch(/Prescan/);
+    expect(xio).not.toContain('```');
+    expect(xio).not.toMatch(/the normally-closed contact of ladder logic/);
+    expect(xio).toMatch(/N\.O\. or N\.C\./);
+    // a block with other rungs is kept
+    expect(detailsWithoutExample('a\n\n```\nX;\nY;\n```\n\nb', 'X;')).toContain('```');
+    expect(detailsWithoutExample('a\n\n```\nX;\n```\n\nb', 'X;')).toBe('a\n\nb');
   });
 });

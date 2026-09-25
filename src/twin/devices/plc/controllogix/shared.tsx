@@ -5,13 +5,14 @@
  */
 import { useCursor } from '@react-three/drei';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { COLORS, LED_HEX, materials } from '../../../common';
 import type { Vec3 } from '../../../contracts';
 import { glyphColumn, glyphColumns } from './font5x7';
+import { useDisposeOnUnmount } from '../../../dispose';
 
 // ---------------------------------------------------------------------------
 // Geometry helpers
@@ -509,7 +510,7 @@ export function StatusLed({
       }),
     [offColor],
   );
-  useEffect(() => () => mat.dispose(), [mat]);
+  useDisposeOnUnmount(mat);
   const shown = useRef<StatusLedState | null>(null);
   useFrame(({ clock }) => {
     const s = get();
@@ -655,13 +656,8 @@ export function DotMatrixDisplay({ getText, width, height, position, color = DIS
   }, [color]);
   const st = useRef({ text: null as string | null, offset: -1, t0: 0 });
 
-  useLayoutEffect(
-    () => () => {
-      tex.dispose();
-      mat.dispose();
-    },
-    [tex, mat],
-  );
+  useDisposeOnUnmount(tex);
+  useDisposeOnUnmount(mat);
 
   useFrame(({ clock }) => {
     const text = getText() ?? '';

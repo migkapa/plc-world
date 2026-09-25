@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseRungs } from '../neutralText';
+import { instructionsOf, parseRung, parseRungs } from '../neutralText';
 import { INSTRUCTIONS, INSTRUCTION_CATEGORIES, getInstruction, instructionsByCategory, isOutputInstruction } from './index';
 
 const REQUIRED = [
@@ -28,6 +28,20 @@ describe('instruction registry', () => {
       expect(() => parseRungs(example![1]!), `${key} example parses`).not.toThrow();
       for (const op of info.operands) expect(op.types.length).toBeGreaterThan(0);
     }
+  });
+
+  it('teaches each instruction with a code example that uses it (the help card shows it as the Example)', () => {
+    for (const [key, info] of Object.entries(INSTRUCTIONS)) {
+      const rungs = [...(info.details ?? '').matchAll(/```[a-z]*\n([\s\S]*?)```/g)].flatMap((m) => m[1]!.split('\n').map((l) => l.trim()).filter(Boolean));
+      const uses = rungs.filter((r) => instructionsOf(parseRung(r).elements).some((i) => i.op === key));
+      expect(uses.length, `${key}: a details rung uses ${key}`).toBeGreaterThan(0);
+    }
+    // instruction-specific examples (not one shared template for the whole compare family)
+    const first = (op: string): string => /```\n(.*)\n/.exec(INSTRUCTIONS[op]?.details ?? '')![1]!;
+    const compares = ['EQU', 'NEQ', 'LES', 'LEQ', 'GRT', 'GEQ'].map((op) => first(op).replace(op, '#'));
+    expect(new Set(compares).size).toBe(compares.length);
+    // math runs every scan: the ADD example counts once per event with a one-shot, as its text advises
+    expect(first('ADD')).toMatch(/ONS\(\w+\)ADD\(/);
   });
 
   it('declares status bits for box instructions with control structures', () => {

@@ -76,7 +76,7 @@ const REAL_OPS: Record<string, Op2> = {
 };
 
 const MATH_TEXT: Record<string, { name: string; formula: string; example: string; extra?: string }> = {
-  ADD: { name: 'Add', formula: 'Dest = Source A + Source B', example: 'XIC(Box_Pulse)ADD(Total_Boxes,1,Total_Boxes);' },
+  ADD: { name: 'Add', formula: 'Dest = Source A + Source B', example: 'XIC(PE_Exit)ONS(PE_Exit_ONS)ADD(Total_Boxes,1,Total_Boxes);' },
   SUB: { name: 'Subtract', formula: 'Dest = Source A − Source B', example: 'SUB(Setpoint,Level,Level_Error);' },
   MUL: { name: 'Multiply', formula: 'Dest = Source A × Source B', example: 'MUL(Speed_Pct,17.5,Motor_Rpm);' },
   DIV: {

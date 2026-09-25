@@ -27,8 +27,10 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import * as THREE from 'three';
 import { sfx, type LoopName, type SfxName } from '../../../audio/sfx';
 import type { Vec3 } from '../../../twin/contracts';
+import { hudRects } from '../../../twin/hud';
 import type { IoPointDef, SimRuntime } from '../../types';
 import { useSceneOverlay } from '../overlay';
+import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 // ---------------------------------------------------------------------------
 // Invisible hit material (raycastable, never drawn, never occludes chips)
@@ -477,6 +479,7 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
   useLayoutEffect(() => {
     const parent = gl.domElement.parentElement;
     if (!parent) return;
+    // stacked inside the canvas' own stacking context (see SceneCanvas): above the 3D view, below the DOM HUD
     const c = el('div', 'position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:5;');
     c.dataset.plcwChips = '1';
     const svg = document.createElementNS(SVG_NS, 'svg');
@@ -660,8 +663,21 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
       }
     }
 
-    // 5. layout: hovered chips first, then groups, then by y
+    // 5. layout: hovered chips first, then groups, then by y; the DOM HUD over the canvas (camera bar, tools,
+    //    replay caption, operator pad) is an obstacle chips settle around
     placed.length = 0;
+    const hud = hudRects(gl.domElement);
+    for (const h of hud) placed.push({ x0: h.x, y0: h.y, x1: h.x + h.w, y1: h.y + h.h });
+    const nHud = hud.length;
+    const onHud = (r: Rect) => {
+      for (let i = 0; i < nHud; i++) if (overlaps(r, placed[i]!)) return true;
+      return false;
+    };
+    /** `r` (the rect placed last) still overlaps the HUD or another chip (settling found no free slot). */
+    const collides = (r: Rect) => {
+      for (let i = 0; i < placed.length - 1; i++) if (overlaps(r, placed[i]!)) return true;
+      return false;
+    };
     order.sort(byHoverThenY);
     const place = (r: Rect) => {
       if (r.x0 < 4) {
@@ -681,13 +697,29 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
       return r;
     };
     const layout = (e: ChipEntry) => {
-      const x0 = e.right ? e.ax + 6 : e.ax - 6 - e.w;
       const r = e.rect;
-      r.x0 = x0;
-      r.x1 = x0 + e.w;
-      r.y0 = e.ay - e.h / 2;
-      r.y1 = e.ay + e.h / 2;
-      place(r);
+      const put = (right: boolean) => {
+        const x0 = right ? e.ax + 6 : e.ax - 6 - e.w;
+        r.x0 = x0;
+        r.x1 = x0 + e.w;
+        r.y0 = e.ay - e.h / 2;
+        r.y1 = e.ay + e.h / 2;
+        place(r);
+      };
+      put(e.right);
+      if (!e.hovered && collides(r)) {
+        // no free slot on this side: try the other side of the device; a pinned chip that still lands on the HUD
+        // or on another chip is not shown (hovering the device shows it)
+        placed.pop();
+        put(!e.right);
+        if (collides(r)) {
+          placed.pop();
+          e.el.style.opacity = '0';
+          e.line.style.display = 'none';
+          e.dot.style.display = 'none';
+          return;
+        }
+      }
       if (Math.abs(r.x0 - e.x) > 0.4 || Math.abs(r.y0 - e.y) > 0.4) {
         e.x = r.x0;
         e.y = r.y0;
@@ -714,8 +746,13 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
         g.el.style.display = 'none';
         continue;
       }
-      g.el.style.display = 'block';
       const r = place(g.rect);
+      if (nHud > 0 && onHud(r)) {
+        placed.pop();
+        g.el.style.display = 'none';
+        continue;
+      }
+      g.el.style.display = 'block';
       g.el.style.transform = `translate(${Math.round(r.x0)}px,${Math.round(r.y0)}px)`;
     }
     for (const e of order) if (!e.hovered && e.mode !== 'hidden') layout(e);
@@ -929,9 +966,29 @@ export function glowTexture(): THREE.CanvasTexture {
 
 /**
  * Additive halo around a lamp / stack-light tier / heater that is ON — keeps the state readable from the overview
- * camera (a lit 22 mm lens is only a few pixels there). Scales up slightly with camera distance.
+ * camera (a lit 22 mm lens is only a few pixels there). Scales up slightly with camera distance. For lamp DEVICES
+ * (800F / 855T / 856T), which bloom on their own up close, pass `fadeInFrom` (m): the halo is invisible nearer than
+ * that and fades in over the next 60 % of the distance, so it only acts as a far-view readability cue.
  */
-export function Glow({ get, color, position, size = 0.12, intensity = 1.6, flash = false, grow = 0.05 }: { get: () => boolean | number; color: string; position: Vec3; size?: number; intensity?: number; flash?: boolean; grow?: number }) {
+export function Glow({
+  get,
+  color,
+  position,
+  size = 0.12,
+  intensity = 1.6,
+  flash = false,
+  grow = 0.05,
+  fadeInFrom = 0,
+}: {
+  get: () => boolean | number;
+  color: string;
+  position: Vec3;
+  size?: number;
+  intensity?: number;
+  flash?: boolean;
+  grow?: number;
+  fadeInFrom?: number;
+}) {
   const ref = useRef<THREE.Sprite>(null);
   const mat = useMemo(
     () =>
@@ -946,18 +1003,19 @@ export function Glow({ get, color, position, size = 0.12, intensity = 1.6, flash
       }),
     [color, intensity],
   );
-  useEffect(() => () => mat.dispose(), [mat]);
+  useDisposeOnUnmount(mat);
   useFrame(({ camera, clock }) => {
     const s = ref.current;
     if (!s) return;
     const v = get();
     let k = typeof v === 'number' ? v : v ? 1 : 0;
     if (flash && k > 0) k *= Math.sin(clock.elapsedTime * Math.PI * 3) > 0 ? 1 : 0.15;
+    s.getWorldPosition(_v);
+    const d = _v.distanceTo(camera.position);
+    if (fadeInFrom > 0) k *= THREE.MathUtils.clamp((d - fadeInFrom) / (0.6 * fadeInFrom), 0, 1);
     s.visible = k > 0.01;
     if (!s.visible) return;
     mat.opacity = Math.min(1, k);
-    s.getWorldPosition(_v);
-    const d = _v.distanceTo(camera.position);
     const sc = size * (1 + grow * Math.max(0, d - 2));
     s.scale.set(sc, sc, sc);
   });

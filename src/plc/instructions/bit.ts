@@ -26,7 +26,8 @@ export const XIC: InstructionDef = {
   display: 'contact',
   operands: [bit('Data Bit')],
   summary: 'Condition: true when the data bit is 1 (ON).',
-  details: `**Examine If Closed** asks *"is this bit ON?"* — it is the normally-open contact of ladder logic.
+  details: `**Examine If Closed** asks *"is this bit ON?"* It is drawn like a normally-open contact, but it only asks
+whether the bit is 1.
 
 - Rung-condition-in true **and** data bit = 1 → rung-condition-out true.
 - Otherwise rung-condition-out false.
@@ -64,7 +65,8 @@ export const XIO: InstructionDef = {
   display: 'contact',
   operands: [bit('Data Bit')],
   summary: 'Condition: true when the data bit is 0 (OFF).',
-  details: `**Examine If Open** asks *"is this bit OFF?"* — the normally-closed contact of ladder logic.
+  details: `**Examine If Open** asks *"is this bit OFF?"* It is drawn like a normally-closed contact, but it only asks
+whether the bit is 0: the field device wired to that input can be **N.O. or N.C.** — XIO says nothing about it.
 
 - Rung-condition-in true **and** data bit = 0 → rung-condition-out true.
 - Otherwise rung-condition-out false.

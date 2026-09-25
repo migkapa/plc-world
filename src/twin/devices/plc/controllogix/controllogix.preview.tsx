@@ -13,6 +13,7 @@ import { chassisLayout } from './dims';
 import { AnalogModule1756, DigitalModule1756 } from './IoModules';
 import { PowerSupply1756 } from './PowerSupply';
 import { ControlLogixRack } from './Rack';
+import { ControlLogixRackImpostor } from './RackImpostor';
 import { SlotFiller1756N2 } from './SlotFiller';
 
 const TRAINER: HardwareConfig = {
@@ -142,7 +143,25 @@ function L85E({ faulted = false }: { faulted?: boolean }) {
 
 const MOD_CAM = { position: [0.11, 0.125, 0.38] as [number, number, number], target: [0, 0.07, 0.1] as [number, number, number] };
 
+function RackVsImpostor() {
+  const live = useDemoLive(TRAINER);
+  const w = chassisLayout('1756-A7').width;
+  return (
+    <group>
+      <ControlLogixRack hardware={TRAINER} live={live} lod={false} position={[-w / 2 - 0.02, 0.006, 0]} />
+      <group position={[w / 2 + 0.02, 0.006, 0]}>
+        <ControlLogixRackImpostor hardware={TRAINER} />
+      </group>
+    </group>
+  );
+}
+
 export const previews: Record<string, Preview> = {
+  CLX_Rack_vs_Impostor: {
+    Component: () => <RackVsImpostor />,
+    camera: { position: [0.1, 0.3, 1.25], target: [0, 0.078, 0.07] },
+    description: 'Built-in LOD: live trainer rack (left) vs the one-draw-call impostor it shows below ~90 px (right)',
+  },
   CLX_Rack_A7_Trainer: {
     Component: () => <RackTrainer />,
     camera: { position: [0.16, 0.17, 0.62], target: [0, 0.078, 0.07] },

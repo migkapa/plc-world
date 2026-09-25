@@ -312,11 +312,14 @@ describe('replay view', () => {
 });
 
 describe('workspace view helpers', () => {
-  it('maps objectives to test results', () => {
+  it('maps objectives to test results (explicit map only, never by position)', () => {
     const m = { objectives: ['a', 'b'], tests: [{ name: 'x', steps: [] }, { name: 'y', steps: [] }] };
     expect(objectiveStates(m, [], false)).toEqual(['pending', 'pending']);
     expect(objectiveStates(m, [], true)).toEqual(['passed', 'passed']);
-    expect(objectiveStates(m, [{ name: 'x', passed: true, steps: [] }, { name: 'y', passed: false, steps: [] }], false)).toEqual(['passed', 'failed']);
+    // equal counts without a map: no positional pairing (objective i is not test i)
+    expect(objectiveStates(m, [{ name: 'x', passed: true, steps: [] }, { name: 'y', passed: false, steps: [] }], false)).toEqual(['pending', 'pending']);
+    const mapped = { ...m, objectiveTests: [[1], [0]] };
+    expect(objectiveStates(mapped, [{ name: 'x', passed: true, steps: [] }, { name: 'y', passed: false, steps: [] }], false)).toEqual(['failed', 'passed']);
     const m3 = { objectives: ['a', 'b', 'c'], tests: m.tests };
     expect(objectiveStates(m3, [{ name: 'x', passed: true, steps: [] }, { name: 'y', passed: true, steps: [] }], false)).toEqual(['passed', 'passed', 'passed']);
     expect(objectiveStates(m3, [{ name: 'x', passed: true, steps: [] }, { name: 'y', passed: false, steps: [] }], false)).toEqual(['pending', 'pending', 'pending']);

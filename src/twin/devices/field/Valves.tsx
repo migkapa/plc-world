@@ -45,7 +45,7 @@ export interface SolenoidValveExtraProps {
   stations?: number;
   /** Pneumatic manifold: extra live getters for the other stations (index 1..). */
   getStation?: (index: number) => boolean;
-  /** Process: solenoid coil cable; pneumatic: multicore from the D-sub connector. Parent coordinates. */
+  /** Process: solenoid coil cable; pneumatic: multicore from the D-sub connector. Parent coordinates ('floor' = floor stub; default none). */
   cableTo?: CableRoute;
   /** Process: air supply tube to the pilot valve; pneumatic: P supply tube on the end plate. */
   tubeTo?: CableRoute;

@@ -482,13 +482,22 @@ export function enclosingBranch(rung: Rung, elementId: string): LegPath | undefi
 // Move
 // ---------------------------------------------------------------------------
 
-/** Move an element one position left (-1) or right (+1) within its series. */
+/**
+ * Move an element one position left (-1) or right (+1) within its series (Alt+← / Alt+→). At the end of a
+ * branch leg it steps OUT of the branch, to the series position just after (→) or before (←) the branch; the
+ * emptied leg is removed like after a drag. At the ends of the main series nothing changes.
+ */
 export function moveElement(rungs: Rung[], rungId: string, elementId: string, dir: -1 | 1): Rung[] {
   const rung = findRung(rungs, rungId);
   const loc = rung && locateElement(rung.elements, elementId);
   if (!loc) return rungs;
   const j = loc.index + dir;
-  if (j < 0 || j >= loc.series.length) return rungs;
+  if (j < 0 || j >= loc.series.length) {
+    if (!loc.legPath) return rungs;
+    const br = locateElement(rung.elements, loc.legPath.branchId);
+    if (!br) return rungs;
+    return moveElementTo(rungs, rungId, elementId, { rungId, ...(br.legPath ? { legPath: br.legPath } : {}), index: dir > 0 ? br.index + 1 : br.index });
+  }
   return updateElements(
     rungs,
     rungId,

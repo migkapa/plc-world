@@ -6,7 +6,7 @@
  * with its M18 threaded nose is below/behind the lens; the stainless bracket bolts to the -X side.
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { Led } from '../../common';
 import type { PhotoEyeProps, Placement } from '../../contracts';
@@ -38,6 +38,7 @@ import {
   torus,
   clickable,
 } from './shared';
+import { useDisposeOnUnmount } from '../../dispose';
 
 // Housing dimensions (m)
 const W = 0.0165;
@@ -253,8 +254,8 @@ export interface PhotoEyeExtraProps {
   /** Catalog text on the side label. */
   catalog?: string;
   /**
-   * Where the yellow cordset goes (parent coordinates). Default: with mount='post' it is tied down the post
-   * and enters the base clamp (the machine frame); otherwise it drops to a floor conduit stub.
+   * Where the yellow cordset goes (parent coordinates, or 'floor' for a floor conduit stub). Default: with
+   * mount='post' it is tied down the post and enters the base clamp (the machine frame); otherwise none.
    */
   cableTo?: CableRoute;
   onClick?: () => void;
@@ -295,7 +296,7 @@ export function PhotoEye42EF({
       }),
     [],
   );
-  useEffect(() => () => lensMat.dispose(), [lensMat]);
+  useDisposeOnUnmount(lensMat);
 
   const beamGeo = geo('beamUnit', () => {
     const g = new THREE.CylinderGeometry(1, 1, 1, 10, 1, true);
@@ -328,13 +329,8 @@ export function PhotoEye42EF({
     [],
   );
 
-  useEffect(
-    () => () => {
-      beamMat.dispose();
-      coreMat.dispose();
-    },
-    [beamMat, coreMat],
-  );
+  useDisposeOnUnmount(beamMat);
+  useDisposeOnUnmount(coreMat);
 
   useFrame(({ clock }) => {
     const blocked = getBlocked();

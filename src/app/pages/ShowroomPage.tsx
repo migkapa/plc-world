@@ -5,7 +5,7 @@ import { AlertTriangle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useParams } from 'wouter';
 import { useGame } from '../../game/store';
-import { cn } from '../../ui';
+import { cn, hasWebGL } from '../../ui';
 import { useReducedMotion } from '../hud/prefs';
 import { useMedia } from '../reference/useMedia';
 import { routes } from '../routes';
@@ -16,6 +16,7 @@ import { DeviceList, DevicePicker } from '../showroom/DeviceList';
 import { InfoCard } from '../showroom/InfoCard';
 import { STAGES } from '../showroom/stages';
 import { DeviceViewer } from '../showroom/Viewer';
+import { useDocumentTitle } from '../useDocumentTitle';
 import '../showroom/showroom.css';
 
 const EXPLORED_KEY = 'plc-world-showroom-explored-v1';
@@ -45,7 +46,9 @@ export default function ShowroomPage() {
   const found = getShowroomDevice(requested);
   const device = found ?? getShowroomDevice(DEFAULT_SHOWROOM_DEVICE)!;
   const unknown = requested && !found ? requested : undefined;
+  useDocumentTitle(`${device.catalog} ${device.name} · Showroom`);
   const stage = STAGES[device.id]!;
+  const [webgl] = useState(hasWebGL);
   const demo = useMemo(() => new DemoStore(stage.defaults), [stage]);
   const reducedMotion = useReducedMotion();
   const quality = useGame((s) => s.profile.settings.quality);
@@ -93,23 +96,35 @@ export default function ShowroomPage() {
 
   const viewer = (
     <div className="relative h-full min-h-0 overflow-hidden rounded-xl border border-edge bg-[#161b22] shadow-inner shadow-black/40">
-      <DeviceViewer
-        device={device}
-        stage={stage}
-        demo={demo}
-        active={active}
-        onActive={onActive}
-        seen={seen}
-        showHotspots={showHotspots}
-        onToggleHotspots={() => setShowHotspots((v) => !v)}
-        quality={quality}
-        reducedMotion={reducedMotion}
-        homeSignal={homeSignal}
-        onHome={() => {
-          setActive(null);
-          setHomeSignal((n) => n + 1);
-        }}
-      />
+      {webgl ? (
+        <DeviceViewer
+          device={device}
+          stage={stage}
+          demo={demo}
+          active={active}
+          onActive={onActive}
+          seen={seen}
+          showHotspots={showHotspots}
+          onToggleHotspots={() => setShowHotspots((v) => !v)}
+          quality={quality}
+          reducedMotion={reducedMotion}
+          homeSignal={homeSignal}
+          onHome={() => {
+            setActive(null);
+            setHomeSignal((n) => n + 1);
+          }}
+        />
+      ) : (
+        // without WebGL the viewer cannot start (it used to crash the page): the specs and hotspot notes still work
+        <div className="absolute inset-0 flex items-center justify-center p-6 text-center" data-testid="showroom-no-webgl">
+          <div className="max-w-sm text-sm text-slate-400">
+            <div className="font-semibold text-slate-200">3D viewer unavailable (WebGL is disabled)</div>
+            <p className="mt-1.5 text-xs leading-relaxed">
+              The {device.catalog} specs, status indicators and wiring notes are all in the info card.
+            </p>
+          </div>
+        </div>
+      )}
       {/* device title: bottom-left (clear of the toolbar and most hotspots); hidden while a hotspot callout is open */}
       <div
         aria-hidden

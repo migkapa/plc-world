@@ -56,19 +56,20 @@
   }
 }
 
+/* transform / opacity only (compositor-friendly: no repaint per frame, unlike an animated filter) */
 @keyframes pw-flicker {
   0%,
   100% {
     transform: scale(1) rotate(0deg);
-    filter: brightness(1);
+    opacity: 1;
   }
   25% {
     transform: scale(1.06, 0.96) rotate(-3deg);
-    filter: brightness(1.15);
+    opacity: 0.92;
   }
   60% {
     transform: scale(0.97, 1.05) rotate(2deg);
-    filter: brightness(0.95);
+    opacity: 1;
   }
 }
 
@@ -111,21 +112,26 @@
   }
 }
 
+/*
+ * Decorative loops run a few cycles after they appear, then rest in their static pose: an endless animation
+ * costs a repaint (or composite) every frame for the whole visit — the campaign map ran at ~2/3 of the frame
+ * rate with them on a software rasteriser.
+ */
 .pw-flame {
   transform-origin: 50% 90%;
-  animation: pw-flicker 1.6s ease-in-out infinite;
+  animation: pw-flicker 1.6s ease-in-out 6;
 }
 
 .pw-halo {
-  animation: pw-halo 1.8s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+  animation: pw-halo 1.8s cubic-bezier(0.2, 0.6, 0.4, 1) 8;
 }
 
 .pw-bob {
-  animation: pw-bob 2.2s ease-in-out infinite;
+  animation: pw-bob 2.2s ease-in-out 6;
 }
 
 .pw-dash {
-  animation: pw-dash 1.1s linear infinite;
+  animation: pw-dash 1.1s linear 12;
 }
 
 .pw-fade-up {
@@ -133,7 +139,7 @@
 }
 
 .pw-bar-shine {
-  animation: pw-bar-shine 2.8s ease-in-out infinite;
+  animation: pw-bar-shine 2.8s ease-in-out 3 forwards;
 }
 
 /* Hide scrollbars on horizontal carousels while keeping them scrollable. */

@@ -8,10 +8,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'wouter';
 import { sfx } from '../../audio/sfx';
 import type { LadderEditorHandle } from '../../editor';
+import { describeDemoStart } from '../../sim/demo';
 import { createProjectForScene } from '../../sim/project';
 import { SCENE_LOGICS } from '../../sim/scenes';
 import { SCENES } from '../../sim/scenes/views';
-import type { SceneLogic } from '../../sim/types';
+import type { SceneDefinition, SceneLogic } from '../../sim/types';
 import { useSimLoop } from '../../sim/useSimLoop';
 import { Badge, Button, Modal, toast } from '../../ui';
 import { routes } from '../routes';
@@ -31,6 +32,7 @@ import { useWorkspaceRuntime } from '../workspace/useWorkspaceRuntime';
 import { WorkspaceLayout } from '../workspace/WorkspaceLayout';
 import '../workspace/anim.css';
 import { PENDING_ROUTINES } from '../workspace/Docks';
+import { useDocumentTitle } from '../useDocumentTitle';
 
 /** Sandbox time is reported in chunks while the page is visible. */
 const SANDBOX_TIME_CHUNK_MS = 30_000;
@@ -43,6 +45,12 @@ function hashParams(): URLSearchParams {
 }
 
 /** A fresh sandbox program: one empty rung with a friendly, plant-specific comment. */
+/** Toast body after "Load example": demo programs never start by themselves, so say how to start this one. */
+function exampleHint(def: SceneDefinition<unknown> | undefined): string {
+  const start = def ? describeDemoStart(def.logic, def.demoStart) : null;
+  return start ? `Like the real machine it waits for the operator: ${start[0]!.toLowerCase()}${start.slice(1)}` : 'Operate the plant and watch the rungs light up.';
+}
+
 function emptyProgram(scene: SceneLogic<unknown>): ProgramSnapshot {
   const input = scene.io.find((p) => p.dir === 'input' && p.signal === 'digital')?.alias ?? 'Start_PB';
   const output = scene.io.find((p) => p.dir === 'output' && p.signal === 'digital')?.alias ?? 'Motor';
@@ -62,6 +70,7 @@ export default function SandboxPage() {
   const [start, setStart] = useState<Start | null>(null);
   const [error, setError] = useState<string | null>(null);
   const scene = sceneId ? SCENE_LOGICS[sceneId] : undefined;
+  useDocumentTitle(scene ? `Sandbox · ${scene.title}` : 'Sandbox');
   const resolved = useRef<string | null>(null);
 
   // Resolve the start program (share code / slot / working copy) whenever the scene changes.
@@ -334,7 +343,7 @@ function SandboxWorkspace({ scene, start, onLoadSlot }: { scene: SceneLogic<unkn
         </button>
       </div>
       <div className="flex flex-wrap items-center justify-end gap-1">
-      <Button size="sm" variant="ghost" icon={<Sparkles size={14} className="text-amber-300" />} disabled={!definition?.demoRungs?.length} onClick={() => guarded('Load the example program?', 'Your current program is replaced (it stays in its save slot if you saved it).', () => { if (loadDoc({ rungs: definition?.demoRungs ?? [''], comments: [], tags: definition?.demoTags ?? [] }, 'Example program')) toast({ tone: 'info', title: 'Example program loaded', body: 'Operate the plant and watch the rungs light up.' }); })} data-testid="load-example" title="Load the plant's demo program">
+      <Button size="sm" variant="ghost" icon={<Sparkles size={14} className="text-amber-300" />} disabled={!definition?.demoRungs?.length} onClick={() => guarded('Load the example program?', 'Your current program is replaced (it stays in its save slot if you saved it).', () => { if (loadDoc({ rungs: definition?.demoRungs ?? [''], comments: [], tags: definition?.demoTags ?? [] }, 'Example program')) toast({ tone: 'info', title: 'Example program loaded', body: exampleHint(definition) }); })} data-testid="load-example" title="Load the plant's demo program">
         <span className="hidden lg:inline">Example</span>
       </Button>
       <Button size="sm" variant="ghost" icon={<FilePlus2 size={14} />} onClick={() => guarded('Start a new program?', 'The current program is replaced by an empty routine.', () => loadDoc({ ...emptyProgram(scene) }, 'Untitled'))} title="New empty program">

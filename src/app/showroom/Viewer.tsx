@@ -14,6 +14,7 @@ import { ContactShadow } from './ContactShadow';
 import { spreadMarkers } from './spreadMarkers';
 import type { DemoStore } from './demo';
 import type { StageDef } from './stages';
+import { useDisposeOnUnmount } from '../../twin/dispose';
 
 export interface DeviceViewerProps {
   device: ShowroomDevice;
@@ -175,7 +176,7 @@ function CameraDirector({ device, active, homeSignal, reducedMotion }: { device:
 
 function Floor({ y, size, deviceId, demo, live }: { y: number; size: number; deviceId: string; demo: DemoStore; live: boolean }) {
   const ringMat = useMemo(() => new THREE.MeshBasicMaterial({ color: '#e0252b', transparent: true, opacity: 0.35, toneMapped: false }), []);
-  useEffect(() => () => ringMat.dispose(), [ringMat]);
+  useDisposeOnUnmount(ringMat);
   const r = size * 0.95;
   return (
     <group position={[0, y, 0]}>

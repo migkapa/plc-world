@@ -8,6 +8,8 @@
  * - the starter program fails (verification error or at least one failing test)
  * - wrong answers (src/game/missions/chN.wrong.ts): each verifies and FAILS at least one test
  * - alternative correct answers (exports named *RIGHT in the same files): each PASSES every test
+ * - objectives: an explicit objective → test map (objectiveTests); the solution ticks every objective and
+ *   every wrong answer crosses at least one (the checklist never shows all ticks on a failing program)
  *
  * Run one mission: npx vitest run src/game/missions.test.ts -t "2-3"
  */
@@ -15,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import { CHAPTERS, getChapter } from './chapters';
 import { MISSIONS, getMission, missionsByChapter, nextMission } from './missions';
 import { normalizeWrongAnswer, type WrongAnswerSet } from './missions/authoring';
+import { lintObjectives, objectiveStates } from './objectives';
 import type { MissionDef, MissionRunResult } from './types';
 import { SCENE_LOGICS } from '../sim/scenes';
 import {
@@ -128,6 +131,10 @@ describe.each(MISSIONS.map((m) => [m.id, m] as [string, MissionDef]))('mission %
     expect(lintMission(m)).toEqual([]);
   });
 
+  it('maps every objective to the tests / invariants that prove it', () => {
+    expect(lintObjectives(m)).toEqual([]);
+  });
+
   it('tests stay within a sane simulated duration', () => {
     for (const t of m.tests) expect(maxTestDurationMs(t), `test '${t.name}'`).toBeLessThanOrEqual(240_000);
   });
@@ -143,6 +150,7 @@ describe.each(MISSIONS.map((m) => [m.id, m] as [string, MissionDef]))('mission %
     const r = runMission(m, solutionProject(m));
     const ms = performance.now() - t0;
     expect(r.passed, describeFailures(r)).toBe(true);
+    expect(objectiveStates(m, r.tests, false)).toEqual(m.objectives.map(() => 'passed'));
     expect(r.stars).toBe(3);
     expect(runMission(m, solutionProject(m), { hintsUsed: 1 }).stars).toBe(2);
     const again = runMission(m, m.solution.rungs);
@@ -163,6 +171,8 @@ describe.each(MISSIONS.map((m) => [m.id, m] as [string, MissionDef]))('mission %
         const r = runMission(m, { rungs: w.entry.rungs, ...(w.entry.tags ? { tags: w.entry.tags } : {}) }, { enforcePalette: false });
         expect(r.verifyErrors, `wrong answer in ${w.file} must verify so the TESTS are what reject it`).toEqual([]);
         expect(r.passed, `wrong answer in ${w.file} passed every test: ${w.entry.rungs.join(' ')}`).toBe(false);
+        const states = objectiveStates(m, r.tests, false);
+        expect(states, `the objectives checklist must cross at least one objective:\n${describeFailures(r)}`).toContain('failed');
       },
     );
   }
@@ -174,6 +184,7 @@ describe.each(MISSIONS.map((m) => [m.id, m] as [string, MissionDef]))('mission %
       (_i, _why, w) => {
         const r = runMission(m, { rungs: w.entry.rungs, ...(w.entry.tags ? { tags: w.entry.tags } : {}) });
         expect(r.passed, `alternative in ${w.file} should pass:\n${describeFailures(r)}`).toBe(true);
+        expect(objectiveStates(m, r.tests, false)).toEqual(m.objectives.map(() => 'passed'));
       },
     );
   }

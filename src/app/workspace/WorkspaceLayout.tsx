@@ -35,26 +35,51 @@ function storage(): Pick<Storage, 'getItem' | 'setItem'> {
   return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => void m.set(k, v) };
 }
 
+/** Grip dots in the middle of a separator: shows the split can be dragged (QA: nothing told beginners it exists). */
+function Grip({ vertical }: { vertical?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'pointer-events-none absolute top-1/2 left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center gap-[3px] rounded-full border border-edge bg-panel-3 shadow-sm group-data-[separator=active]:border-sky-400/70 group-data-[separator=hover]:border-sky-400/60',
+        vertical ? 'h-7 w-2.5 flex-col' : 'h-2.5 w-9',
+      )}
+    >
+      {[0, 1, 2].map((i) => (
+        <span key={i} className="h-[3px] w-[3px] rounded-full bg-slate-400 group-data-[separator=hover]:bg-sky-300" />
+      ))}
+    </span>
+  );
+}
+
 function HSeparator() {
   return (
-    <Separator className="group relative w-1.5 shrink-0 bg-panel outline-none data-[separator=active]:bg-sky-500/40 data-[separator=hover]:bg-sky-500/25">
+    <Separator className="group relative w-1.5 shrink-0 bg-panel outline-none data-[separator=active]:bg-sky-500/40 data-[separator=hover]:bg-sky-500/25" title="Drag to resize the panels">
       <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-edge group-data-[separator=hover]:bg-sky-400/60" />
+      <Grip vertical />
     </Separator>
   );
 }
 
 function VSeparator() {
   return (
-    <Separator className="group relative h-1.5 shrink-0 bg-panel outline-none data-[separator=active]:bg-sky-500/40 data-[separator=hover]:bg-sky-500/25">
+    <Separator
+      className="group relative h-2 shrink-0 bg-panel outline-none data-[separator=active]:bg-sky-500/40 data-[separator=hover]:bg-sky-500/25"
+      title="Drag to give the ladder or the 3D view more room (remembered; double-click resets)"
+    >
       <span className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-edge group-data-[separator=hover]:bg-sky-400/60" />
+      <Grip />
     </Separator>
   );
 }
 
-/** Share of the center column given to the 3D twin before the player resizes it (the rest is the ladder). */
+/**
+ * Share of the center column given to the 3D twin before the player resizes it (the rest is the ladder). Laptop
+ * heights (< 1000 px) favour the ladder: multi-rung missions otherwise need constant scrolling.
+ */
 export function defaultTwinShare(viewportHeight: number): number {
-  if (viewportHeight < 900) return 38;
-  if (viewportHeight < 1100) return 43;
+  if (viewportHeight < 1000) return 38;
+  if (viewportHeight < 1150) return 43;
   return 48;
 }
 

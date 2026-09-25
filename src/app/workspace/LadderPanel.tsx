@@ -57,22 +57,30 @@ export function editsStateOf(pendingReason: WorkspaceRuntime['pendingReason'], j
   return justApplied ? 'applied' : 'none';
 }
 
+/**
+ * "Edits applied online" confirmation: a pill that fades in and out (decorative, hidden from assistive tech) plus
+ * a polite live region that holds the text only while it is shown, so nothing announces a stale status.
+ */
 function AppliedIndicator({ visible }: { visible: boolean }) {
   return (
-    <span
-      className={cn(
-        'pointer-events-none absolute right-4 bottom-9 z-10 flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-950/90 px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap text-emerald-300 shadow-lg transition-opacity duration-700 @2xl:px-2',
-        visible ? 'opacity-100' : 'opacity-0',
-      )}
-      role="status"
-      aria-live="polite"
-      aria-label="Edits applied online"
-      title="Your rung edits were verified and accepted online — the plant kept running"
-      data-testid="edits-applied"
-    >
-      <CheckCircle2 size={12} />
-      <span className="hidden @2xl:inline">Edits applied online</span>
-    </span>
+    <>
+      <span className="sr-only" role="status" aria-live="polite" data-testid="edits-applied-status">
+        {visible ? 'Edits applied online' : ''}
+      </span>
+      <span
+        className={cn(
+          'pointer-events-none absolute right-4 bottom-9 z-10 flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-950/90 px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap text-emerald-300 shadow-lg transition-opacity duration-700 @2xl:px-2',
+          visible ? 'opacity-100' : 'opacity-0',
+        )}
+        aria-hidden="true"
+        title="Your rung edits were verified and accepted online — the plant kept running"
+        data-testid="edits-applied"
+        data-visible={visible ? '' : undefined}
+      >
+        <CheckCircle2 size={12} />
+        <span className="hidden @2xl:inline">Edits applied online</span>
+      </span>
+    </>
   );
 }
 

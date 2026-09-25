@@ -12,12 +12,12 @@
  *    mixed-use building in front of it whose vehicle passage leads to the street (cars appear / leave there),
  *  - the street beyond, neighbouring buildings, trees and street lights (kept out of the camera sight lines).
  */
-import { memo, useMemo, useRef } from 'react';
+import { memo, useMemo } from 'react';
 import * as THREE from 'three';
 import type { Vec3 } from '../../../twin/contracts';
 import { ClearanceBar, GroundSlab, ParkingSpace, RoadSegment, roadMats } from '../../../twin/devices';
 import { canvasTexture, FONT, kgeo, kmat } from '../trainer/kit';
-import { Bollards, Buildings, GroundPlane, PullBoxes, SkyDome, StaticInstances, StreetLights, Trees, useDisposeOnUnmount, useSubtreeMaterialPatch, type BuildingSpec, type InstXf } from '../traffic-light/cityKit';
+import { Bollards, Buildings, GroundPlane, PullBoxes, SkyDome, StaticInstances, StreetLights, Trees, useDisposeOnUnmount, type BuildingSpec, type InstXf } from '../traffic-light/cityKit';
 import { GARAGE_LAYOUT as Y } from './logic';
 
 export const CURB = 0.15;
@@ -372,11 +372,9 @@ function Markings() {
 }
 
 function Stalls() {
-  // painted stall numbers: matte paint like the lines (the kit's number decals bloomed under the sun)
-  const ref = useRef<THREE.Group>(null);
-  useSubtreeMaterialPatch(ref, (m) => m.transparent && !!m.map, { color: '#a8a7a0', roughness: 1, envMapIntensity: 0.35 });
+  // (the kit's stall lines + numbers are matte road paint at the source)
   return (
-    <group ref={ref}>
+    <group>
       {Y.spaces.map((sp, i) => {
         const row = sp.row;
         const neighbourLeft = Y.spaces.some((o) => o.row === row && Math.abs(o.x - (sp.x - Y.stallWidth)) < 0.01);

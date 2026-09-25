@@ -13,10 +13,11 @@
  *  - The 12 load-switch indicators mirror the PLC outputs (LS2 = NS heads, LS4 = EW heads, LS6/LS8 = their
  *    other approaches, LS10 = the pedestrian head: red = DON'T WALK, green = WALK).
  *
- * Far away, the interior swaps to a 3-mesh impostor; walls, roof and the closed door block clicks.
+ * Far away, the interior swaps to a 2-mesh impostor (the rack to its built-in one); walls, roof and the closed door
+ * block clicks.
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { sfx } from '../../../audio/sfx';
 import type { Vec3 } from '../../../twin/contracts';
@@ -37,8 +38,8 @@ import {
 import { rackLiveFromController } from '../../../twin/live';
 import type { SimRuntime } from '../../types';
 import { audioAllowed, IoTag, ioLine, kgeo, kmat, textLine, type TagGroup } from '../trainer/kit';
-import { DistanceSwitch } from '../trainer/rackLod';
-import { ClickBlocker, KeySwitch800F, useNoCastShadow } from './cityKit';
+import { DistanceLod } from '../../../twin/lod';
+import { ClickBlocker, KeySwitch800F, useDisposeOnUnmount, useNoCastShadow } from './cityKit';
 import type { TrafficLightState } from './logic';
 
 /** Controller layout on the back panel (back-panel coordinates, see SIGNAL_CABINET_DIMS.controllerZone). */
@@ -138,9 +139,11 @@ export function TrafficCabinet({
         }
       >
         <group ref={interior}>
-          <DistanceSwitch
+          {/* the rack has its own built-in LOD (one-draw-call impostor when it is a few dozen pixels wide) */}
+          <CompactLogixRack hardware={runtime.scene.hardware} live={live} wiring={RACK_WIRING} position={[RACK.x, RACK.y, 0]} />
+          <DistanceLod
             distance={7}
-            near={<Interior state={state} runtime={runtime} live={live} layout={layout} tagGroup={tagGroup} />}
+            near={<Interior state={state} layout={layout} tagGroup={tagGroup} />}
             far={<InteriorImpostor />}
           />
           <ShelfIndicators state={state} runtime={runtime} />
@@ -158,29 +161,23 @@ export function TrafficCabinet({
 
 type RackLayout = ReturnType<typeof layoutCompactLogixRack>;
 
-/** Live rack, supply, terminals, ducts and wiring (back-panel coordinates). */
+/** Rack slot tags, supply, terminals, ducts and wiring (back-panel coordinates; the rack itself is outside). */
 function Interior({
   state,
-  runtime,
-  live,
   layout,
   tagGroup,
 }: {
   state: TrafficLightState;
-  runtime: SimRuntime;
-  live: ReturnType<typeof rackLiveFromController>;
   layout: RackLayout;
   tagGroup?: TagGroup;
 }) {
   void state;
   void tagGroup;
-  const hardware = runtime.scene.hardware;
   const tbLabels = ['+24', '+24', '0V', '0V', 'I0', 'I1', 'I2', 'O0', 'O1', 'O2', 'O3', 'O4', 'O5', 'O6', 'O7', 'PE'];
   const tbColors = tbLabels.map((l) => (l === '0V' ? TB_COLORS.blue : l === '+24' ? TB_COLORS.red : TB_COLORS.gray));
   const wires = useMemo(() => buildWires(layout), [layout]);
   return (
     <group>
-      <CompactLogixRack hardware={hardware} live={live} wiring={{ 1: [0, 1, 2], 2: [0, 1, 2, 3, 4, 5, 6, 7] }} position={[RACK.x, RACK.y, 0]} />
       {layout.slots.map((s) => (
         <IoTag
           key={s.slot}
@@ -294,14 +291,15 @@ function buildWires(layout: RackLayout) {
   return { single, bundles };
 }
 
-/** Far-away stand-in for the interior (rack + supply + strip silhouettes). */
+/** Field wiring on the rack's RTBs (slot → points in use). */
+const RACK_WIRING = { 1: [0, 1, 2], 2: [0, 1, 2, 3, 4, 5, 6, 7] };
+
+/** Far-away stand-in for the interior (supply + strip silhouettes; the rack brings its own impostor). */
 function InteriorImpostor() {
-  const dark = kmat('tl:impDark', () => new THREE.MeshStandardMaterial({ color: '#1d2023', roughness: 0.55 }));
   const light = kmat('tl:impLight', () => new THREE.MeshStandardMaterial({ color: '#c9ccce', roughness: 0.6 }));
   const box = kgeo('tl:impBox', () => new THREE.BoxGeometry(1, 1, 1));
   return (
     <group>
-      <mesh geometry={box} material={dark} position={[RACK.x, RACK.y + 0.072, 0.075]} scale={[0.155, 0.145, 0.14]} />
       <mesh geometry={box} material={light} position={[PSU_X, RAIL2.y, 0.06]} scale={[0.06, 0.124, 0.11]} />
       <mesh geometry={box} material={light} position={[0, TOP_DUCT.y, 0.025]} scale={[0.46, 0.034, 0.05]} />
     </group>
@@ -354,14 +352,13 @@ function ShelfIndicators({ state, runtime }: { state: TrafficLightState; runtime
     t.colorSpace = THREE.SRGBColorSpace;
     return new THREE.MeshBasicMaterial({ map: t, toneMapped: false });
   }, []);
-  useEffect(
-    () => () => {
-      legend.map?.dispose();
-      legend.dispose();
-      for (const m of Object.values(mats)) m.dispose();
-    },
-    [legend, mats],
-  );
+  useDisposeOnUnmount(legend, () => {
+    legend.map?.dispose();
+    legend.dispose();
+  });
+  useDisposeOnUnmount(mats, () => {
+    for (const m of Object.values(mats)) m.dispose();
+  });
   return (
     <group>
       {/* MMU front: POWER + CONFLICT */}

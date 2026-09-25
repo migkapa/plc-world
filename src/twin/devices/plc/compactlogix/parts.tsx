@@ -5,11 +5,12 @@
  */
 import { useCursor } from '@react-three/drei';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { LED_HEX, materials, type LedColor, type LedMode } from '../../../common';
 import { canvasTexture, dotColumns } from './canvas';
 import { box, cachedGeometry, mergeColored, plane, roundedBox, screwHeadGeometry, xf } from './geometry';
+import { useDisposeOnUnmount } from '../../../dispose';
 
 // ---------------------------------------------------------------------------
 // Shared materials
@@ -233,10 +234,10 @@ export function DotMatrixDisplay({
     const mat = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false, color: new THREE.Color(2.3, 2.3, 2.3) });
     return { canvas, ctx: canvas.getContext('2d')!, tex, mat, raw: '\u0000', text: '', cols: [] as number[], t0: 0, scroll: -9999 };
   }, [cells]);
-  useEffect(() => () => {
+  useDisposeOnUnmount(st, () => {
     st.tex.dispose();
     st.mat.dispose();
-  }, [st]);
+  });
 
   useFrame(({ clock }) => {
     const t = clock.elapsedTime;

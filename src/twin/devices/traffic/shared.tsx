@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { LedMode } from '../../common';
+import { useDisposeOnUnmount } from '../../dispose';
 
 // ---------------------------------------------------------------------------
 // Units & colors
@@ -32,8 +33,12 @@ export const TRAFFIC_COLORS = {
   galvanized: '#a6aba9',
   asphalt: '#3a3b3d',
   concrete: '#b9b6ae',
-  markingWhite: '#ecebe4',
-  markingYellow: '#f0b00e',
+  /**
+   * Road paint albedo. Thermoplastic / traffic paint is a diffuse, matte ~55 % reflector (NOT paper white): with a
+   * brighter albedo the street sun lifts it over the Stage's bloom threshold and the markings glow like the lamps.
+   */
+  markingWhite: '#a09f98',
+  markingYellow: '#c38f10',
   /** Sealant in saw-cut loop slots. */
   loopSealant: '#101010',
 } as const;
@@ -622,8 +627,10 @@ export function markingMat(color: string): THREE.MeshStandardMaterial {
     () =>
       new THREE.MeshStandardMaterial({
         color,
-        roughness: 0.62,
+        // matte (no sun glint) and only a faint sky reflection, so paint never reaches bloom levels
+        roughness: 1,
         metalness: 0,
+        envMapIntensity: 0.35,
         polygonOffset: true,
         polygonOffsetFactor: -2,
         polygonOffsetUnits: -2,
@@ -777,5 +784,5 @@ export const damp = THREE.MathUtils.damp;
 
 /** Dispose per-instance materials/geometries when the component unmounts. */
 export function useDisposable(items: readonly { dispose: () => void }[]): void {
-  useEffect(() => () => items.forEach((i) => i.dispose()), [items]);
+  useDisposeOnUnmount(items);
 }

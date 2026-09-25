@@ -14,6 +14,7 @@ import type { BranchNode, Rung, TagDef } from '@/plc/types';
 import { createProjectForScene } from '@/sim/project';
 import { trainerLogic } from '@/sim/scenes';
 import { ControllerOrganizer } from './ControllerOrganizer';
+import { prefixMatch, type AutoItem } from './EditorOverlays';
 import { LadderEditor, checkRungText, type LadderEditorHandle, type LadderEditorProps } from './LadderEditor';
 import { OnlineToolbar } from './OnlineToolbar';
 
@@ -242,17 +243,52 @@ describe('operand autocomplete', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('Enter keeps the typed text when several tags match the prefix', async () => {
+  it('Enter takes the first matching tag when several match the prefix (QA: "sw" + Enter gave an undefined tag)', async () => {
     const c = trainerController(['XIC(Motor_Run)OTE(Light_0);'], [...tags, { name: 'Motor_Stop', dataType: 'BOOL' }]);
     const rs = c.project.programs[0]!.routines[0]!.rungs;
     const m = mount(rs, { controller: c });
-    act(() => m.ref.current!.setSelection({ rungId: rs[0]!.id, elementId: idOf(rs[0]!, 1), operandIndex: 0 }));
+    act(() => m.ref.current!.setSelection({ rungId: rs[0]!.id, elementId: idOf(rs[0]!, 0), operandIndex: 0 }));
     act(() => m.ref.current!.editOperand());
-    const input = screen.getByRole('textbox', { name: /OTE/ });
+    const input = screen.getByRole('textbox', { name: /XIC/ });
+    fireEvent.change(input, { target: { value: 'sw' } });
+    // the row Enter takes is marked, and the footer says so
+    const options = within(screen.getByRole('listbox')).getAllByRole('option');
+    const marked = options.find((o) => o.querySelector('[data-enter-pick]'));
+    expect(marked?.textContent).toMatch(/^Switch_0/);
+    expect(document.body.textContent).toMatch(/Enter use Switch_0/);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await wait();
+    expect(texts(m.state.rungs)[0]).toBe('XIC(Switch_0)OTE(Light_0);');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('Enter keeps the typed prefix when the user explicitly chose "New tag"', async () => {
+    const { c, m, input } = setup();
     fireEvent.change(input, { target: { value: 'Motor' } });
+    // the "New tag 'Motor'" row is the first one: highlight it, then Enter
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(document.body.textContent).toMatch(/Enter new tag/); // the footer follows the highlight
     fireEvent.keyDown(input, { key: 'Enter' });
     await wait();
     expect(texts(m.state.rungs)[0]).toBe('XIC(Motor_Run)OTE(Motor);');
+    const dialog = screen.getByRole('dialog');
+    expect((within(dialog).getByRole('textbox', { name: 'Tag name' }) as HTMLInputElement).value).toBe('Motor');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(c.tags.getDef('Motor')).toBeUndefined();
+  });
+
+  it('prefixMatch: the first selectable prefix match, never over an exact match or an action row', () => {
+    const items: AutoItem[] = [
+      { key: 'new', value: 'Mo', primary: "New tag 'Mo'", action: 'newTag' },
+      { key: 'c', value: 'Mode_Off', primary: 'Mode_Off', disabled: true },
+      { key: 'a', value: 'Motor_Run', primary: 'Motor_Run' },
+      { key: 'b', value: 'Mixer', primary: 'Mixer' },
+    ];
+    expect(prefixMatch(items, 'mo')?.value).toBe('Motor_Run'); // Mode_Off is disabled, the action row is not a tag
+    expect(prefixMatch(items, 'M')?.value).toBe('Motor_Run'); // several matches: the first one (as Tab)
+    expect(prefixMatch(items, 'mixer')).toBeUndefined(); // exact: keep what was typed
+    expect(prefixMatch(items, '  ')).toBeUndefined();
+    expect(prefixMatch(items, 'Pump')).toBeUndefined();
   });
 
   it('↑/↓ then Enter picks a suggestion; Tab completes', async () => {
@@ -309,6 +345,39 @@ describe('ASCII quick entry', () => {
     fireEvent.keyDown(screen.getByRole('textbox', { name: 'ASCII instruction entry' }), { key: 'Enter' });
     await wait();
     expect(texts(m.state.rungs)).toEqual(['XIC(Motor_Run)XIC(Motor)OTE(Light_0);']);
+  });
+
+  it('survives 100 keystrokes queued in one task (QA: React #185 dropped a character behind slow frames)', () => {
+    const c = trainerController(['XIC(Switch_0)OTE(Light_0);']);
+    const rs = c.project.programs[0]!.routines[0]!.rungs;
+    const m = mount(rs, { controller: c });
+    act(() => m.ref.current!.setSelection({ rungId: rs[0]!.id, wireIndex: 1 }));
+    act(() => m.ref.current!.startQuickEntry('['));
+    const input = screen.getByRole('textbox', { name: 'ASCII instruction entry' }) as HTMLInputElement;
+    const want = '[XIC(Start_PB),XIC(Motor_Starter)]XIC(Stop_PB)XIC(EStop_OK)XIC(OL_OK)OTE(Motor_Starter);XIC(A)OTE(B);';
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    // like keystrokes delivered back to back after a long frame: no act(), no chance for React's scheduler to run
+    // between them (each one is a discrete, synchronous update)
+    const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const prev = g.IS_REACT_ACT_ENVIRONMENT;
+    g.IS_REACT_ACT_ENVIRONMENT = false;
+    const errors: unknown[] = [];
+    const onError = (e: ErrorEvent) => {
+      errors.push(e.error);
+      e.preventDefault();
+    };
+    window.addEventListener('error', onError);
+    try {
+      for (let i = 2; i <= want.length; i++) {
+        setValue.call(input, want.slice(0, i));
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    } finally {
+      window.removeEventListener('error', onError);
+      g.IS_REACT_ACT_ENVIRONMENT = prev;
+    }
+    expect(errors.map(String)).toEqual([]);
+    expect(input.value).toBe(want);
   });
 
   it('an unknown mnemonic is reported with a Tab hint; Tab completes the token', () => {

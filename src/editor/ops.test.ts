@@ -196,6 +196,28 @@ describe('move', () => {
     expect(moveElement(rungs, r.id, idOf(r, 0), -1)).toBe(rungs);
   });
 
+  it('Alt+→ / Alt+← at the end of a branch leg steps out of the branch (QA: it stopped silently)', () => {
+    // EStop_OK put into the top leg of the seal-in branch by mistake
+    const rungs = rungsOf('[XIC(Start_PB)XIC(EStop_OK),XIC(Motor)]XIC(Stop_PB)OTE(Motor);');
+    const r = rungs[0]!;
+    const estop = idOf(r, 1);
+    const out = moveElement(rungs, r.id, estop, 1);
+    expect(text(out[0])).toBe('[XIC(Start_PB),XIC(Motor)]XIC(EStop_OK)XIC(Stop_PB)OTE(Motor);');
+    // first element of a leg, Alt+←: before the branch
+    const left = moveElement(rungs, r.id, idOf(r, 0), -1);
+    expect(text(left[0])).toBe('XIC(Start_PB)[XIC(EStop_OK),XIC(Motor)]XIC(Stop_PB)OTE(Motor);');
+    // the last element of a leg: the emptied leg goes, a single remaining leg collapses
+    const two = rungsOf('XIC(A)[XIC(B),XIC(C)]OTE(D);');
+    const t = two[0]!;
+    expect(text(moveElement(two, t.id, idOf(t, 2), 1)[0])).toBe('XIC(A)XIC(B)XIC(C)OTE(D);');
+    // nested: steps out one level only
+    const nested = rungsOf('[XIC(A)[XIC(B),XIC(C)],XIC(D)]OTE(E);');
+    const n = nested[0]!;
+    expect(text(moveElement(nested, n.id, idOf(n, 1), 1)[0])).toBe('[XIC(A)XIC(C)XIC(B),XIC(D)]OTE(E);');
+    // main series ends still do nothing
+    expect(moveElement(two, t.id, idOf(t, 3), 1)).toBe(two);
+  });
+
   it('moves an element to another place (drag & drop)', () => {
     const rungs = rungsOf('XIC(A)XIO(B)OTE(C);', 'XIC(D)OTE(E);');
     const [r0, r1] = rungs as [Rung, Rung];

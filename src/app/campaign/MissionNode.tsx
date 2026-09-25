@@ -82,10 +82,11 @@ export function MissionNodeButton({ node, state, stars, color, selected, current
       {/* pulsing halo for the playable node */}
       {state === 'available' && (
         <span
-          className={cn('pointer-events-none absolute inset-0', boss ? '' : 'rounded-full', !reducedMotion && 'pw-halo')}
+          className={cn('pointer-events-none absolute inset-0', boss ? '' : 'rounded-full', !reducedMotion && current && 'pw-halo')}
           style={{
             boxShadow: `0 0 0 3px ${color}`,
-            opacity: reducedMotion ? 0.35 : undefined,
+            // only the NEXT node pulses; other playable nodes keep a quiet ring
+            opacity: reducedMotion || !current ? 0.35 : undefined,
             clipPath: boss ? 'polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%)' : undefined,
             background: boss ? `${color}55` : undefined,
           }}

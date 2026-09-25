@@ -11,13 +11,14 @@
  *  <LocalIndicator>  LI/TI-101 dual-line field display on the platform handrail (level, temperature, heater / mixer).
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Vec3 } from '../../../twin/contracts';
 import { steel, unitCylY } from '../conveyor-sort/hall';
 import { Glow } from '../conveyor-sort/kit';
 import type { TankProcessState } from './logic';
 import { SKID, SKID_H, TL } from './layout';
+import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 // ---------------------------------------------------------------------------
 // Heater cue
@@ -33,13 +34,8 @@ export function HeaterCue({ state }: { state: TankProcessState }) {
   const lamp = useRef<THREE.Mesh>(null);
   const lampOn = useMemo(() => new THREE.MeshStandardMaterial({ color: '#ffb347', emissive: '#ff9a1a', emissiveIntensity: 2.6, toneMapped: false, roughness: 0.3 }), []);
   const lampOff = useMemo(() => new THREE.MeshStandardMaterial({ color: '#6a4a1c', emissive: '#000000', roughness: 0.35 }), []);
-  useEffect(
-    () => () => {
-      lampOn.dispose();
-      lampOff.dispose();
-    },
-    [lampOn, lampOff],
-  );
+  useDisposeOnUnmount(lampOn);
+  useDisposeOnUnmount(lampOff);
   useFrame(() => {
     if (lamp.current) lamp.current.material = state.heaterOn ? lampOn : lampOff;
   });
@@ -193,16 +189,13 @@ export function TankFx({ state }: { state: TankProcessState }) {
       bubble: bubbleMaterial(),
     };
   }, []);
-  useEffect(
-    () => () => {
-      mats.stream.dispose();
-      mats.sheet.dispose();
-      mats.puddle.dispose();
-      mats.pop.dispose();
-      mats.bubble.dispose();
-    },
-    [mats],
-  );
+  useDisposeOnUnmount(mats, () => {
+    mats.stream.dispose();
+    mats.sheet.dispose();
+    mats.puddle.dispose();
+    mats.pop.dispose();
+    mats.bubble.dispose();
+  });
 
   // per-instance seeds
   const seeds = useMemo(() => Array.from({ length: NB }, (_, i) => ({ a: (i * 0.6180339) % 1, b: (i * 0.4142135) % 1, c: (i * 0.7320508) % 1 })), []);
@@ -215,13 +208,8 @@ export function TankFx({ state }: { state: TankProcessState }) {
     () => new THREE.PointsMaterial({ map: steamTexture(), size: 0.28, sizeAttenuation: true, transparent: true, opacity: 0.5, depthWrite: false, color: '#f4f7fa' }),
     [],
   );
-  useEffect(
-    () => () => {
-      steamGeo.dispose();
-      steamMat.dispose();
-    },
-    [steamGeo, steamMat],
-  );
+  useDisposeOnUnmount(steamGeo);
+  useDisposeOnUnmount(steamMat);
 
   const o = useMemo(() => new THREE.Object3D(), []);
   const inletTopY = TL.yT2 + 0.17;
@@ -469,7 +457,7 @@ export function LocalIndicator({ state, position, rotationY = 0 }: { state: Tank
     t.anisotropy = 4;
     return t;
   }, []);
-  useEffect(() => () => tex.dispose(), [tex]);
+  useDisposeOnUnmount(tex);
   const last = useRef('');
   const acc = useRef(1);
   useFrame((_, dt) => {

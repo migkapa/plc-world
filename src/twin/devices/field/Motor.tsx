@@ -8,7 +8,7 @@
  *               the gearbox body extends toward +Z, motor axis parallel to X (see `hand`).
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef, type RefObject } from 'react';
+import { useMemo, useRef, type RefObject } from 'react';
 import * as THREE from 'three';
 import type { MotorProps, Placement, Vec3 } from '../../contracts';
 import {
@@ -38,6 +38,7 @@ import {
   clickable,
   DEVICE_ROOT,
 } from './shared';
+import { useDisposeOnUnmount } from '../../dispose';
 
 export type MotorFrame = 'small' | 'medium' | 'large';
 
@@ -281,7 +282,7 @@ function OverheatSmoke({ get, position, spread }: { get: () => boolean; position
       ),
     [],
   );
-  useEffect(() => () => mats.forEach((m) => m.dispose()), [mats]);
+  useDisposeOnUnmount(mats);
   const level = useRef(0);
   useFrame(({ clock }, dt) => {
     level.current += ((get() ? 1 : 0) - level.current) * Math.min(1, dt * 0.8);
@@ -514,7 +515,7 @@ export function MotorBody({
 
   // Per-instance cast material (overload glow) unless the Motor passes its own.
   const ownMat = useMemo(() => (castMaterial ? null : hotCastMaterial(color)), [castMaterial, color]);
-  useEffect(() => () => ownMat?.dispose(), [ownMat]);
+  useDisposeOnUnmount(ownMat);
   const castMat = (castMaterial ?? ownMat)!;
   const coverMat = mat(`f:motorCover:${color}`, () => {
     const m = fm.sheet(color, 0.38).clone();
@@ -793,7 +794,7 @@ export interface MotorExtraProps {
   baseplate?: boolean;
   /** Override the shaft angle (radians) instead of integrating getRpm. */
   getShaftAngle?: () => number;
-  /** Flange mount: route of the conduit / power cable (default: floor stub). Foot mount uses a floor conduit. */
+  /** Flange mount: route of the conduit / power cable ('floor' = floor stub; default: none). Foot mount uses a floor conduit. */
   cableTo?: CableRoute;
   /** Smoke wisps while overloaded (default true). */
   overloadSmoke?: boolean;
@@ -822,7 +823,7 @@ export function Motor({
   const vib = useRef<THREE.Group>(null);
   // one per-instance cast material for frame, bells, box AND feet (overload glow must cover all of them)
   const castMat = useMemo(() => hotCastMaterial(color), [color]);
-  useEffect(() => () => castMat.dispose(), [castMat]);
+  useDisposeOnUnmount(castMat);
   const baseH = baseplate ? 0.02 * sc : 0;
 
   useFrame(({ clock }) => {
@@ -943,7 +944,7 @@ export interface GearMotorProps extends Placement {
   torqueArm?: number;
   /** Torque arm direction: angle (rad) around the output axis from straight down (-Y) toward +X. */
   torqueArmAngle?: number;
-  /** Route of the motor power cable (default: floor stub). */
+  /** Route of the motor power cable ('floor' = floor stub; default: none, the cable stops at the gland). */
   cableTo?: CableRoute;
   /** Part of a larger device (e.g. a conveyor drive): `cableTo` points are then in the PARENT coordinates of
    *  the enclosing device's root (e.g. the conveyor's parent). */

@@ -17,4 +17,6 @@ export const definition: SceneDefinition<MotorStationState> = {
   accent: '#f5c400',
   environment: 'hall',
   demoRungs: MOTOR_STATION_DEMO_RUNGS,
+  // the run command is operator-started: H-O-A to HAND, then START (seals in)
+  demoStart: [['hoa', 0], 'start'],
 };

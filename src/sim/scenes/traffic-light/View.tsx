@@ -9,7 +9,7 @@
  * The view never ticks the runtime: it reads `state` in useFrame and writes controls via runtime.setControl.
  */
 import { useFrame } from '@react-three/fiber';
-import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, memo, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { sfx } from '../../../audio/sfx';
 import type { Vec3 } from '../../../twin/contracts';
@@ -30,10 +30,10 @@ import {
 import type { SceneViewProps, SimRuntime } from '../../types';
 import { audioAllowed, canvasTexture, fitFont, IoTag, ioLine, kgeo, kmat, TagLayer, useSfxLoops, type TagGroup } from '../trainer/kit';
 import { TrafficCabinet } from './cabinet';
-import { useQuietPaint } from './cityKit';
 import { CABINET, OCCLUDERS, PARKED_CARS, ROAD, TrafficEnvironment } from './environment';
 import { glowTexture, PointSprites, smokeTexture, type SpriteBuffers } from './fx';
 import { TRAFFIC_GEOMETRY as G, type Approach, type Pedestrian as PedState, type TrafficLightState } from './logic';
+import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 type P = SceneViewProps<TrafficLightState>;
 
@@ -589,13 +589,10 @@ function CrashEffects({ state }: P) {
     }),
     [],
   );
-  useEffect(
-    () => () => {
-      signMats.streets.dispose();
-      signMats.walk.dispose();
-    },
-    [signMats],
-  );
+  useDisposeOnUnmount(signMats, () => {
+    signMats.streets.dispose();
+    signMats.walk.dispose();
+  });
   const cause = useRef<'streets' | 'walk'>('streets');
   const seed = (x: number, z: number) => (Math.round(x * 13.7 + z * 7.3) & 0xff) + 1;
   /** Billboard smoke: grey puffs that billow up and thin out over ~4 s. */
@@ -780,7 +777,6 @@ function useTrafficSound(state: TrafficLightState, runtime: SimRuntime) {
 
 export const TrafficLightView = memo(function TrafficLightView({ state, runtime }: P) {
   useTrafficSound(state, runtime);
-  useQuietPaint();
   const cabOcc: [Vec3, Vec3] = [
     [CABINET.x - 0.75, 0, CABINET.z - 0.75],
     [CABINET.x + 0.75, 1.6, CABINET.z + 0.75],

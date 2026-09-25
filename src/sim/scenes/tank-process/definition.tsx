@@ -1,9 +1,9 @@
 /**
  * Scene definition for `tank-process` (auto-registered by ../views.tsx). The demo program lives in ./demo.ts:
- * it does NOT start by itself — press START (a preview harness taps TANK_DEMO_START after loading).
+ * it does NOT start by itself — press START (previews apply `demoStart` = TANK_DEMO_START after loading).
  */
 import type { SceneDefinition } from '../../types';
-import { TANK_DEMO_RUNGS } from './demo';
+import { TANK_DEMO_RUNGS, TANK_DEMO_START } from './demo';
 import { tankProcessLogic, type TankProcessState } from './logic';
 import { TankProcessView } from './View';
 
@@ -22,4 +22,5 @@ export const definition: SceneDefinition<TankProcessState> = {
   accent: '#38bdf8',
   environment: 'hall',
   demoRungs: TANK_DEMO_RUNGS,
+  demoStart: TANK_DEMO_START,
 };

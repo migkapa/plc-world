@@ -48,7 +48,7 @@ import {
 } from '../../../twin/devices';
 import { rackLiveFromController } from '../../../twin/live';
 import type { SceneViewProps } from '../../types';
-import { GlowDisc, LampBoost } from '../trainer/fx';
+import { GlowDisc } from '../trainer/fx';
 import {
   Conduit,
   FONT,
@@ -71,7 +71,6 @@ import {
   useSfxLoops,
   type TagGroup,
 } from '../trainer/kit';
-import { DistanceSwitch, RackImpostor } from '../trainer/rackLod';
 import { rackCableRuns } from '../trainer/rackRuns';
 import { BAY_OCCLUDERS, BIN_OCCLUDER, MotorBay } from './Bay';
 import { CouplingGuard, DeckJunctionBox, DrivePlatform, InlineReducer, MACHINE_BLUE, headAngle } from './Drive';
@@ -358,12 +357,8 @@ function PanelInterior({ state, runtime }: P) {
       </DinRail>
       <Disconnect1494 position={[DS.x, DS.y, 0]} rodTo={WALL_IN_X} />
       {/* rack */}
-      {/* live rack near; a 3-draw-call impostor from the bay / operator views (rack ~40 px wide there) */}
-      <DistanceSwitch
-        distance={3}
-        near={<ControlLogixRack hardware={hardware} live={live} wired position={[RACK_X, RACK_Y, 0]} />}
-        far={<RackImpostor hardware={hardware} position={[RACK_X, RACK_Y, 0]} />}
-      />
+      {/* live rack near; the rack's built-in one-draw-call impostor from the bay / operator views (~40 px wide there) */}
+      <ControlLogixRack hardware={hardware} live={live} wired position={[RACK_X, RACK_Y, 0]} />
       {hardware.modules.map((mod) => (
         <IoTag
           key={mod.slot}
@@ -536,19 +531,13 @@ function Pedestal({ state, runtime }: P) {
         <PushButtonStation holes={1} color="yellow" {...E_OPTS} position={[ST_B.x, E_Y, pz]} autoPlace={false} gland={false} />
         {/* column A: READY / RUN / FAULT / H-O-A */}
         <IoTag position={hole(ST_A, holesA[0]!, ST_Y)} {...PBTAG} title="800F white LED pilot light" lines={[L('Ready_Light')]}>
-          <LampBoost color="white" getLit={lit.ready}>
-            <PilotLight800F color="white" legend="READY" getLit={lit.ready} rear={false} />
-          </LampBoost>
+          <PilotLight800F color="white" legend="READY" getLit={lit.ready} rear={false} />
         </IoTag>
         <IoTag position={hole(ST_A, holesA[1]!, ST_Y)} {...PBTAG} title="800F green LED pilot light" lines={[L('Run_Light')]}>
-          <LampBoost color="green" getLit={lit.run}>
-            <PilotLight800F color="green" legend="RUN" getLit={lit.run} rear={false} />
-          </LampBoost>
+          <PilotLight800F color="green" legend="RUN" getLit={lit.run} rear={false} />
         </IoTag>
         <IoTag position={hole(ST_A, holesA[2]!, ST_Y)} {...PBTAG} title="800F red LED pilot light" lines={[L('Fault_Light')]}>
-          <LampBoost color="red" getLit={lit.fault}>
-            <PilotLight800F color="red" legend="FAULT" getLit={lit.fault} rear={false} />
-          </LampBoost>
+          <PilotLight800F color="red" legend="FAULT" getLit={lit.fault} rear={false} />
         </IoTag>
         <IoTag
           position={hole(ST_A, holesA[3]!, ST_Y)}
@@ -615,9 +604,7 @@ function RemoteRunStation({ state, runtime }: P) {
       <group position={[REMOTE.x, REMOTE.y, z]}>
         <PushButtonStation holes={2} autoPlace={false} gland={false} />
         <IoTag position={holes[0]!} {...tag} title="Upstream line run request (relay contact)" lines={[L]}>
-          <LampBoost color="blue" getLit={on}>
-            <PilotLight800F color="blue" legend="REMOTE" getLit={on} rear={false} />
-          </LampBoost>
+          <PilotLight800F color="blue" legend="REMOTE" getLit={on} rear={false} />
         </IoTag>
         <IoTag
           position={holes[1]!}

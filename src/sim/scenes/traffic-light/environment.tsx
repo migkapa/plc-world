@@ -6,12 +6,13 @@
  * conduits, R9-3 "no pedestrian crossing / use crosswalk" signs on the three unmarked legs, a bus stop and
  * small street furniture. Everything here is static.
  */
-import { memo, useEffect, useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import * as THREE from 'three';
 import type { Vec3 } from '../../../twin/contracts';
 import { Intersection, ParkingSpace, roadMats } from '../../../twin/devices';
 import { canvasTexture, Conduit, FONT, fitFont, kgeo, kmat } from '../trainer/kit';
 import { Bollards, Buildings, grassTexture, GroundPlane, PostSign, PullBoxes, SkyDome, StaticInstances, StreetLights, Trees, type BuildingSpec, type InstXf, type StreetLightSpec, type TreeSpec } from './cityKit';
+import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 /** Road geometry used by the view (plan frame of TRAFFIC_GEOMETRY). */
 export const ROAD = {
@@ -305,13 +306,10 @@ function Planting() {
     t.needsUpdate = true;
     return new THREE.MeshStandardMaterial({ map: t, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   }, []);
-  useEffect(
-    () => () => {
-      lawn.map?.dispose();
-      lawn.dispose();
-    },
-    [lawn],
-  );
+  useDisposeOnUnmount(lawn, () => {
+    lawn.map?.dispose();
+    lawn.dispose();
+  });
   return (
     <group>
       <StaticInstances geometry={pitGeo} material={mulch} items={pits} castShadow={false} />

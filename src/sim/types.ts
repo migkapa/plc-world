@@ -107,7 +107,17 @@ export interface SceneDefinition<S = unknown> {
   demoRungs?: string[];
   /** Internal tags (BOOL / TIMER / COUNTER / DINT…) the demo program uses; loaded together with `demoRungs`. */
   demoTags?: TagDef[];
+  /**
+   * How to put the demo in motion: demo programs never start by themselves (like a real machine they wait for the
+   * operator). A preview taps these after loading `demoRungs` (see `applyDemoStart()` in src/sim/demo.ts): a string
+   * is a momentary control pressed once, `[id, value]` sets a control first (e.g. a selector to HAND). Absent: the
+   * demo runs on its own (trainer ramp, traffic sequencer, parking arrivals).
+   */
+  demoStart?: DemoStartStep[];
 }
+
+/** One step of `SceneDefinition.demoStart`: tap a momentary control, or set a control to a value. */
+export type DemoStartStep = string | readonly [control: string, value: boolean | number];
 
 /**
  * Couples a controller with a scene and runs them in lock-step with a fixed time step.

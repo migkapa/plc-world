@@ -15,9 +15,9 @@ import { VerticalBlurShader } from 'three/examples/jsm/shaders/VerticalBlurShade
 
 const RES = 512;
 
-/** Number of shadow renders so far (QA hook: `window.__showroomShadowRenders()`). */
+/** Number of shadow renders so far (dev-only QA hook: `window.__showroomShadowRenders()`; stripped from production builds). */
 let shadowRenders = 0;
-if (typeof window !== 'undefined') (window as unknown as { __showroomShadowRenders?: () => number }).__showroomShadowRenders = () => shadowRenders;
+if (import.meta.env.DEV && typeof window !== 'undefined') (window as unknown as { __showroomShadowRenders?: () => number }).__showroomShadowRenders = () => shadowRenders;
 /** Per-frame shadow updates after a device / demo change: at least this long AND this many frames. */
 const SETTLE_S = 2.5;
 const SETTLE_FRAMES = 30;

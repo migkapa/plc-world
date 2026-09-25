@@ -5,8 +5,10 @@ import { AchievementsGrid } from '../profile/AchievementsGrid';
 import { ProfileHero } from '../profile/ProfileHero';
 import { DangerZone, SettingsPanel } from '../profile/SettingsPanel';
 import { StatsPanel } from '../profile/StatsPanel';
+import { useDocumentTitle } from '../useDocumentTitle';
 
 export default function ProfilePage() {
+  useDocumentTitle('Profile');
   return (
     <div className="h-full overflow-x-hidden overflow-y-auto bg-[#0b0f14]">
       <ProfileHero />

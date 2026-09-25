@@ -8,6 +8,10 @@
  * `tick(realDtMs)` is driven by the animation loop: it scales by `speed`, honours `paused` and caps
  * the catch-up work (a background tab resuming does not freeze the page). UI listeners are notified
  * at most ~30 times per second. Headless (no React / DOM / three imports).
+ *
+ * Momentary controls are edge-latched: a press released before the next fixed step stays pressed for
+ * that one step, so the PLC always sees at least one scan of it (a quick tap between two slow animation
+ * frames is never lost).
  */
 import type { PlcController } from '../plc/types';
 import type { IoAccess, SceneLogic, SimRuntime } from './types';
@@ -65,6 +69,13 @@ class SimRuntimeImpl<S> implements SimRuntimeEx {
   private readonly controlListeners = new Set<ControlListener>();
   private readonly io: IoAccess;
   private readonly unsubController: () => void;
+  /** Fixed steps executed so far (for the momentary edge latch). */
+  private stepsDone = 0;
+  private readonly momentary: ReadonlySet<string>;
+  /** Momentary control id → `stepsDone` when it was pressed. */
+  private readonly pressedAt = new Map<string, number>();
+  /** Momentary releases that wait for the next fixed step (the press has not been scanned yet). */
+  private readonly deferredRelease = new Set<string>();
 
   constructor(controller: PlcController, scene: SceneLogic<S>, opts: SimRuntimeOptions) {
     this.controller = controller;
@@ -75,6 +86,7 @@ class SimRuntimeImpl<S> implements SimRuntimeEx {
     this.notifyInterval = Math.max(0, opts.notifyIntervalMs ?? 33);
     this.clock = opts.now ?? defaultNow();
     this.st = scene.createState();
+    this.momentary = new Set(scene.controls.filter((ct) => ct.type === 'momentary').map((ct) => ct.id));
     const c = controller;
     this.io = {
       readBool: (operand) => {
@@ -128,7 +140,13 @@ class SimRuntimeImpl<S> implements SimRuntimeEx {
     this.controller.scan(dt);
     this.time += dt;
     this.ver++;
+    this.stepsDone++;
     this.dirty = true;
+    if (this.deferredRelease.size > 0) {
+      const ids = [...this.deferredRelease];
+      this.deferredRelease.clear();
+      for (const id of ids) this.applyControl(id, false);
+    }
   }
 
   step(dtMs: number): void {
@@ -162,6 +180,21 @@ class SimRuntimeImpl<S> implements SimRuntimeEx {
   }
 
   setControl(id: string, value: boolean | number): void {
+    if (this.momentary.has(id)) {
+      if (value === true) {
+        this.deferredRelease.delete(id); // pressed again before the latched release: stay pressed
+        this.pressedAt.set(id, this.stepsDone);
+      } else if (value === false && this.pressedAt.get(id) === this.stepsDone && this.logic.getControl(this.st, id) === true) {
+        // released before any scan saw the press: keep it for the next fixed step
+        this.deferredRelease.add(id);
+        return;
+      }
+    }
+    this.applyControl(id, value);
+  }
+
+  private applyControl(id: string, value: boolean | number): void {
+    if (value === false) this.pressedAt.delete(id);
     this.logic.setControl(this.st, id, value);
     this.dirty = true;
     this.notify(true);
@@ -212,6 +245,8 @@ class SimRuntimeImpl<S> implements SimRuntimeEx {
     }
     this.time = 0;
     this.pending = 0;
+    this.pressedAt.clear();
+    this.deferredRelease.clear();
     this.ver++;
     this.dirty = true;
     this.notify(true);

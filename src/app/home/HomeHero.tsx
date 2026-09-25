@@ -7,7 +7,7 @@ import { getChapter } from '../../game/chapters';
 import { MISSIONS } from '../../game/missions';
 import { useGame } from '../../game/store';
 import type { ControllerStatus } from '../../plc/types';
-import { cn } from '../../ui';
+import { cn, hasWebGL } from '../../ui';
 import { campaignComplete, nextPlayableMission } from '../campaign/progress';
 import { usePlayerSummary } from '../hud/player';
 import { useReducedMotion } from '../hud/prefs';
@@ -46,21 +46,6 @@ function createLiveFeed(): LiveFeed {
       subs.forEach((fn) => fn());
     },
   };
-}
-
-let webglSupport: boolean | undefined;
-/** Can this browser create a WebGL context at all? (Checked once; the probe context is released.) */
-function hasWebGL(): boolean {
-  if (webglSupport !== undefined) return webglSupport;
-  try {
-    const c = document.createElement('canvas');
-    const gl = (c.getContext('webgl2') ?? c.getContext('webgl')) as WebGLRenderingContext | null;
-    webglSupport = !!gl;
-    gl?.getExtension('WEBGL_lose_context')?.loseContext();
-  } catch {
-    webglSupport = false;
-  }
-  return webglSupport;
 }
 
 /** 1756 digital I/O status indicators are yellow for inputs and outputs alike. */

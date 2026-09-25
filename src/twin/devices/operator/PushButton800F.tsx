@@ -6,11 +6,12 @@
  * Origin: center of the mounting hole on the panel front surface, +Z out of the panel.
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { PushButtonProps } from '../../contracts';
+import { useDisposeOnUnmount } from '../../dispose';
 import { F800, LegendPrint800F, addBezel, addLegendPlate, addRear800F, rearKey, type BezelKind, type RearItem } from './parts800F';
-import { CAP_HEX, F, HoverRing, arcPts, damp, fresnelTexture, latheZ, lensTints, makeLensMaterial, operatorToLed, partsGeo, uberMat, useMomentary } from './shared';
+import { CAP_HEX, F, HoverRing, arcPts, damp, fresnelTexture, latheZ, lensTints, makeLensMaterial, operatorToLed, partsGeo, setLensLit, uberMat, useMomentary } from './shared';
 
 export interface PushButton800FProps extends PushButtonProps {
   /** 'metal' = chrome 800FM bezel (default), 'plastic' = black 800FP bezel. */
@@ -93,21 +94,14 @@ export function PushButton800F({
     const fres = fresnelTexture();
     return makeLensMaterial(led, { map: fres, edge: 0.45 });
   }, [illuminated, led]);
-  useEffect(() => () => lensMat?.dispose(), [lensMat]);
+  useDisposeOnUnmount(lensMat);
   const tints = useMemo(() => lensTints(led, 2.6), [led]);
 
   const travel = TRAVEL[style];
   useFrame((_, dt) => {
     const g = capRef.current;
     if (g) g.position.z = damp(g.position.z, getPressed() ? -travel : 0, 30, Math.min(dt, 0.05));
-    if (lensMat && getLit) {
-      const lit = getLit();
-      if (lensMat.userData.lit !== lit) {
-        lensMat.userData.lit = lit;
-        lensMat.color.copy(lit ? tints.lit : tints.unlit);
-        lensMat.emissiveIntensity = lit ? tints.litE : tints.unlitE;
-      }
-    }
+    if (lensMat && getLit) setLensLit(lensMat, tints, getLit());
   });
 
   const contactItem: RearItem = contact === 'N.C.' ? 'NC' : 'NO';

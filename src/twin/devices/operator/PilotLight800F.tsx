@@ -1,14 +1,16 @@
 /**
- * Bulletin 800F 22.5 mm LED pilot light with a faceted colored lens (realistic dim daylight look
- * when off, bright glow with bloom when on), legend plate, LED module behind the panel.
+ * Bulletin 800F 22.5 mm LED pilot light with a faceted colored lens (dark, slightly translucent smoky lens when
+ * off; an HDR emissive core well above the Stage's bloom threshold for every color when on), legend plate, LED
+ * module behind the panel.
  *
  * Origin: center of the mounting hole on the panel front surface, +Z out of the panel.
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import type { PilotLightProps } from '../../contracts';
+import { useDisposeOnUnmount } from '../../dispose';
 import { F800, LegendPrint800F, addBezel, addLegendPlate, addRear800F, rearKey, type BezelKind } from './parts800F';
-import { facetTexture, latheZ, lensTints, makeLensMaterial, partsGeo, uberMat } from './shared';
+import { facetTexture, latheZ, lensTints, makeLensMaterial, partsGeo, setLensLit, uberMat } from './shared';
 
 export interface PilotLight800FProps extends PilotLightProps {
   bezel?: BezelKind;
@@ -48,15 +50,12 @@ export function PilotLight800F({
     const tex = facetTexture();
     return makeLensMaterial(color, { map: tex, bumpMap: tex, bumpScale: 0.6, edge: 0.4 });
   }, [color]);
-  useEffect(() => () => mat.dispose(), [mat]);
+  useDisposeOnUnmount(mat);
   const tints = useMemo(() => lensTints(color, 3), [color]);
   useFrame(({ clock }) => {
     let lit = getLit();
     if (lit && flash) lit = Math.floor(clock.elapsedTime * 2) % 2 === 0;
-    if (mat.userData.lit === lit) return;
-    mat.userData.lit = lit;
-    mat.color.copy(lit ? tints.lit : tints.unlit);
-    mat.emissiveIntensity = lit ? tints.litE : tints.unlitE;
+    setLensLit(mat, tints, lit);
   });
   const hasLegend = legend !== undefined && legend !== '';
   const pt = panelThickness ?? F800.panelT;

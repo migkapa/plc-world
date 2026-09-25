@@ -103,6 +103,11 @@ even if the PLC misbehaves. (Making the PLC aware of them is mission 2-3.)
       'Stop (N.C.) stops the motor and it stays stopped',
       'Stop wins when both buttons are pressed',
     ],
+    objectiveTests: [
+      [0, 1, { test: 2, steps: [2, 8] }, { test: 3, steps: [7] }],
+      [{ test: 2, steps: [5, 6] }, { invariant: 0 }],
+      [{ test: 3, steps: [3, 5, 11, 14] }, { invariant: 0 }],
+    ],
     concepts: ['XIC', 'OTE'],
     starter: {
       rungs: ['XIC(Start_PB)OTE(Motor_Starter);'],
@@ -209,6 +214,11 @@ light it because the contactor **proved** it pulled in."* That proof is the cont
       '`Run_Light` is driven by the contactor feedback `Motor_Aux`',
       '`Ready_Light` = E-stop released AND overload OK AND motor stopped',
       'Start/Stop keeps working',
+    ],
+    objectiveTests: [
+      [{ test: 0, steps: [2] }, { test: 1, observe: ['runLight'] }, { test: 2, observe: ['Run_Light', 'runLight'] }],
+      [{ test: 0, steps: [1] }, { test: 1, observe: ['readyLight'] }, { test: 2, steps: [9] }, 3],
+      [{ test: 1, steps: [2, 5] }, { invariant: 0 }],
     ],
     concepts: ['XIC', 'XIO', 'OTE'],
     starter: {
@@ -331,6 +341,12 @@ NFPA 79) are clear: **resetting an E-stop must never restart a machine.** Only a
       'Overload tripped → `Motor_Starter` OFF, and no restart after the reset',
       'Start is refused while the E-stop is pushed or the overload is tripped',
       '`Fault_Light` = E-stop pushed OR overload tripped',
+    ],
+    objectiveTests: [
+      [{ test: 0, steps: [2, 5] }, { test: 1, steps: [2, 5, 9, 11] }, { invariant: 0 }, { invariant: 1 }],
+      [{ test: 3, steps: [2, 5, 11, 13, 15] }, { test: 4, steps: [2, 4, 5, 10, 11, 13] }, { invariant: 2 }],
+      [2, { test: 3, steps: [8] }],
+      [{ test: 0, steps: [3] }, { test: 1, steps: [6, 8] }, { test: 3, steps: [6, 12] }, { test: 4, steps: [6] }],
     ],
     concepts: ['XIC', 'XIO', 'OTE'],
     starter: {
@@ -474,6 +490,11 @@ The first-scan flag **\`S:FS\`** is 1 during the first scan after entering Run.
       'Stop, E-stop and overload unlatch it with OTU — Stop wins',
       'No restart after a Program → Run transition (use `S:FS`)',
     ],
+    objectiveTests: [
+      [{ test: 0, steps: [2, 6] }],
+      [{ test: 0, steps: [4] }, 1, 2, { invariant: 0 }, { invariant: 1 }, { invariant: 2 }],
+      [3],
+    ],
     concepts: ['OTL', 'OTU', 'XIC', 'XIO'],
     starter: {
       rungs: ['', '', RUN_LIGHT, READY_LIGHT, FAULT_LIGHT],
@@ -616,6 +637,13 @@ and the motor keeps running after the jog. The seal must come from **Start only*
       'Start still seals in, Stop still stops',
       'E-stop / overload cancel the run: no restart after the release or reset',
       'Stop, E-stop and overload also block jog',
+    ],
+    objectiveTests: [
+      [0, { test: 3, steps: [8, 10] }, { test: 6, steps: [2] }],
+      [1, { test: 0, steps: [4] }],
+      [2, { test: 3, steps: [2, 5] }, { invariant: 0 }],
+      [4, { invariant: 1 }, { invariant: 2 }],
+      [5, { test: 6, steps: [4, 7] }],
     ],
     concepts: ['XIC', 'XIO', 'OTE'],
     starter: {
@@ -810,6 +838,13 @@ request** when it wants the conveyor — but maintenance still needs local contr
       'Switching out of HAND drops the seal',
       'Stop, E-stop and overload work in every position',
     ],
+    objectiveTests: [
+      [0, { invariant: 3 }],
+      [1],
+      [3],
+      [2],
+      [4, 5, { invariant: 0 }, { invariant: 1 }, { invariant: 2 }],
+    ],
     concepts: ['XIC', 'XIO', 'OTE'],
     starter: {
       rungs: [SAFE_SEAL, RUN_LIGHT, READY_LIGHT, FAULT_LIGHT],
@@ -978,6 +1013,13 @@ Internal tags \`Hand_Run\` and \`Auto_Armed\` (BOOL) are created for you.`,
       'AUTO: armed by Start, follows Remote_Run, disarmed by Stop / E-stop / overload / leaving AUTO',
       'No automatic restart, ever',
       'RUN / READY / FAULT lights and the overload horn',
+    ],
+    objectiveTests: [
+      [1, { invariant: 3 }],
+      [{ test: 2, observe: ['contactor'] }, 3, 4, 6],
+      [7, 8, { test: 9, observe: ['contactor', 'Motor_Starter'] }, { test: 10, observe: ['contactor', 'Motor_Starter', 'overloadTripped'] }, 12],
+      [5, { test: 11, observe: ['contactor', 'Motor_Starter', 'overloadTripped'] }, { invariant: 0 }, { invariant: 1 }, { invariant: 2 }],
+      [0, { test: 2, observe: ['Run_Light', 'runLight', 'readyLight'] }, { test: 9, observe: ['faultLight', 'readyLight', 'horn'] }, { test: 10, observe: ['horn'] }, { test: 11, observe: ['horn', 'faultLight', 'readyLight'] }],
     ],
     concepts: ['XIC', 'XIO', 'OTE'],
     starter: {

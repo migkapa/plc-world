@@ -248,7 +248,14 @@ export interface BuiltBody {
   decal: (spec: DecalSpec) => THREE.BufferGeometry;
 }
 
-export function buildBody(st: BodyStyle): BuiltBody {
+/**
+ * `detail: 'lod'` builds the same surfaces (identical silhouette, ring topology and atlas UVs) from far fewer
+ * stations — ~5x fewer triangles — for distant cars (CarFleet's low-poly LOD).
+ */
+export function buildBody(st: BodyStyle, detail: 'full' | 'lod' = 'full'): BuiltBody {
+  const lod = detail === 'lod';
+  /** keep every k-th silhouette sample near the ends (all of them at full detail) */
+  const keep = (i: number) => !lod || i % 6 === 0;
   // --- side silhouette chains --------------------------------------------------------------------
   const samples = sampleSpline(st.lower, true, 700);
   samples.pop(); // closed curve repeats the first point
@@ -433,12 +440,14 @@ export function buildBody(st: BodyStyle): BuiltBody {
 
   // --- lower-body stations ------------------------------------------------------------------------
   const cols: number[] = [xf, xr];
-  for (const p of [...up, ...lo])
-    if (p.x > xf - 0.55 || p.x < xr + 0.55) cols.push(p.x);
-  for (let x = xr + 0.3; x < xf - 0.3; x += 0.07) cols.push(x);
+  [...up, ...lo].forEach((p, i) => {
+    if ((p.x > xf - 0.55 || p.x < xr + 0.55) && keep(i)) cols.push(p.x);
+  });
+  for (let x = xr + 0.3; x < xf - 0.3; x += lod ? 0.2 : 0.07) cols.push(x);
+  const archN = lod ? 8 : 26;
   for (const ax of [st.axleF, st.axleR]) {
-    for (let i = 0; i <= 26; i++)
-      cols.push(ax + archR * Math.cos((Math.PI * i) / 26));
+    for (let i = 0; i <= archN; i++)
+      cols.push(ax + archR * Math.cos((Math.PI * i) / archN));
     cols.push(ax - archR - 0.002, ax + archR + 0.002);
   }
   cols.push(xg0, xg1);
@@ -561,9 +570,10 @@ export function buildBody(st: BodyStyle): BuiltBody {
     return { z, y, s };
   };
   const gcols: number[] = [xg0, xg1];
-  for (const p of roofSamples)
-    if (p.x > xg0 - 0.9 || p.x < xg1 + 0.9) gcols.push(p.x);
-  for (let x = xg1; x < xg0; x += 0.06) gcols.push(x);
+  roofSamples.forEach((p, i) => {
+    if ((p.x > xg0 - 0.9 || p.x < xg1 + 0.9) && keep(i)) gcols.push(p.x);
+  });
+  for (let x = xg1; x < xg0; x += lod ? 0.2 : 0.06) gcols.push(x);
   const xsG = dedupe(gcols.filter((x) => x >= xg1 && x <= xg0));
   const gh = xsG.map((x, i) => ghHalf(x, i === 0 || i === xsG.length - 1));
   const ghColumns: GhColumn[] = xsG.map((x, i) => ({

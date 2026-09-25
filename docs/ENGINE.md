@@ -243,6 +243,12 @@ each fixed step runs `scene.step(state, 10, io)` then `controller.scan(10)`. `st
 `subscribe()` is throttled to ~30 Hz (user controls, controller events and changes of `paused`/`speed`
 notify immediately; a paused or zero-speed `tick()` still flushes a throttled notification). Non-finite or
 non-positive `step()`/`tick()` times are ignored; `speed` ignores non-finite or negative values.
+`onControl((id, value) => …)` reports every `setControl()` (pad, hotkeys, 3D clicks, test steps) unthrottled,
+after the plant has taken the value — the workspace uses it for the `controlUsed` game event.
+**Momentary edge latch**: a momentary control released before any fixed step ran since its press stays pressed
+for the next step (the PLC sees at least one scan of every tap, even when press and release land between two
+slow animation frames); the release — and its `onControl` report — is applied right after that step.
+`useSimLoop` advances at most 250 ms per frame (= the default catch-up), so the plant keeps real time down to ~4 fps.
 `dispose()` stops forwarding controller events and drops listeners.
 `resetScene({ resetTags })` recreates the plant state *in place* (views keep their reference).
 `IoAccess` maps to `readOutputForField` / `writeInputFromField`.

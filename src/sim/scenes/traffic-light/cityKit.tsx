@@ -8,9 +8,9 @@
  *  - <Trees/>, <StreetLights/>, <PullBoxes/>, <Bollards/>   instanced street furniture (1–4 draw calls each)
  *  - <KeySwitch800F/>                      22.5 mm key-operated selector (maintained or spring-return) built from
  *                                          the 800F bezel + legend plate (the operator kit has no key operator)
- *  - small hooks: useHoverCursor, useLatest, useNoCastShadow; <ClickBlocker/> (invisible event sink for walls /
- *    roofs / closed doors); useMaterialOverride / useSubtreeMaterialPatch / useQuietPaint (scene-local matte
- *    road paint so only lamps bloom)
+ *  - small hooks: useHoverCursor, useLatest, useNoCastShadow, useDisposeOnUnmount; <ClickBlocker/> (invisible
+ *    event sink for walls / roofs / closed doors). (Road paint is matte at the source — the traffic kit's
+ *    markingMat — so no scene-side paint override is needed for only the lamps to bloom.)
  *
  * Coordinates: meters, Y up, plan x = east, z = south (both scene logics use this frame).
  */
@@ -19,7 +19,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, 
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Vec3 } from '../../../twin/contracts';
-import { Bezel800F, LegendPlate800F, roadMats, selectorAngle } from '../../../twin/devices';
+import { useDisposeOnUnmount } from '../../../twin/dispose';
+import { Bezel800F, LegendPlate800F, selectorAngle } from '../../../twin/devices';
 import { canvasTexture, kgeo, kmat, mulberry } from '../trainer/kit';
 
 // ---------------------------------------------------------------------------
@@ -33,10 +34,11 @@ export function useLatest<T>(v: T) {
   return r;
 }
 
-/** Dispose per-mount GPU resources (materials, geometries, cloned textures) on unmount. */
-export function useDisposeOnUnmount(items: ReadonlyArray<{ dispose: () => void } | null | undefined>) {
-  useEffect(() => () => items.forEach((i) => i?.dispose()), [items]);
-}
+/**
+ * Dispose per-mount GPU resources (materials, geometries, cloned textures) on a REAL unmount (StrictMode-safe: the
+ * dev-mode simulated unmount/remount keeps them). Pass a memoised array.
+ */
+export { useDisposeOnUnmount };
 
 /** Pointer cursor + hover flag for a clickable custom mesh. */
 export function useHoverCursor(enabled = true) {
@@ -58,73 +60,6 @@ export function useHoverCursor(enabled = true) {
     [],
   );
   return { hovered: hovered && enabled, handlers };
-}
-
-/**
- * Scene-local override of a shared (device-kit) material while the scene is mounted: the given fields are
- * applied on mount and the original values restored on unmount. Used to tone down the traffic kit's road
- * paint (its albedo + the street sun push it over the bloom threshold, so paint glowed like the lamps).
- */
-export function useMaterialOverride(getMats: () => THREE.MeshStandardMaterial[], patch: { color?: string; roughness?: number; envMapIntensity?: number }) {
-  useLayoutEffect(() => {
-    const mats = getMats();
-    const saved = mats.map((m) => ({ m, color: m.color.clone(), roughness: m.roughness, env: m.envMapIntensity }));
-    for (const m of mats) {
-      if (patch.color) m.color.set(patch.color);
-      if (patch.roughness !== undefined) m.roughness = patch.roughness;
-      if (patch.envMapIntensity !== undefined) m.envMapIntensity = patch.envMapIntensity;
-    }
-    return () => {
-      for (const s of saved) {
-        s.m.color.copy(s.color);
-        s.m.roughness = s.roughness;
-        s.m.envMapIntensity = s.env;
-      }
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-}
-
-/**
- * Road paint: real thermoplastic is a diffuse, matte ~55 % white. The kit's paint (bright albedo, glossy,
- * full environment reflection) went over the bloom threshold under the street sun and glowed like the
- * lamps; tone it down while a street scene is mounted so only lamps and LEDs bloom.
- */
-export function useQuietPaint() {
-  useMaterialOverride(() => [roadMats.white()], { color: '#a09f98', roughness: 1, envMapIntensity: 0.35 });
-  useMaterialOverride(() => [roadMats.yellow()], { color: '#c38f10', roughness: 1, envMapIntensity: 0.35 });
-}
-
-/**
- * Like useMaterialOverride, for shared materials a device creates internally (e.g. painted stall numbers):
- * after mount, every MeshStandardMaterial under `ref` that matches `pick` gets the patch; restored on unmount.
- */
-export function useSubtreeMaterialPatch(
-  ref: RefObject<THREE.Object3D | null>,
-  pick: (m: THREE.MeshStandardMaterial) => boolean,
-  patch: { color?: string; roughness?: number; envMapIntensity?: number },
-) {
-  useEffect(() => {
-    const saved = new Map<THREE.MeshStandardMaterial, { color: THREE.Color; roughness: number; env: number }>();
-    const run = () =>
-      ref.current?.traverse((o) => {
-        const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-        if (!m || Array.isArray(m) || !m.isMeshStandardMaterial || saved.has(m) || !pick(m)) return;
-        saved.set(m, { color: m.color.clone(), roughness: m.roughness, env: m.envMapIntensity });
-        if (patch.color) m.color.set(patch.color);
-        if (patch.roughness !== undefined) m.roughness = patch.roughness;
-        if (patch.envMapIntensity !== undefined) m.envMapIntensity = patch.envMapIntensity;
-      });
-    run();
-    const t = window.setTimeout(run, 500);
-    return () => {
-      window.clearTimeout(t);
-      for (const [m, v] of saved) {
-        m.color.copy(v.color);
-        m.roughness = v.roughness;
-        m.envMapIntensity = v.env;
-      }
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 /** Turn off shadow casting for every mesh under `ref` (small interior parts: they only cost shadow draw calls). */
@@ -191,7 +126,7 @@ export function SkyDome({ top = '#5f8fcf', horizon = '#d3e2ee', ground = '#aab4b
     g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
     return g;
   }, [top, horizon, ground]);
-  useEffect(() => () => geo.dispose(), [geo]);
+  useDisposeOnUnmount(geo);
   const mat = kmat('city:sky', () => new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false, toneMapped: false }));
   return <mesh geometry={geo} material={mat} renderOrder={-10} frustumCulled={false} />;
 }
@@ -233,13 +168,10 @@ export function GroundPlane({ size = 700, y = -0.04, tile = 6, color = '#ffffff'
     t.needsUpdate = true;
     return new THREE.MeshStandardMaterial({ map: t, color, roughness: 1 });
   }, [size, tile, color]);
-  useEffect(
-    () => () => {
-      mat.map?.dispose();
-      mat.dispose();
-    },
-    [mat],
-  );
+  useDisposeOnUnmount(mat, () => {
+    mat.map?.dispose();
+    mat.dispose();
+  });
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, y, 0]} material={mat} receiveShadow>
       <planeGeometry args={[size, size]} />
@@ -637,15 +569,12 @@ export function Buildings({ specs }: { specs: BuildingSpec[] }) {
       hvac: hvac.length ? mergeGeometries(hvac.map((g) => g.toNonIndexed()))! : null,
     };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(
-    () => () => {
-      for (const m of built.merged) m.geo.dispose();
-      built.roofs.dispose();
-      built.trim.dispose();
-      built.hvac?.dispose();
-    },
-    [built],
-  );
+  useDisposeOnUnmount(built, () => {
+    for (const m of built.merged) m.geo.dispose();
+    built.roofs.dispose();
+    built.trim.dispose();
+    built.hvac?.dispose();
+  });
   return (
     <group>
       {built.merged.map((m) => (
@@ -814,7 +743,7 @@ const headMat = () => kmat('city:lheadMat', () => new THREE.MeshStandardMaterial
 /** Street lights; `getLit` switches the LED lenses (4 draw calls total). */
 export function StreetLights({ items, getLit }: { items: StreetLightSpec[]; getLit?: () => boolean }) {
   const lensMat = useMemo(() => new THREE.MeshStandardMaterial({ color: '#dfe6ea', emissive: '#fff4dc', emissiveIntensity: 0, roughness: 0.2, toneMapped: false }), []);
-  useEffect(() => () => lensMat.dispose(), [lensMat]);
+  useDisposeOnUnmount(lensMat);
   const get = useLatest(getLit);
   useFrame(() => {
     const lit = get.current?.() ?? false;

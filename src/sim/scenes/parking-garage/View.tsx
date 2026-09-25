@@ -29,7 +29,7 @@ import {
 } from '../../../twin/devices';
 import type { SceneViewProps, SimRuntime } from '../../types';
 import { audioAllowed, canvasTexture, fitFont, hazardTexture, infoLine, IoTag, ioLine, kgeo, kmat, TagLayer, textLine, useSfxLoops, type TagGroup } from '../trainer/kit';
-import { useDisposeOnUnmount, useHoverCursor, useNoCastShadow, useQuietPaint } from '../traffic-light/cityKit';
+import { useDisposeOnUnmount, useHoverCursor, useNoCastShadow } from '../traffic-light/cityKit';
 import { PARKING_DEMO_COUNT_TAG } from './demo';
 import { Booth, BOOTH_OCCLUDERS } from './booth';
 import { GARAGE_LAYOUT as Y, type GarageCar, type ParkingGarageState } from './logic';
@@ -466,7 +466,6 @@ function useGarageSound(state: ParkingGarageState) {
 
 export const ParkingGarageView = memo(function ParkingGarageView({ state, runtime }: P) {
   useGarageSound(state);
-  useQuietPaint();
   const occluders: Array<[Vec3, Vec3]> = [...SITE_OCCLUDERS, ...BOOTH_OCCLUDERS];
   return (
     <group>

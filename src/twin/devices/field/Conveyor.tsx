@@ -12,11 +12,12 @@
  * helical-bevel GearMotor at the head end.
  */
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { ConveyorProps } from '../../contracts';
 import { GEARMOTOR, GearMotor, gearMotorTorqueArmEnd, MOTOR_BLUE } from './Motor';
 import { box, type CableRoute, canvasTex, CapScrew, clickable, cylZ, DEVICE_ROOT, fm, geo, HexBolt, Merge, mulberry32, rbox, sphere, TAU } from './shared';
+import { useDisposeOnUnmount } from '../../dispose';
 
 export interface ConveyorExtraProps {
   /** 'extrusion' (clear anodized aluminum profiles, default) or 'powder' (painted formed steel). */
@@ -37,7 +38,7 @@ export interface ConveyorExtraProps {
   motorColor?: string;
   /** Show the leg/stand (false for a table-top section). */
   legs?: boolean;
-  /** Gear-motor power cable (conveyor PARENT coordinates, false = stop at the gland); default: floor stub. */
+  /** Gear-motor power cable (conveyor PARENT coordinates, or 'floor' for a floor stub); default: none (stops at the gland). */
   motorCableTo?: CableRoute;
   onClick?: () => void;
 }
@@ -378,13 +379,10 @@ function MeshPanel({ w, h, position, rotation }: { w: number; h: number; positio
     m.side = THREE.DoubleSide;
     return m;
   }, [w, h]);
-  useEffect(
-    () => () => {
-      meshMat.alphaMap?.dispose();
-      meshMat.dispose();
-    },
-    [meshMat],
-  );
+  useDisposeOnUnmount(meshMat, () => {
+    meshMat.alphaMap?.dispose();
+    meshMat.dispose();
+  });
   const bar = 0.018;
   const frameMat = fm.sheet('#f1c40f', 0.45);
   return (
@@ -464,14 +462,11 @@ export function Conveyor({
     m.userData.loop = loop;
     return m;
   }, [L, W, beltColor]);
-  useEffect(
-    () => () => {
-      beltMat.map?.dispose();
-      beltMat.bumpMap?.dispose();
-      beltMat.dispose();
-    },
-    [beltMat],
-  );
+  useDisposeOnUnmount(beltMat, () => {
+    beltMat.map?.dispose();
+    beltMat.bumpMap?.dispose();
+    beltMat.dispose();
+  });
 
   const headPulley = useRef<THREE.Group>(null);
   const tailPulley = useRef<THREE.Group>(null);

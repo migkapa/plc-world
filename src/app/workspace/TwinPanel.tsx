@@ -4,7 +4,7 @@
  * control pad). Falls back to a clean panel when the scene has no 3D view yet or WebGL fails — the
  * simulation keeps running either way (it is ticked by the page, not by the view).
  */
-import { Box, Cctv, Eye, EyeOff, Loader2, Wrench } from 'lucide-react';
+import { Box, Cctv, Eye, EyeOff, Loader2, Maximize2, Minimize2, Wrench } from 'lucide-react';
 import { Component, memo, Suspense, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { useGame } from '../../game/store';
 import { useSceneOverlay } from '../../sim/scenes/overlay';
@@ -216,6 +216,44 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, faults =
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  // Expanded view: the panel covers the whole window (same DOM node, so the 3D scene is not remounted).
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing = !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+      if (e.key === 'Escape' && expanded) {
+        e.stopPropagation();
+        setExpanded(false);
+      } else if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
+        const inTwin = !!t && !!rootRef.current?.contains(t);
+        if (inTwin || t === document.body) setExpanded((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [expanded]);
+  useEffect(() => {
+    if (!expanded) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [expanded]);
+  const expandButton = (
+    <button
+      type="button"
+      onClick={() => setExpanded((v) => !v)}
+      aria-pressed={expanded}
+      aria-label={expanded ? 'Exit full view (Esc)' : 'Full view (F)'}
+      title={expanded ? 'Exit full view (Esc)' : 'Full view (F)'}
+      className="pointer-events-auto flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-white/10 bg-black/50 px-2 text-xs font-medium text-slate-200 backdrop-blur transition-colors hover:bg-black/70 hover:text-white"
+    >
+      {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+      <span className="hidden sm:inline">{expanded ? 'Exit' : 'Full view'}</span>
+    </button>
+  );
   const overlay = (withCamera: boolean) => (
     <div className="pointer-events-none absolute inset-0 flex flex-col justify-between gap-2 p-2">
       <div className="flex items-start justify-between gap-2">
@@ -227,6 +265,7 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, faults =
           <ControllerChip runtime={runtime} />
           {tools}
           <InstructorMenu runtime={runtime} controls={faults} />
+          {expandButton}
         </div>
       </div>
       {banner && <div className="pointer-events-auto mx-auto -mt-1 max-w-[92%]">{banner}</div>}
@@ -264,7 +303,12 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, faults =
   })();
 
   return (
-    <div ref={rootRef} className={cn('relative h-full w-full overflow-hidden bg-[#0d1117]', className)} data-testid="twin-panel">
+    <div
+      ref={rootRef}
+      className={cn(expanded ? 'fixed inset-0 z-40 h-dvh w-screen' : 'relative h-full w-full', 'overflow-hidden bg-[#0d1117]', !expanded && className)}
+      data-testid="twin-panel"
+      data-expanded={expanded || undefined}
+    >
       <Suspense fallback={<Loading />}>{content.node}</Suspense>
       {!content.camera && overlay(false)}
     </div>

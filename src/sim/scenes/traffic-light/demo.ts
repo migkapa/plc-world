@@ -1,67 +1,78 @@
 /**
  * Reference program for the `traffic-light` intersection (neutral text, headless — no React/three).
  *
- * A semi-actuated two-phase controller like the ones in real roadside cabinets:
+ * A semi-actuated two-phase controller like the ones in real roadside cabinets, written as a
+ * step sequencer: the DINT `Phase` holds the current interval and one TON times each interval.
  *
- *   P1  NS green   — rests here (main street) for at least 10 s, then serves a call from the side-street
- *                     loop (Car_Sensor_EW) or the pedestrian button
- *   P2  NS yellow  3.5 s
- *   P3  all red    1.5 s (red clearance)            ─┐ both "all red" phases light the same lamps; the
- *   P4  EW green   7 s (9 s when a WALK is served)   │ spare bit TO_EW tells them apart
- *   P5  EW yellow  3.5 s                             │
- *   P6  all red    1.5 s  → P1                      ─┘
+ *   Phase 1  NS green    rests here (main street); after the 10 s minimum green a call from the
+ *                        side-street loop (Car_Sensor_EW) or the pedestrian button ends it
+ *   Phase 2  NS yellow   3.5 s
+ *   Phase 3  all red     1.5 s red clearance, then the side street
+ *   Phase 4  EW green    7 s — or, with a pedestrian call, WALK 5 s + flashing DON'T WALK 7 s = 12 s
+ *   Phase 5  EW yellow   3.5 s
+ *   Phase 6  all red     1.5 s red clearance, then back to phase 1 (power-up and night recovery start here)
  *
- * The pedestrian crossing (over the MAIN street) runs with EW green: WALK for 4 s, then a flashing
- * DON'T WALK clearance until the phase ends — so WALK can never overlap NS green/yellow. Night_Mode
- * switches to flashing operation (NS flashing yellow, EW flashing red, pedestrian heads dark); leaving
- * it restarts through an all-red clearance. Power-up also starts in all red.
+ * The crosswalk (over the MAIN street, 7 m) runs with EW green, so WALK can never overlap NS green or
+ * yellow. Pedestrian clearance: 7 m ÷ 1.07 m/s ≈ 6.5 s → 7 s flashing DON'T WALK, then the 3.5 s yellow +
+ * 1.5 s all red as the buffer interval. Night_Mode puts the intersection into flashing operation
+ * (NS flashing yellow, EW flashing red, 60 flashes/min, pedestrian heads dark); leaving it restarts the
+ * sequence through phase 6 (all red).
  *
- * Memory: the starter project contains only the I/O alias tags (no TIMER / DINT tags), so this demo
- * keeps its scratch data in unused module words and points (a teaching shortcut — in your own program
- * create proper tags):
- *   PRE  Local:1:I.DiagnosticSequenceCount   SINT, counts 10 ms scans → 0.1 s ticks
- *   TMR  Local:2:I.DiagnosticSequenceCount   SINT, tenths of a second in the current phase (≤ 12 s)
- *   Local:2:O.Pt08/09/10/11                  TO_EW, PED_CALL, PED_SERVE, NIGHT (spare output points)
+ * The program needs the internal tags TRAFFIC_DEMO_TAGS (loaded with it: SceneDefinition.demoTags).
  */
-const PRE = 'Local:1:I.DiagnosticSequenceCount';
-const TMR = 'Local:2:I.DiagnosticSequenceCount';
-const TO_EW = 'Local:2:O.Pt08.Data';
-const PED_CALL = 'Local:2:O.Pt09.Data';
-const PED_SERVE = 'Local:2:O.Pt10.Data';
-const NIGHT = 'Local:2:O.Pt11.Data';
+import type { TagDef } from '../../../plc/types';
 
-/** Restart the sequence in P6 (all red, then NS green). */
-const ALL_RED = `MOV(0,${TMR}),OTU(NS_Green),OTU(NS_Yellow),OTL(NS_Red),OTU(EW_Green),OTU(EW_Yellow),OTL(EW_Red),OTU(${TO_EW}),OTU(${PED_SERVE})`;
+export const TRAFFIC_DEMO_TAGS: TagDef[] = [
+  { name: 'Phase', dataType: 'DINT', description: 'Signal phase: 1 NS green, 2 NS yellow, 3 all red, 4 EW green, 5 EW yellow, 6 all red' },
+  { name: 'NS_Min_Green', dataType: 'TIMER', description: 'Main-street minimum green (10 s)' },
+  { name: 'NS_Yellow_Tmr', dataType: 'TIMER', description: 'Main-street yellow change interval (3.5 s)' },
+  { name: 'All_Red_Tmr', dataType: 'TIMER', description: 'Red clearance interval, phases 3 and 6 (1.5 s)' },
+  { name: 'EW_Green_Tmr', dataType: 'TIMER', description: 'Side-street green (7 s)' },
+  { name: 'Walk_Tmr', dataType: 'TIMER', description: 'WALK interval (5 s)' },
+  { name: 'Ped_Clear_Tmr', dataType: 'TIMER', description: "Pedestrian clearance, flashing DON'T WALK (7 s)" },
+  { name: 'EW_Yellow_Tmr', dataType: 'TIMER', description: 'Side-street yellow change interval (3.5 s)' },
+  { name: 'Flash_Tmr', dataType: 'TIMER', description: 'Free-running 1 s flasher (60 flashes/min)' },
+  { name: 'Flash_On', dataType: 'BOOL', description: 'Flasher output: on for the first half of every second' },
+  { name: 'Ped_Call', dataType: 'BOOL', description: 'Pedestrian request memory (the button is only 1 while pressed)' },
+  { name: 'Ped_Served', dataType: 'BOOL', description: 'The current side-street green serves a WALK' },
+];
 
 export const TRAFFIC_DEMO_RUNGS: string[] = [
-  // power-up: clear the scratch memory, start in all red
-  `XIC(S:FS)[MOV(0,${PRE}),OTU(${PED_CALL}),OTU(${NIGHT}),${ALL_RED}];`,
-  // time base: 10 × 10 ms scans = one 0.1 s tick of the phase timer (saturates at 12.0 s)
-  `ADD(${PRE},1,${PRE});`,
-  `GEQ(${PRE},10)[MOV(0,${PRE}),LES(${TMR},120)ADD(${TMR},1,${TMR})];`,
-  // pedestrian request memory (served in the next EW green)
-  `XIC(Ped_PB)OTL(${PED_CALL});`,
-  // ---- night flash --------------------------------------------------------------------------------
-  `XIC(Night_Mode)XIO(${NIGHT})[OTL(${NIGHT}),MOV(0,${TMR}),OTU(NS_Green),OTU(NS_Red),OTU(EW_Green),OTU(EW_Yellow),OTU(${TO_EW}),OTU(${PED_SERVE})];`,
-  `XIC(Night_Mode)GEQ(${TMR},10)MOV(0,${TMR});`,
-  `XIC(Night_Mode)LES(${TMR},5)[OTL(NS_Yellow),OTL(EW_Red)];`,
-  `XIC(Night_Mode)GEQ(${TMR},5)[OTU(NS_Yellow),OTU(EW_Red)];`,
-  `XIO(Night_Mode)XIC(${NIGHT})[OTU(${NIGHT}),${ALL_RED}];`,
-  // ---- day sequence -------------------------------------------------------------------------------
-  // P1 → P2: minimum green done and somebody is waiting on the side street / at the crosswalk
-  `XIO(Night_Mode)XIC(NS_Green)GEQ(${TMR},100)[XIC(Car_Sensor_EW),XIC(${PED_CALL})][OTU(NS_Green),OTL(NS_Yellow),MOV(0,${TMR})];`,
-  // P2 → P3
-  `XIO(Night_Mode)XIC(NS_Yellow)GEQ(${TMR},35)[OTU(NS_Yellow),OTL(NS_Red),OTL(${TO_EW}),MOV(0,${TMR})];`,
-  // P3 → P4 (take the pedestrian call into this phase)
-  `XIO(Night_Mode)XIC(NS_Red)XIC(EW_Red)XIC(${TO_EW})GEQ(${TMR},15)[OTU(EW_Red),OTL(EW_Green),OTU(${TO_EW}),MOV(0,${TMR}),XIC(${PED_CALL})OTL(${PED_SERVE}),OTU(${PED_CALL})];`,
-  // P4 → P5 (7 s, or 9 s with a pedestrian crossing)
-  `XIO(Night_Mode)XIC(EW_Green)[GEQ(${TMR},90),XIO(${PED_SERVE})GEQ(${TMR},70)][OTU(EW_Green),OTL(EW_Yellow),MOV(0,${TMR})];`,
-  // P5 → P6
-  `XIO(Night_Mode)XIC(EW_Yellow)GEQ(${TMR},35)[OTU(EW_Yellow),OTL(EW_Red),OTU(${PED_SERVE}),MOV(0,${TMR})];`,
-  // P6 → P1
-  `XIO(Night_Mode)XIC(NS_Red)XIC(EW_Red)XIO(${TO_EW})GEQ(${TMR},15)[OTU(NS_Red),OTL(NS_Green),MOV(0,${TMR})];`,
-  // ---- pedestrian heads ---------------------------------------------------------------------------
-  `XIO(Night_Mode)XIC(${PED_SERVE})XIC(EW_Green)LES(${TMR},40)OTE(Walk);`,
-  // steady DON'T WALK, flashing (bit 2 of the tenths counter ≈ 75 flashes/min) during the clearance
-  `XIO(Night_Mode)XIO(Walk)[XIO(${PED_SERVE}),XIC(${TMR}.2)]OTE(Dont_Walk);`,
+  // power-up: start in all red (phase 6), forget old requests
+  'XIC(S:FS)[MOV(6,Phase),OTU(Ped_Call),OTU(Ped_Served)];',
+  // flasher: the timer restarts itself when done → 1 s period, lamp on for the first 500 ms
+  'XIO(Flash_Tmr.DN)TON(Flash_Tmr,1000,0);',
+  'LES(Flash_Tmr.ACC,500)OTE(Flash_On);',
+  // remember a pedestrian request until it is served
+  'XIC(Ped_PB)OTL(Ped_Call);',
+  // night flash: hold the sequence in phase 6, so it restarts through all red when the key is turned back
+  'XIC(Night_Mode)[MOV(6,Phase),OTU(Ped_Served)];',
+  // ---- phase 1: NS green (minimum 10 s, then serve a call) ----
+  'XIO(Night_Mode)EQU(Phase,1)TON(NS_Min_Green,10000,0);',
+  'EQU(Phase,1)XIC(NS_Min_Green.DN)[XIC(Car_Sensor_EW),XIC(Ped_Call)]MOV(2,Phase);',
+  // ---- phase 2: NS yellow ----
+  'XIO(Night_Mode)EQU(Phase,2)TON(NS_Yellow_Tmr,3500,0);',
+  'EQU(Phase,2)XIC(NS_Yellow_Tmr.DN)MOV(3,Phase);',
+  // ---- phases 3 and 6: all red ----
+  'XIO(Night_Mode)[EQU(Phase,3),EQU(Phase,6)]TON(All_Red_Tmr,1500,0);',
+  'EQU(Phase,3)XIC(All_Red_Tmr.DN)[MOV(4,Phase),XIC(Ped_Call)OTL(Ped_Served),OTU(Ped_Call)];',
+  'EQU(Phase,6)XIC(All_Red_Tmr.DN)MOV(1,Phase);',
+  // ---- phase 4: EW green (WALK + clearance when a pedestrian is served) ----
+  'XIO(Night_Mode)EQU(Phase,4)TON(EW_Green_Tmr,7000,0);',
+  'XIO(Night_Mode)EQU(Phase,4)XIC(Ped_Served)TON(Walk_Tmr,5000,0);',
+  'XIO(Night_Mode)EQU(Phase,4)XIC(Walk_Tmr.DN)TON(Ped_Clear_Tmr,7000,0);',
+  'EQU(Phase,4)XIC(EW_Green_Tmr.DN)[XIO(Ped_Served),XIC(Ped_Clear_Tmr.DN)]MOV(5,Phase);',
+  // ---- phase 5: EW yellow ----
+  'XIO(Night_Mode)EQU(Phase,5)TON(EW_Yellow_Tmr,3500,0);',
+  'EQU(Phase,5)XIC(EW_Yellow_Tmr.DN)[MOV(6,Phase),OTU(Ped_Served)];',
+  // ---- lamps (one rung per output) ----
+  'XIO(Night_Mode)EQU(Phase,1)OTE(NS_Green);',
+  '[XIO(Night_Mode)EQU(Phase,2),XIC(Night_Mode)XIC(Flash_On)]OTE(NS_Yellow);',
+  'XIO(Night_Mode)GEQ(Phase,3)OTE(NS_Red);',
+  'XIO(Night_Mode)EQU(Phase,4)OTE(EW_Green);',
+  'XIO(Night_Mode)EQU(Phase,5)OTE(EW_Yellow);',
+  '[XIO(Night_Mode)[LEQ(Phase,3),EQU(Phase,6)],XIC(Night_Mode)XIC(Flash_On)]OTE(EW_Red);',
+  // pedestrian head: WALK, then flashing DON'T WALK until the end of the green, otherwise steady
+  'XIO(Night_Mode)EQU(Phase,4)XIC(Ped_Served)XIO(Walk_Tmr.DN)OTE(Walk);',
+  'XIO(Night_Mode)XIO(Walk)[XIO(Ped_Served),XIO(Walk_Tmr.DN),XIC(Flash_On)]OTE(Dont_Walk);',
 ];

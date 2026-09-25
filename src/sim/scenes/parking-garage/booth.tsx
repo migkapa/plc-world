@@ -6,13 +6,14 @@
  * 5380 rack, breakers, a 24 V supply, terminal strips and ducts; conduit drops into the floor toward the
  * gates, loops and photo-eyes.
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { sfx } from '../../../audio/sfx';
 import type { Vec3 } from '../../../twin/contracts';
 import {
   CircuitBreaker1489,
   CompactLogixRack,
+  CPX_CTRL,
   DinRail,
   Enclosure,
   layoutCompactLogixRack,
@@ -20,12 +21,15 @@ import {
   PowerSupply1606,
   TB_COLORS,
   TerminalBlocks1492,
+  Wire,
+  WireBundle,
   WireDuct,
 } from '../../../twin/devices';
 import { rackLiveFromController } from '../../../twin/live';
 import type { SimRuntime } from '../../types';
-import { canvasTexture, Conduit, FONT, IoTag, ioLine, kgeo, kmat, textLine } from '../trainer/kit';
-import { KeySwitch800F, StaticInstances, useDisposeOnUnmount, type InstXf } from '../traffic-light/cityKit';
+import { canvasTexture, Conduit, FONT, IoTag, ioLine, kgeo, kmat, textLine, type TagGroup } from '../trainer/kit';
+import { DistanceSwitch } from '../trainer/rackLod';
+import { ClickBlocker, KeySwitch800F, StaticInstances, useDisposeOnUnmount, useNoCastShadow, type InstXf } from '../traffic-light/cityKit';
 import { CURB, SITE } from './site';
 
 const B = SITE.booth;
@@ -153,36 +157,70 @@ function BoothShell() {
   );
 }
 
-/** Gate control panel inside the booth: live rack + power + terminals (backplate coordinates). */
+/** Gate control panel inside the booth: live rack + power + terminals + ducts + wiring (backplate coordinates). */
 function ControlPanel({ runtime }: { runtime: SimRuntime }) {
   const live = useMemo(() => rackLiveFromController(runtime.controller), [runtime.controller]);
   const hardware = runtime.scene.hardware;
   const layout = useMemo(() => layoutCompactLogixRack(hardware.modules), [hardware.modules]);
   const [open, setOpen] = useState(true);
-  const RACK = { x: -0.08, y: -0.07 };
+  const openRef = useRef(open);
+  openRef.current = open;
+  const closed = useMemo(() => () => !openRef.current, []);
+  const P = BOOTH_PANEL;
+  return (
+    <group>
+      <Enclosure
+        size={P.size}
+        position={[P.x, P.y, P.z]}
+        rotation={[0, -Math.PI / 2, 0]}
+        doorAngle={open ? 1.95 : 0}
+        onDoorToggle={() => {
+          setOpen((o) => !o);
+          sfx.play('click');
+        }}
+        nameplate={'GATE CONTROL\nGCP-1'}
+        backplate="white"
+      >
+        <DistanceSwitch distance={6} near={<PanelInterior runtime={runtime} live={live} layout={layout} />} far={<PanelImpostor />} />
+      </Enclosure>
+      {/* the closed door blocks clicks on the devices behind it */}
+      <ClickBlocker position={[P.x - P.size[2] + 0.01, P.y + P.size[1] / 2, P.z]} size={[0.01, P.size[1] - 0.02, P.size[0] - 0.02]} getEnabled={closed} />
+    </group>
+  );
+}
+
+const RACK = { x: -0.08, y: -0.07 };
+const TOP_DUCT_Y = 0.3;
+const RISER_X = 0.225;
+const PSU_X = -0.105;
+const RAIL1_Y = 0.2;
+const IO_RAIL_Y = -0.27;
+const RED = '#c62828';
+const BLUE = '#1f4fd1';
+const WHT = '#e8e8e8';
+const BRN = '#6b4a2b';
+const GY = '#9bbf2a';
+
+type RackLayout = ReturnType<typeof layoutCompactLogixRack>;
+
+function PanelInterior({ runtime, live, layout }: { runtime: SimRuntime; live: ReturnType<typeof rackLiveFromController>; layout: RackLayout }) {
+  const hardware = runtime.scene.hardware;
   const ioLabels = ['I0', 'I1', 'I2', 'I3', 'I4', 'I5', '0V', '0V', 'O0', 'O1', 'O2', 'O3', '0V', '0V', 'PE', 'PE'];
   const ioColors = ioLabels.map((l) => (l === '0V' ? TB_COLORS.blue : TB_COLORS.gray));
   const pwrLabels = ['L1', 'L1', 'N', 'N', '+24', '+24', '0V', '0V', 'PE'];
   const pwrColors = pwrLabels.map((l) => (l === 'N' || l === '0V' ? TB_COLORS.blue : l === '+24' ? TB_COLORS.red : TB_COLORS.gray));
-  const ductWires = ['#1f4fd1', '#1f4fd1', '#c62828', '#111111', '#eeeeee', '#1f4fd1'];
+  const ductWires = [BLUE, BLUE, RED, '#111111', WHT, BLUE];
+  const wires = useMemo(() => buildPanelWires(layout), [layout]);
+  const g = useRef<THREE.Group>(null);
+  useNoCastShadow(g);
   return (
-    <Enclosure
-      size={BOOTH_PANEL.size}
-      position={[BOOTH_PANEL.x, BOOTH_PANEL.y, BOOTH_PANEL.z]}
-      rotation={[0, -Math.PI / 2, 0]}
-      doorAngle={open ? 1.95 : 0}
-      onDoorToggle={() => {
-        setOpen((o) => !o);
-        sfx.play('click');
-      }}
-      nameplate={'GATE CONTROL\nGCP-1'}
-      backplate="white"
-    >
-      <WireDuct length={0.5} position={[0, 0.3, 0]} width={0.035} height={0.05} wires={ductWires} />
-      <DinRail length={0.5} position={[0, 0.2, 0]}>
+    <group ref={g}>
+      {/* open ducts (covers off) so the conductors inside read */}
+      <WireDuct length={0.5} position={[-0.01, TOP_DUCT_Y, 0]} width={0.04} height={0.06} wires={ductWires} cover={false} />
+      <DinRail length={0.5} position={[0, RAIL1_Y, 0]}>
         <CircuitBreaker1489 poles={2} rating="C6" position={[-0.205, 0, 0]} getOn={() => true} />
         <CircuitBreaker1489 poles={1} rating="C2" position={[-0.17, 0, 0]} getOn={() => true} />
-        <PowerSupply1606 position={[-0.105, 0, 0]} width={0.04} rating="24V DC 5A 120W" catalog="1606-XLS120E" getOk={() => true} />
+        <PowerSupply1606 position={[PSU_X, 0, 0]} width={0.04} rating="24V DC 5A 120W" catalog="1606-XLS120E" getOk={() => true} />
         <TerminalBlocks1492 count={pwrLabels.length} labels={pwrLabels} colors={pwrColors} position={[0.02, 0, 0]} />
       </DinRail>
       <CompactLogixRack hardware={hardware} live={live} wiring={{ 1: [0, 1, 2, 3, 4, 5], 2: [0, 1, 2, 3] }} position={[RACK.x, RACK.y, 0]} />
@@ -196,15 +234,92 @@ function ControlPanel({ runtime }: { runtime: SimRuntime }) {
           lines={[textLine(s.catalog, s.slot === 0 ? 'CompactLogix 5380' : s.slot === 1 ? 'DI_Gates' : 'DO_Gates', `Local:${s.slot}`)]}
         />
       ))}
-      <WireDuct length={0.66} vertical position={[0.225, -0.01, 0]} width={0.035} height={0.05} wires={ductWires} />
-      <DinRail length={0.42} position={[-0.03, -0.27, 0]}>
+      <WireDuct length={0.66} vertical position={[RISER_X, -0.01, 0]} width={0.04} height={0.06} wires={ductWires} cover={false} />
+      <DinRail length={0.42} position={[-0.03, IO_RAIL_Y, 0]}>
         <TerminalBlocks1492 count={ioLabels.length} labels={ioLabels} colors={ioColors} position={[0.02, 0, 0]} />
       </DinRail>
-    </Enclosure>
+      {wires.single.map((w, i) => (
+        <Wire key={i} points={w.p} color={w.c} radius={0.0012} bendRadius={0.006} ferrules={w.f} />
+      ))}
+      {wires.bundles.map((b, i) => (
+        <WireBundle key={`b${i}`} points={b.p} colors={b.c} radius={0.0011} bendRadius={0.02} tieSpacing={0.06} />
+      ))}
+    </group>
   );
 }
 
-export function Booth({ runtime }: { runtime: SimRuntime }) {
+/** Conductor routes on the backplate. */
+function buildPanelWires(layout: RackLayout) {
+  const single: { p: Vec3[]; c: string; f: boolean }[] = [];
+  const bundles: { p: Vec3[]; c: string[] }[] = [];
+  const ductBottom = TOP_DUCT_Y - 0.02;
+  // PSU output (+ + − − on top) up into the top duct
+  const psuTop = RAIL1_Y + 0.124 / 2 - 0.015;
+  [-0.013, -0.004, 0.005, 0.014].forEach((dx, i) => {
+    const x = PSU_X + dx;
+    single.push({ p: [[x, psuTop, 0.1], [x, psuTop + 0.01, 0.1], [x, ductBottom - 0.004, 0.06], [x, ductBottom, 0.035]], c: i < 2 ? RED : BLUE, f: true });
+  });
+  // breaker outputs (top) → PSU input is at the PSU bottom: short jumpers under the rail
+  const psuBot = RAIL1_Y - 0.124 / 2 + 0.015;
+  const brkBot = RAIL1_Y - 0.045;
+  [
+    [-0.175, BRN],
+    [-0.162, BLUE],
+  ].forEach(([bx, c], i) => {
+    const x = PSU_X - 0.008 + i * 0.01;
+    single.push({ p: [[bx as number, brkBot, 0.07], [bx as number, psuBot - 0.03 - i * 0.004, 0.07], [x, psuBot - 0.03 - i * 0.004, 0.09], [x, psuBot, 0.1]], c: c as string, f: true });
+  });
+  // controller MOD / SA power from the top duct (5069-L320ER power column)
+  const ctrl = layout.slots[0]!;
+  const xPwr = RACK.x + ctrl.x - CPX_CTRL.width / 2 + CPX_CTRL.powerColumn / 2;
+  const zT = 0.0075 + 0.1038;
+  const top = RACK.y + CPX_CTRL.height + 0.008;
+  (
+    [
+      [-0.005, 0.0925, RED],
+      [0.005, 0.0805, BLUE],
+      [-0.005, 0.0555, RED],
+      [0.005, 0.0435, BLUE],
+    ] as const
+  ).forEach(([u, v, c], i) => {
+    const x = xPwr + u;
+    const y = RACK.y + v - 0.00225;
+    const zf = zT + 0.012 + i * 0.004;
+    single.push({ p: [[x, ductBottom, 0.035], [x, top, 0.035 + i * 0.004], [x, top, zf], [x, y + 0.004, zf], [x, y, zT + 0.001]], c, f: true });
+  });
+  // power terminal strip (+24 / 0V) up into the duct
+  for (let i = 0; i < 4; i++) {
+    const x = 0.02 - 0.02 + i * 0.0051 + 0.001;
+    single.push({ p: [[x, RAIL1_Y + 0.03, 0.045], [x, RAIL1_Y + 0.04, 0.045], [x, ductBottom, 0.035]], c: i < 2 ? RED : BLUE, f: true });
+  }
+  // rack duct (IB16 / OB16 field wires) → riser
+  const ductR = RACK.x + layout.railLength / 2 + 0.01;
+  const rackDuctY = RACK.y - 0.045 - 0.02;
+  bundles.push({ p: [[ductR - 0.005, rackDuctY, 0.035], [ductR + 0.04, rackDuctY, 0.04], [RISER_X - 0.022, rackDuctY, 0.035]], c: [WHT, WHT, WHT, WHT, WHT, WHT, BLUE, BLUE] });
+  // riser → I/O terminal strip (top row)
+  bundles.push({ p: [[RISER_X - 0.022, IO_RAIL_Y + 0.06, 0.035], [0.12, IO_RAIL_Y + 0.06, 0.04], [0.08, IO_RAIL_Y + 0.035, 0.045]], c: [WHT, WHT, WHT, WHT, WHT, WHT] });
+  // I/O strip field side (bottom row) → gland plate → conduits to the gates, loops and eyes
+  bundles.push({ p: [[-0.05, IO_RAIL_Y - 0.035, 0.045], [-0.05, -0.33, 0.05], [-0.05, -0.345, 0.09], [-0.05, -0.36, 0.12]], c: [WHT, WHT, WHT, WHT, BLUE, BLUE] });
+  bundles.push({ p: [[0.12, IO_RAIL_Y - 0.035, 0.045], [0.12, -0.33, 0.05], [0.12, -0.345, 0.09], [0.12, -0.36, 0.12]], c: [WHT, WHT, WHT, WHT] });
+  // incoming 120 V feeder: from the gland up the riser to the breaker tops
+  bundles.push({ p: [[RISER_X + 0.004, -0.36, 0.12], [RISER_X + 0.004, -0.34, 0.03], [RISER_X, 0.31, 0.03], [RISER_X - 0.03, 0.335, 0.035], [-0.19, 0.335, 0.05], [-0.19, RAIL1_Y + 0.045, 0.07]], c: [BRN, BLUE, GY] });
+  return { single, bundles };
+}
+
+function PanelImpostor() {
+  const dark = kmat('pg:impDark', () => new THREE.MeshStandardMaterial({ color: '#1d2023', roughness: 0.55 }));
+  const light = kmat('pg:impLight', () => new THREE.MeshStandardMaterial({ color: '#c9ccce', roughness: 0.6 }));
+  return (
+    <group>
+      <mesh geometry={unitBox()} material={dark} position={[RACK.x, RACK.y + 0.072, 0.075]} scale={[0.155, 0.145, 0.14]} />
+      <mesh geometry={unitBox()} material={light} position={[-0.12, RAIL1_Y, 0.05]} scale={[0.2, 0.12, 0.1]} />
+      <mesh geometry={unitBox()} material={light} position={[0, TOP_DUCT_Y, 0.03]} scale={[0.5, 0.04, 0.06]} />
+      <mesh geometry={unitBox()} material={light} position={[RISER_X, -0.01, 0.03]} scale={[0.04, 0.66, 0.06]} />
+    </group>
+  );
+}
+
+export function Booth({ runtime, tagGroup }: { runtime: SimRuntime; tagGroup?: TagGroup }) {
   const key = useMemo(
     () => ({
       get: () => runtime.getControl('reset_key') === true,
@@ -220,29 +335,50 @@ export function Booth({ runtime }: { runtime: SimRuntime }) {
     [runtime],
   );
   const P = BOOTH_PANEL;
+  const inside = useRef<THREE.Group>(null);
+  useNoCastShadow(inside);
+  const t = 0.1;
   return (
     <group>
       <BoothShell />
-      <ControlPanel runtime={runtime} />
-      {/* conduit from the panel's bottom glands down into the floor (to the gates, loops and eyes) */}
-      <Conduit points={[[P.x - 0.12, P.y - 0.005, P.z - 0.12], [P.x - 0.12, FLOOR + 0.02, P.z - 0.12]]} radius={0.014} />
-      <Conduit points={[[P.x - 0.12, P.y - 0.005, P.z + 0.02], [P.x - 0.12, FLOOR + 0.02, P.z + 0.02]]} radius={0.014} />
-      {/* desk console with the key switch, face tilted up toward the attendant */}
-      <group position={[BOOTH_KEY.x, BOOTH_KEY.y, BOOTH_KEY.z]} rotation={[0, Math.PI / 2, 0]}>
-        <mesh position={[0, 0.04, -0.01]} material={frameMat()} castShadow>
-          <boxGeometry args={[0.16, 0.08, 0.12]} />
-        </mesh>
-        <group position={[0, 0.085, 0]} rotation={[-0.9, 0, 0]}>
-          <mesh position={[0, 0, -0.004]} material={kmat('pg:consoleFace', () => new THREE.MeshStandardMaterial({ color: '#3b4148', roughness: 0.6, metalness: 0.3 }))} castShadow>
-            <boxGeometry args={[0.15, 0.13, 0.008]} />
+      <group ref={inside}>
+        <ControlPanel runtime={runtime} />
+        {/* conduit from the panel's bottom glands down into the floor (to the gates, loops and eyes) */}
+        <Conduit points={[[P.x - 0.12, P.y - 0.005, P.z - 0.12], [P.x - 0.12, FLOOR + 0.02, P.z - 0.12]]} radius={0.014} />
+        <Conduit points={[[P.x - 0.12, P.y - 0.005, P.z + 0.02], [P.x - 0.12, FLOOR + 0.02, P.z + 0.02]]} radius={0.014} />
+        {/* desk console with the key switch, face tilted up toward the attendant */}
+        <group position={[BOOTH_KEY.x, BOOTH_KEY.y, BOOTH_KEY.z]} rotation={[0, Math.PI / 2, 0]}>
+          <mesh position={[0, 0.04, -0.01]} material={frameMat()}>
+            <boxGeometry args={[0.16, 0.08, 0.12]} />
           </mesh>
-          <IoTag position={[0, -0.01, 0]} size={[0.06, 0.08, 0.06]} center={[0, 0.008, 0.02]} anchor={[0, 0.06, 0.05]} title="Attendant key switch, spring return" lines={[ioLine(runtime, 'Reset_Key')]}>
-            <KeySwitch800F legend={['COUNT RESET']} positions={['RUN', 'RESET']} getOn={key.get} onPress={key.press} onRelease={key.release} scale={1.3} />
-          </IoTag>
+          <group position={[0, 0.085, 0]} rotation={[-0.9, 0, 0]}>
+            <mesh position={[0, 0, -0.004]} material={kmat('pg:consoleFace', () => new THREE.MeshStandardMaterial({ color: '#3b4148', roughness: 0.6, metalness: 0.3 }))}>
+              <boxGeometry args={[0.15, 0.13, 0.008]} />
+            </mesh>
+            <IoTag
+              position={[0, -0.01, 0]}
+              size={[0.06, 0.08, 0.06]}
+              center={[0, 0.008, 0.02]}
+              anchor={[0, 0.06, 0.05]}
+              title="Attendant COUNT RESET key (spring return) — loads Count_Adjust in the reference program"
+              lines={[ioLine(runtime, 'Reset_Key')]}
+              group={tagGroup}
+            >
+              <KeySwitch800F legend={['COUNT RESET']} positions={['RUN', 'RESET']} getOn={key.get} onPress={key.press} onRelease={key.release} scale={1.3} />
+            </IoTag>
+          </group>
         </group>
       </group>
       {/* the attendant, turning to the key when it is used */}
-      <Pedestrian variant={5} position={[8.05, FLOOR, 9.0]} rotation={[0, Math.PI - 0.35, 0]} getWalking={() => false} getReach={() => (key.get() ? 1 : 0)} />
+      <Pedestrian variant={5} position={[8.1, FLOOR, 8.75]} rotation={[0, Math.PI - 0.2, 0]} getWalking={() => false} getReach={() => (key.get() ? 1 : 0)} />
+      {/* click blockers: roof, east wall, window walls (glass) — only the open door lets a click in */}
+      <ClickBlocker position={[(B.x0 + B.x1) / 2, TOP + 0.1, (B.z0 + B.z1) / 2]} size={[B.x1 - B.x0 + 0.7, 0.24, B.z1 - B.z0 + 0.7]} />
+      <ClickBlocker position={[B.x1 - t / 2, (FLOOR + TOP) / 2, (B.z0 + B.z1) / 2]} size={[t, TOP - FLOOR, B.z1 - B.z0]} />
+      <ClickBlocker position={[B.x0 + t / 2, (FLOOR + TOP) / 2, (B.z0 + B.z1) / 2]} size={[t, TOP - FLOOR, B.z1 - B.z0]} />
+      <ClickBlocker position={[(B.x0 + B.x1) / 2, (FLOOR + TOP) / 2, B.z0 + t / 2]} size={[B.x1 - B.x0, TOP - FLOOR, t]} />
+      <ClickBlocker position={[(DOOR.x1 + B.x1) / 2, (FLOOR + TOP) / 2, B.z1 - t / 2]} size={[B.x1 - DOOR.x1, TOP - FLOOR, t]} />
+      <ClickBlocker position={[(B.x0 + DOOR.x0) / 2, (FLOOR + TOP) / 2, B.z1 - t / 2]} size={[DOOR.x0 - B.x0, TOP - FLOOR, t]} />
+      <ClickBlocker position={[(DOOR.x0 + DOOR.x1) / 2, (HEAD + TOP) / 2, B.z1 - t / 2]} size={[DOOR.x1 - DOOR.x0, TOP - HEAD, t]} />
     </group>
   );
 }

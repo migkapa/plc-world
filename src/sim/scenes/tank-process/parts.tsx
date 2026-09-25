@@ -1,8 +1,8 @@
 /**
- * Parts of the `tank-process` twin: feed tank T-100 + centrifugal feed pump P-100, access platform with ladder
- * and handrails, pipe rack, IBC tote, drain tundish, the local operator panel (Start / Stop / Discharge / E-stop,
- * pilot lights, alarm beacon-sounder) and the liquid effects (inlet stream, heater bubbles, boiling, steam,
- * overflow spill + puddle, drain swirl).
+ * Parts of the `tank-process` twin: skid, feed tank T-100 + centrifugal feed pump P-100 (local pressure-switch
+ * control), access platform with ladder and handrails, pipe rack, IBC tote, drain tundish, the local operator panel
+ * (Start / Stop / Discharge / E-stop, pilot lights) and the AH-101 alarm beacon-sounder on its mast. The liquid
+ * effects live in ./fx.tsx.
  */
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
@@ -10,47 +10,43 @@ import * as THREE from 'three';
 import {
   EStop800FM,
   Enclosure,
+  FieldMerge,
   Motor,
   motorBodyLength,
   PilotLight800F,
   PushButton800F,
   StackLight856T,
-  tankLayout,
 } from '../../../twin/devices';
 import type { Vec3 } from '../../../twin/contracts';
 import type { SimRuntime } from '../../types';
 import { Instances, paint, steel, stripeMaterial, unitBox, unitCylY, WallSign, YELLOW } from '../conveyor-sort/hall';
-import { IoHotspot, playSfx } from '../conveyor-sort/kit';
+import { Glow, IoHotspot, momentaryControl, toggleControl } from '../conveyor-sort/kit';
+import { SKID, SKID_H, TANK_D, TANK_H, TL, ZI } from './layout';
 import type { TankProcessState } from './logic';
 
-export const TANK_D = 1.3;
-export const TANK_H = 1.25;
-export const TL = tankLayout(TANK_D, TANK_H);
-/** The process skid lifts the tank this much off the floor. */
-export const SKID_H = 0.12;
-/** z of the inlet line / valve station (same as the inlet nozzle). */
-export const ZI = TL.nozzles.inlet.position[2];
+export { SKID_H, TANK_D, TANK_H, TL, ZI };
 
 // ---------------------------------------------------------------------------
 // Skid & platform
 // ---------------------------------------------------------------------------
 
 export function Skid() {
-  const w = 2.3;
-  const d = 2.1;
+  const { w, d } = SKID;
   const ch = paint('#35536f', 0.5, 0.4);
+  // channel tops stay 8 mm below the deck top: no coplanar faces with the 6 mm checker plate (no z-fighting)
+  const chH = SKID_H - 0.008;
   return (
     <group>
       <Instances
         geometry={unitBox}
         material={ch}
         items={[
-          ...[-1, 1].map((sz) => ({ p: [0, SKID_H / 2, (sz * d) / 2] as Vec3, s: [w, SKID_H, 0.1] as Vec3 })),
-          ...[-1, 0, 1].map((sx) => ({ p: [(sx * w) / 2 - sx * 0.05, SKID_H / 2, 0] as Vec3, s: [0.1, SKID_H, d] as Vec3 })),
-          ...[-1, 1].map((sz) => ({ p: [0, SKID_H / 2, sz * 0.5] as Vec3, s: [w - 0.1, SKID_H * 0.8, 0.08] as Vec3 })),
+          ...[-1, 1].map((sz) => ({ p: [0, chH / 2, (sz * d) / 2] as Vec3, s: [w, chH, 0.1] as Vec3 })),
+          ...[-1, 0, 1].map((sx) => ({ p: [(sx * w) / 2 - sx * 0.05, chH / 2, 0] as Vec3, s: [0.1, chH, d] as Vec3 })),
+          ...[-1, 1].map((sz) => ({ p: [0, (chH * 0.8) / 2, sz * 0.5] as Vec3, s: [w - 0.1, chH * 0.8, 0.08] as Vec3 })),
         ]}
       />
-      {/* checker plate deck */}
+      {/* checker plate deck (top = SKID_H) */}
       <mesh position={[0, SKID_H - 0.003, 0]} receiveShadow material={checkerMat()}>
         <boxGeometry args={[w - 0.02, 0.006, d - 0.02]} />
       </mesh>
@@ -205,9 +201,25 @@ export function Platform() {
 
 export const FEED = { x: -4.25, z: ZI, r: 0.55, h: 1.75, base: 0.25, level: 0.68 } as const;
 const MOTOR_L = motorBodyLength('small');
-export const PUMP = { casingX: -3.3, shaftY: 0.33, motorX: -3.3 + 0.2 + MOTOR_L / 2 + 0.06 } as const;
+export const PUMP = { casingX: -3.3, shaftY: 0.33, motorX: -3.3 + 0.2 + MOTOR_L / 2 + 0.06, starterX: -2.62, starterZ: 0.36 } as const;
 
-export function FeedTank() {
+/**
+ * T-100 raw-water tank. Its level drops while P-100 pumps and recovers slowly (make-up float valve), so a learner can
+ * see where the feed comes from.
+ */
+export function FeedTank({ state }: { state: TankProcessState }) {
+  const waterRef = useRef<THREE.Mesh>(null);
+  const lvl = useRef<number>(FEED.level);
+  useFrame((_, dt) => {
+    const d = Math.min(dt, 0.1);
+    lvl.current = THREE.MathUtils.clamp(lvl.current + (state.inflowRate > 0.01 ? -0.005 * (state.inflowRate / 4.5) : 0.003) * d, 0.35, 0.78);
+    const m = waterRef.current;
+    if (m) {
+      const h = FEED.h * lvl.current;
+      m.scale.y = h;
+      m.position.y = FEED.base + h / 2;
+    }
+  });
   const hdpe = useMemo(
     () => new THREE.MeshPhysicalMaterial({ color: '#e9e3cf', roughness: 0.55, metalness: 0, transmission: 0, transparent: true, opacity: 0.78 }),
     [],
@@ -232,8 +244,8 @@ export function FeedTank() {
           ...[-1, 1].flatMap((sx) => [-1, 1].map((sz) => ({ p: [sx * r * 0.8, (base - 0.04) / 2, sz * r * 0.8] as Vec3, s: [0.06, base - 0.04, 0.06] as Vec3 }))),
         ]}
       />
-      <mesh position={[0, base + h * FEED.level * 0.5, 0]} material={water} userData={{ noOcclude: true }}>
-        <cylinderGeometry args={[r - 0.02, r - 0.02, h * FEED.level, 40]} />
+      <mesh ref={waterRef} position={[0, base + h * FEED.level * 0.5, 0]} scale={[1, h * FEED.level, 1]} material={water} userData={{ noOcclude: true }}>
+        <cylinderGeometry args={[r - 0.02, r - 0.02, 1, 40]} />
       </mesh>
       <mesh position={[0, base + h / 2, 0]} material={hdpe} castShadow userData={{ noOcclude: true }}>
         <cylinderGeometry args={[r, r, h, 48, 1, true]} />
@@ -309,6 +321,43 @@ export function FeedPump({ state }: { state: TankProcessState }) {
         </mesh>
         <GaugeNeedle getValue={() => rpm.current / 2900} />
       </group>
+      {/* PS-100 pressure switch on the discharge (starts the pump when the line pressure drops) */}
+      <group position={[casingX - 0.02, 0.76, 0.06]}>
+        <mesh geometry={unitCylY} material={steel('#b8bec3', 0.35)} position={[0, 0, -0.03]} rotation={[Math.PI / 2, 0, 0]} scale={[0.008, 0.06, 0.008]} />
+        <mesh material={paint('#c9ccc8', 0.5, 0.1)} castShadow>
+          <boxGeometry args={[0.06, 0.08, 0.05]} />
+        </mesh>
+        <WallSign lines={['PS-100']} position={[0, 0.012, 0.0255]} size={[0.05, 0.018]} bg="#f4f4f0" />
+      </group>
+      {/* local DOL starter (HOA) on a post beside the pump */}
+      <group position={[PUMP.starterX, 0, PUMP.starterZ]}>
+        <Instances
+          geometry={unitBox}
+          material={paint('#3a3f44', 0.5, 0.4)}
+          items={[
+            { p: [0, 0.55, -0.04], s: [0.05, 1.1, 0.05] },
+            { p: [0, 0.006, -0.04], s: [0.16, 0.012, 0.16] },
+          ]}
+        />
+        <mesh material={paint('#c9ccc8', 0.5, 0.1)} position={[0, 1.0, 0.03]} castShadow>
+          <boxGeometry args={[0.18, 0.24, 0.12]} />
+        </mesh>
+        <WallSign lines={['P-100', 'LOCAL STARTER']} position={[0, 1.08, 0.0905]} size={[0.12, 0.04]} bg="#f4f4f0" />
+        {/* run lamp + H-O-A */}
+        <mesh position={[-0.04, 0.99, 0.093]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.013, 0.013, 0.008, 18]} />
+          <meshStandardMaterial color="#2a6a35" roughness={0.35} />
+        </mesh>
+        <mesh position={[0.04, 0.99, 0.093]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.016, 0.016, 0.01, 18]} />
+          <meshStandardMaterial color="#1b1c1e" roughness={0.4} />
+        </mesh>
+        <mesh position={[0.04, 0.99, 0.1]}>
+          <boxGeometry args={[0.028, 0.006, 0.006]} />
+          <meshStandardMaterial color="#e8e8e0" roughness={0.4} />
+        </mesh>
+        <Glow get={() => rpm.current > 200} color="#2dff5a" position={[-0.04, 0.99, 0.1]} size={0.06} intensity={1.4} />
+      </group>
     </group>
   );
 }
@@ -351,7 +400,7 @@ export function PipeRack() {
     { d: 0.17, dz: 0.16, color: '#c9ced3', clad: true },
   ];
   return (
-    <group>
+    <FieldMerge>
       <Instances geometry={unitBox} material={col} items={items} />
       {pipes.map((p, i) => (
         <group key={i}>
@@ -372,7 +421,7 @@ export function PipeRack() {
             ))}
         </group>
       ))}
-    </group>
+    </FieldMerge>
   );
 }
 
@@ -447,282 +496,14 @@ export function Tundish({ position, state }: { position: Vec3; state: TankProces
 }
 
 // ---------------------------------------------------------------------------
-// Liquid effects
-// ---------------------------------------------------------------------------
-
-function streamMaterial() {
-  return new THREE.MeshStandardMaterial({ color: '#b9d8ea', roughness: 0.08, metalness: 0, transparent: true, opacity: 0.6, depthWrite: false, emissive: '#27465c', emissiveIntensity: 0.3 });
-}
-
-let steamSprite: THREE.CanvasTexture | null = null;
-function steamTexture() {
-  if (steamSprite) return steamSprite;
-  const c = document.createElement('canvas');
-  c.width = 64;
-  c.height = 64;
-  const ctx = c.getContext('2d')!;
-  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-  g.addColorStop(0, 'rgba(255,255,255,0.55)');
-  g.addColorStop(0.35, 'rgba(255,255,255,0.28)');
-  g.addColorStop(0.7, 'rgba(255,255,255,0.08)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 64, 64);
-  steamSprite = new THREE.CanvasTexture(c);
-  return steamSprite;
-}
-
-const NB = 70;
-const NS = 36;
-
-/** Tank-local effects (place inside the same group as the <Tank>). */
-export function TankFx({ state }: { state: TankProcessState }) {
-  const n = TL.nozzles;
-  const inlet = useRef<THREE.Mesh>(null);
-  const splash = useRef<THREE.Mesh>(null);
-  const bubbles = useRef<THREE.InstancedMesh>(null);
-  const steam = useRef<THREE.Points>(null);
-  const spillFall = useRef<THREE.Mesh>(null);
-  const sheet = useRef<THREE.Mesh>(null);
-  const drip = useRef<THREE.Mesh>(null);
-  const puddle = useRef<THREE.Mesh>(null);
-  const puddleVol = useRef(0);
-  const mats = useMemo(() => {
-    const sheet = streamMaterial();
-    sheet.opacity = 0.78;
-    sheet.color.set('#d6ecf7');
-    sheet.emissive.set('#4d7a96');
-    sheet.side = THREE.DoubleSide;
-    return {
-      stream: streamMaterial(),
-      sheet,
-      puddle: new THREE.MeshStandardMaterial({ color: '#2f4d61', roughness: 0.03, metalness: 0.2, transparent: true, opacity: 0.78, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
-    };
-  }, []);
-  const sheetTex = useMemo(() => {
-    const c = document.createElement('canvas');
-    c.width = 32;
-    c.height = 128;
-    const ctx = c.getContext('2d')!;
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, 32, 128);
-    for (let i = 0; i < 40; i++) {
-      ctx.fillStyle = `rgba(90,130,160,${0.2 + Math.random() * 0.3})`;
-      ctx.fillRect(Math.random() * 32, Math.random() * 128, 2, 10 + Math.random() * 20);
-    }
-    const t = new THREE.CanvasTexture(c);
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    return t;
-  }, []);
-  useEffect(() => {
-    mats.sheet.map = sheetTex;
-    mats.sheet.needsUpdate = true;
-    return () => {
-      mats.stream.dispose();
-      mats.sheet.dispose();
-      mats.puddle.dispose();
-      sheetTex.dispose();
-    };
-  }, [mats, sheetTex]);
-
-  // bubbles: per-instance seeds
-  const seeds = useMemo(() => Array.from({ length: NB }, (_, i) => ({ a: (i * 0.6180339) % 1, b: (i * 0.4142135) % 1, c: (i * 0.7320508) % 1 })), []);
-  const steamGeo = useMemo(() => {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(NS * 3), 3));
-    return g;
-  }, []);
-  const steamMat = useMemo(
-    () => new THREE.PointsMaterial({ map: steamTexture(), size: 0.28, sizeAttenuation: true, transparent: true, opacity: 0.5, depthWrite: false, color: '#f4f7fa' }),
-    [],
-  );
-  useEffect(
-    () => () => {
-      steamGeo.dispose();
-      steamMat.dispose();
-    },
-    [steamGeo, steamMat],
-  );
-
-  const o = useMemo(() => new THREE.Object3D(), []);
-  const inletTopY = TL.yT2 + 0.17;
-  const inletX = n.inlet.position[0];
-  const inletZ = n.inlet.position[2];
-  const ventOut: Vec3 = [n.vent.position[0] + 0.12, n.vent.position[1] + 0.02, n.vent.position[2]];
-  const heaterDir = new THREE.Vector3(...n.heater.direction).normalize();
-  const phiSheet = (300 * Math.PI) / 180;
-
-  useFrame(({ clock }, dtRaw) => {
-    const dt = Math.min(dtRaw, 0.05);
-    const t = clock.elapsedTime;
-    const surf = TL.levelY(state.level);
-    // ---- inlet stream ----
-    const inflow = state.inflowRate / 4.5;
-    const im = inlet.current;
-    if (im) {
-      im.visible = inflow > 0.01;
-      if (im.visible) {
-        const len = Math.max(0.02, inletTopY - surf);
-        const r = 0.006 + 0.016 * Math.sqrt(inflow);
-        im.scale.set(r * (1 + 0.08 * Math.sin(t * 31)), len, r);
-        im.position.set(inletX, inletTopY - len / 2, inletZ);
-      }
-    }
-    const sp = splash.current;
-    if (sp) {
-      sp.visible = inflow > 0.01 && state.level > 0.5;
-      if (sp.visible) {
-        sp.position.set(inletX, surf + 0.004, inletZ);
-        const k = 0.05 + 0.08 * Math.sqrt(inflow) * (1 + 0.15 * Math.sin(t * 17));
-        sp.scale.set(k, k, k);
-      }
-    }
-    // ---- bubbles: heater nucleation, or everywhere when boiling ----
-    const bm = bubbles.current;
-    if (bm) {
-      const covered = state.level >= 10;
-      const heating = state.heaterGlow > 0.3 && covered;
-      const boil = state.boiling;
-      const hot = THREE.MathUtils.clamp((state.temperature - 40) / 55, 0, 1);
-      const active = boil ? NB : heating ? Math.round(NB * (0.25 + 0.45 * hot)) : 0;
-      let k = 0;
-      for (let i = 0; i < active; i++) {
-        const s = seeds[i]!;
-        let x: number;
-        let y0: number;
-        let z: number;
-        const speed = boil ? 0.9 + s.c * 0.6 : 0.35 + s.c * 0.3;
-        if (boil && i % 2 === 0) {
-          const rr = 0.1 + s.a * (TL.radius - 0.15);
-          const ph = s.b * Math.PI * 2;
-          x = Math.sin(ph) * rr;
-          z = Math.cos(ph) * rr;
-          y0 = TL.yBottom + 0.12;
-        } else {
-          const rr = 0.12 + s.a * 0.38;
-          x = heaterDir.x * rr + (s.b - 0.5) * 0.05;
-          z = heaterDir.z * rr + (s.c - 0.5) * 0.05;
-          y0 = n.heater.position[1] - 0.01;
-        }
-        const span = surf - y0;
-        if (span < 0.03) continue;
-        const u = (t * speed / Math.max(span, 0.2) + s.a * 7.13) % 1;
-        const y = y0 + u * span;
-        // skip bubbles in the cut-away wedge in front (they would float in the air)
-        if (z > 0 && Math.abs(Math.atan2(x, z)) < Math.PI / 4 + 0.05 && Math.hypot(x, z) > 0.1) continue;
-        const size = (boil ? 0.018 : 0.011) * (0.6 + s.b * 0.8) * (0.7 + u * 0.6);
-        o.position.set(x + Math.sin(t * 3 + i) * 0.006, y, z);
-        o.scale.setScalar(size);
-        o.updateMatrix();
-        bm.setMatrixAt(k++, o.matrix);
-      }
-      bm.count = k;
-      bm.instanceMatrix.needsUpdate = true;
-    }
-    // ---- steam from the vent and over the surface ----
-    const st = steam.current;
-    if (st) {
-      const intensity = state.boiling ? 1 : THREE.MathUtils.clamp((state.temperature - 68) / 30, 0, 0.6);
-      st.visible = intensity > 0.01;
-      if (st.visible) {
-        steamMat.opacity = 0.12 + 0.3 * intensity;
-        steamMat.size = 0.25 + 0.3 * intensity;
-        const arr = steamGeo.attributes.position!.array as Float32Array;
-        for (let i = 0; i < NS; i++) {
-          const s = seeds[i]!;
-          const u = (t * (0.25 + s.c * 0.2) + s.a) % 1;
-          const fromVent = i % 3 !== 0 || !state.boiling;
-          if (fromVent) {
-            arr[i * 3] = ventOut[0] + (s.b - 0.5) * 0.08 + u * 0.25 * Math.sin(s.a * 6);
-            arr[i * 3 + 1] = ventOut[1] + 0.05 + u * 1.1;
-            arr[i * 3 + 2] = ventOut[2] + (s.c - 0.5) * 0.08 + u * 0.2;
-          } else {
-            arr[i * 3] = (s.a - 0.5) * 0.9;
-            arr[i * 3 + 1] = surf + 0.05 + u * Math.max(0.05, TL.yT2 - surf);
-            arr[i * 3 + 2] = (s.b - 0.5) * 0.6;
-          }
-        }
-        steamGeo.attributes.position!.needsUpdate = true;
-      }
-    }
-    // ---- overflow spill: out of the vent, down the shell, puddle on the floor ----
-    const spilling = state.spillRate > 0.01;
-    puddleVol.current = Math.max(0, puddleVol.current + (spilling ? 0.6 : -0.02) * dt);
-    puddleVol.current = Math.min(puddleVol.current, 1.2);
-    if (spillFall.current) {
-      spillFall.current.visible = spilling;
-      if (spilling) spillFall.current.scale.set(0.012 * (1 + 0.1 * Math.sin(t * 29)), SPILL_FALL, 0.012);
-    }
-    if (sheet.current) {
-      sheet.current.visible = spilling;
-      sheetTex.offset.y = (t * 1.6) % 1;
-    }
-    if (drip.current) {
-      drip.current.visible = spilling;
-      if (spilling) drip.current.scale.set(0.016 * (1 + 0.15 * Math.sin(t * 23)), DRIP_LEN, 0.016);
-    }
-    if (puddle.current) {
-      const v = puddleVol.current;
-      puddle.current.visible = v > 0.003;
-      const r = 0.25 + Math.sqrt(v) * 0.85;
-      puddle.current.scale.set(r, r * 0.8, 1);
-    }
-  });
-
-  const sheetBottom = TL.yT1 - 0.05;
-  const sheetTop = TL.yT2 + 0.06;
-  const dripX = Math.sin(phiSheet) * (TL.radius * 0.93);
-  const dripZ = Math.cos(phiSheet) * (TL.radius * 0.93);
-  return (
-    <group>
-      <mesh ref={inlet} geometry={unitCylY} material={mats.stream} visible={false} renderOrder={3} userData={{ noOcclude: true }} />
-      <mesh ref={splash} rotation={[-Math.PI / 2, 0, 0]} visible={false} material={mats.stream} renderOrder={3} userData={{ noOcclude: true }}>
-        <ringGeometry args={[0.25, 1, 24]} />
-      </mesh>
-      <instancedMesh ref={bubbles} args={[sphereGeo, bubbleMat, NB]} frustumCulled={false} renderOrder={3} userData={{ noOcclude: true }} />
-      <points ref={steam} geometry={steamGeo} material={steamMat} frustumCulled={false} visible={false} renderOrder={4} />
-      {/* spill: vent outlet → top head */}
-      <mesh ref={spillFall} geometry={unitCylY} material={mats.stream} position={[ventOut[0], ventOut[1] - SPILL_FALL / 2, ventOut[2]]} scale={[0.012, SPILL_FALL, 0.012]} visible={false} />
-      {/* sheet running down the shell (front-left, outside the cut-away) */}
-      <mesh ref={sheet} position={[0, (sheetTop + sheetBottom) / 2, 0]} material={mats.sheet} visible={false} userData={{ noOcclude: true }}>
-        <cylinderGeometry args={[TL.radius + 0.006, TL.radius + 0.006, sheetTop - sheetBottom, 12, 1, true, phiSheet - 0.22, 0.44]} />
-      </mesh>
-      {/* dripping off the bottom head to the floor */}
-      <mesh ref={drip} geometry={unitCylY} material={mats.stream} position={[dripX, (TL.yT1 - 0.1 - SKID_H) / 2, dripZ]} scale={[0.01, DRIP_LEN, 0.01]} visible={false} />
-      <mesh ref={puddle} geometry={discGeo} material={mats.puddle} position={[dripX * 1.15, -SKID_H + 0.004, dripZ * 1.15 + 0.2]} rotation={[-Math.PI / 2, 0, 0]} visible={false} userData={{ noOcclude: true }} />
-    </group>
-  );
-}
-
-const SPILL_FALL = 0.16;
-const DRIP_LEN = TL.yT1 - 0.1 + SKID_H;
-const sphereGeo = new THREE.SphereGeometry(1, 8, 6);
-const bubbleMat = new THREE.MeshStandardMaterial({ color: '#f4fbff', emissive: '#9fc3da', emissiveIntensity: 0.35, roughness: 0.1, metalness: 0, transparent: true, opacity: 0.85, depthWrite: false });
-const discGeo = new THREE.CircleGeometry(1, 36);
-
-// ---------------------------------------------------------------------------
 // Operator panel (Start / Stop / Discharge / E-stop, pilots, beacon-sounder)
 // ---------------------------------------------------------------------------
 
-export const PANEL = { x: 2.6, z: 1.05, ry: 0.35, y: 0.95, size: [0.46, 0.4, 0.16] as Vec3 } as const;
-
-function momentary(runtime: SimRuntime, id: string) {
-  return {
-    getPressed: () => Boolean(runtime.getControl(id)),
-    onPress: () => {
-      runtime.setControl(id, true);
-      playSfx('press');
-    },
-    onRelease: () => {
-      runtime.setControl(id, false);
-      playSfx('release');
-    },
-  };
-}
+export const PANEL = { x: 2.78, z: 1.3, ry: 0.35, y: 0.95, size: [0.46, 0.4, 0.16] as Vec3 } as const;
 
 export function OperatorPanel({ state, runtime }: { state: TankProcessState; runtime: SimRuntime }) {
-  const [, h, d] = PANEL.size;
-  // door coordinates → panel-group coordinates (door centre sits at (0, y + h/2, d))
+  const [w, h, d] = PANEL.size;
+  // door coordinates -> panel-group coordinates (door centre sits at (0, y + h/2, d))
   const doorToLocal = (p: Vec3): Vec3 => [p[0], PANEL.y + h / 2 + p[1], d + p[2]];
   const DEV = {
     running: [-0.14, 0.02, 0] as Vec3,
@@ -732,9 +513,18 @@ export function OperatorPanel({ state, runtime }: { state: TankProcessState; run
     discharge: [0.02, -0.1, 0] as Vec3,
     estop: [0.14, -0.05, 0] as Vec3,
   };
-  const hs = (k: keyof typeof DEV, dx = -0.15) => {
+  const start = momentaryControl(runtime, 'start');
+  const stop = momentaryControl(runtime, 'stop');
+  const discharge = momentaryControl(runtime, 'discharge');
+  const estop = toggleControl(runtime, 'estop');
+  // chips sit in two columns beside the door (left: lights + START / STOP, right: DISCHARGE / E-stop)
+  const hs = (k: keyof typeof DEV, side: -1 | 1, dy = 0) => {
     const p = doorToLocal(DEV[k]);
-    return { position: [p[0], p[1] + 0.012, p[2] + 0.02] as Vec3, anchor: [p[0] + dx, p[1] + 0.03, p[2] + 0.03] as Vec3 };
+    return { position: [p[0], p[1] + 0.012, p[2] + 0.02] as Vec3, anchor: [side * (w / 2 + 0.05), p[1] + 0.012 + dy, p[2]] as Vec3 };
+  };
+  const lamp = (k: keyof typeof DEV): Vec3 => {
+    const p = doorToLocal(DEV[k]);
+    return [p[0], p[1] + 0.012, p[2] + 0.02];
   };
   return (
     <group position={[PANEL.x, 0, PANEL.z]} rotation={[0, PANEL.ry, 0]}>
@@ -759,45 +549,43 @@ export function OperatorPanel({ state, runtime }: { state: TankProcessState; run
           <group>
             <PilotLight800F position={DEV.running} color="amber" legend="RUNNING" getLit={() => state.runningLight} panelThickness={0.0015} />
             <PilotLight800F position={DEV.done} color="green" legend="BATCH DONE" getLit={() => state.batchDoneLight} panelThickness={0.0015} />
-            <PushButton800F position={DEV.start} color="green" legend="START" contact="N.O." panelThickness={0.0015} {...momentary(runtime, 'start')} />
-            <PushButton800F position={DEV.stop} color="red" style="extended" legend="STOP" contact="N.C." panelThickness={0.0015} {...momentary(runtime, 'stop')} />
-            <PushButton800F position={DEV.discharge} color="black" legend="DISCHARGE" contact="N.O." panelThickness={0.0015} {...momentary(runtime, 'discharge')} />
-            <EStop800FM
-              position={DEV.estop}
-              panelThickness={0.0015}
-              getEngaged={() => Boolean(runtime.getControl('estop'))}
-              onToggle={() => {
-                runtime.setControl('estop', !runtime.getControl('estop'));
-                playSfx('toggle');
-              }}
-            />
+            <PushButton800F position={DEV.start} color="green" legend="START" contact="N.O." panelThickness={0.0015} {...start} />
+            <PushButton800F position={DEV.stop} color="red" style="extended" legend="STOP" contact="N.C." panelThickness={0.0015} {...stop} />
+            <PushButton800F position={DEV.discharge} color="black" legend="DISCHARGE" contact="N.O." panelThickness={0.0015} {...discharge} />
+            <EStop800FM position={DEV.estop} panelThickness={0.0015} getEngaged={() => Boolean(runtime.getControl('estop'))} onToggle={estop} />
           </group>
         }
       />
-      {/* alarm beacon + sounder on top */}
-      <StackLight856T
-        position={[0.12, PANEL.y + h, d / 2]}
-        tiers={['red']}
-        mount="base"
-        getTier={() => state.alarmHorn}
-        getFlashing={() => true}
-        getHorn={() => state.alarmHorn}
-        showSoundFx
-      />
-      <IoHotspot runtime={runtime} device="light-running" size={[0.05, 0.06, 0.05]} {...hs('running')} />
-      <IoHotspot runtime={runtime} device="light-done" size={[0.05, 0.06, 0.05]} {...hs('done', 0.16)} />
-      <IoHotspot runtime={runtime} device="pb-start" size={[0.05, 0.06, 0.05]} {...hs('start')} />
-      <IoHotspot runtime={runtime} device="pb-stop" size={[0.05, 0.06, 0.05]} {...hs('stop', 0.15)} />
-      <IoHotspot runtime={runtime} device="pb-discharge" size={[0.05, 0.06, 0.05]} {...hs('discharge', 0.17)} />
-      <IoHotspot runtime={runtime} device="estop" size={[0.07, 0.08, 0.06]} {...hs('estop', 0.1)} />
+      {/* lit lamps stay readable from the overview */}
+      <Glow get={() => state.runningLight} color="#ffab1a" position={lamp('running')} size={0.09} />
+      <Glow get={() => state.batchDoneLight} color="#2dff5a" position={lamp('done')} size={0.09} intensity={1.2} />
+      <IoHotspot runtime={runtime} device="light-running" group="OP-101" size={[0.05, 0.06, 0.05]} {...hs('running', -1, 0.01)} />
+      <IoHotspot runtime={runtime} device="light-done" group="OP-101" size={[0.05, 0.06, 0.05]} {...hs('done', -1, -0.03)} />
+      <IoHotspot runtime={runtime} device="pb-start" group="OP-101" size={[0.06, 0.07, 0.06]} {...hs('start', -1, 0.012)} press={start} />
+      <IoHotspot runtime={runtime} device="pb-stop" group="OP-101" size={[0.06, 0.07, 0.06]} {...hs('stop', -1, -0.03)} press={stop} />
+      <IoHotspot runtime={runtime} device="pb-discharge" group="OP-101" size={[0.06, 0.07, 0.06]} {...hs('discharge', 1, -0.05)} press={discharge} />
       <IoHotspot
         runtime={runtime}
-        device="horn"
-        size={[0.09, 0.14, 0.09]}
-        position={[0.12, PANEL.y + h + 0.07, d / 2]}
-        anchor={[0.2, PANEL.y + h + 0.16, d / 2]}
-        title="AH-101 beacon / horn"
+        device="estop"
+        group="OP-101"
+        title="E-stop · 2nd N.C. contact hardwired to the safety relay"
+        size={[0.08, 0.09, 0.07]}
+        {...hs('estop', 1, 0.03)}
+        onClick={estop}
       />
+    </group>
+  );
+}
+
+/** AH-101 alarm beacon + sounder on a short mast (world position of the mast foot). */
+export function AlarmBeacon({ state, runtime, position }: { state: TankProcessState; runtime: SimRuntime; position: Vec3 }) {
+  const pole = 0.32;
+  const topY = 0.012 + pole - 0.004 + 0.03 + 0.056 / 2;
+  return (
+    <group position={position}>
+      <StackLight856T tiers={['red']} mount="pole" poleLength={pole} getTier={() => state.alarmHorn} getFlashing={() => true} getHorn={() => state.alarmHorn} showSoundFx />
+      <Glow get={() => state.alarmHorn} color="#ff2a14" position={[0, topY, 0]} size={0.3} flash />
+      <IoHotspot runtime={runtime} device="horn" title="AH-101 beacon / horn" size={[0.1, 0.5, 0.1]} position={[0, 0.25, 0]} anchor={[0.08, 0.46, 0]} />
     </group>
   );
 }

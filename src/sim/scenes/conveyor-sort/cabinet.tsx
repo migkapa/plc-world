@@ -2,12 +2,14 @@
  * Control cabinet shared by the `conveyor-sort` and `tank-process` views: a wall-mounted RAL 7035 enclosure
  * (door open, click the door to close/open it) with the scene's ControlLogix rack live-wired to the controller
  * (key switch works), 1489 breakers, a 1606 24 V supply, 1492 terminal strips, 100-C contactors / starters for
- * the loads, slotted wire ducts and control wiring. Door: control-power and PLC-run pilot lights and a rotary
- * main disconnect.
+ * the loads, a 440R-style safety relay (K0) for the hardwired E-stop circuit, a rotary main disconnect (switch body on
+ * rail 1, handle on the door), slotted wire ducts and control wiring. Door: control-power and PLC-run pilot lights.
  *
  * Layout is derived from the backplate size so different cabinet sizes stay tidy.
  */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useFrame } from '@react-three/fiber';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
+import * as THREE from 'three';
 import {
   backplateSize,
   CONTACTOR_100C as CONTACTOR_DIMS,
@@ -33,6 +35,7 @@ import {
 import type { Vec3 } from '../../../twin/contracts';
 import { rackLiveFromController } from '../../../twin/live';
 import type { SimRuntime } from '../../types';
+import { Instances, paint } from './hall';
 import { IoHotspot, playSfx } from './kit';
 
 export interface CabinetLoad {
@@ -58,6 +61,8 @@ export interface ControlCabinetProps {
   /** Extra door-mounted devices (door coordinates). */
   doorExtras?: ReactNode;
   initiallyOpen?: boolean;
+  /** Safety relay outputs closed (E-stop released & reset): drives the K0 LEDs. */
+  getSafetyOk?: () => boolean;
 }
 
 const WIRE_BLUE = '#1f4fd1';
@@ -95,6 +100,7 @@ export function ControlCabinet({
   fieldTerminals = 24,
   doorExtras,
   initiallyOpen = true,
+  getSafetyOk = () => true,
 }: ControlCabinetProps) {
   const [open, setOpen] = useState(initiallyOpen);
   const live = useMemo(() => rackLiveFromController(runtime.controller), [runtime.controller]);
@@ -126,7 +132,10 @@ export function ControlCabinet({
     const psuX = cb[cb.length - 1]! + 0.0175 / 2 + 0.045;
     const tbCount = 14;
     const tbX = psuX + 0.03 + 0.01 + (tbCount * TB1492_J3.pitch) / 2 + 0.02;
-    return { cb, psuX, tbCount, tbX };
+    const safetyX = tbX + (tbCount * TB1492_J3.pitch) / 2 + 0.035;
+    /** Main disconnect switch body at the right end of rail 1 (the door handle sits right in front of it). */
+    const discX = L.ductLen / 2 - 0.045;
+    return { cb, psuX, tbCount, tbX, safetyX, discX };
   }, [L.ductLen]);
 
   // rail 2: loads, then field terminals
@@ -173,6 +182,11 @@ export function ControlCabinet({
       for (const dx of [-0.0195, 0.0195])
         out.push({ color: WIRE_RED, radius: 0.0009, points: [[sx + dx, L.rail2 + CONTACTOR_DIMS.h / 2, DIN_RAIL_DEPTH + 0.047], [sx + dx, L.rail2 + CONTACTOR_DIMS.h / 2 + 0.018, DIN_RAIL_DEPTH + 0.047], [sx + dx * 0.6, L.lowDuct - 0.022, zIn], [sx + dx * 0.6, L.lowDuct, zIn]] });
     });
+    // safety relay K0: supply + E-stop channels up into the top duct, safety outputs down to the starter coils
+    for (const dx of [-0.007, 0, 0.007]) {
+      out.push({ color: dx === 0 ? WIRE_BLUE : '#c9b51f', radius: 0.0009, points: [[rail1.safetyX + dx, L.rail1 + 0.05, DIN_RAIL_DEPTH + 0.05], [rail1.safetyX + dx, L.rail1 + 0.07, DIN_RAIL_DEPTH + 0.05], [rail1.safetyX + dx, L.topDuct - 0.022, zIn], [rail1.safetyX + dx, L.topDuct, zIn]] });
+      out.push({ color: dx === 0 ? WIRE_BLUE : '#c9b51f', radius: 0.0009, points: [[rail1.safetyX + dx, L.rail1 - 0.05, DIN_RAIL_DEPTH + 0.05], [rail1.safetyX + dx, L.rail1 - 0.07, DIN_RAIL_DEPTH + 0.05], [rail1.safetyX + dx, L.midDuct + 0.022, zIn], [rail1.safetyX + dx, L.midDuct, zIn]] });
+    }
     // field terminals: up to the low duct (from the I/O modules), down to the bottom duct (field cables)
     for (let i = 0; i < fieldTerminals; i++) {
       const x = rail2.tbX + terminalX(i, fieldTerminals);
@@ -222,7 +236,7 @@ export function ControlCabinet({
           <group>
             <PilotLight800F position={[-size[0] / 2 + 0.1, size[1] / 2 - 0.2, 0]} color="white" legend="CONTROL ON" getLit={() => true} panelThickness={0.0015} />
             <PilotLight800F position={[-size[0] / 2 + 0.16, size[1] / 2 - 0.2, 0]} color="green" legend="PLC RUN" getLit={running} panelThickness={0.0015} />
-            <MainDisconnect position={[size[0] / 2 - 0.1, size[1] / 2 - 0.22, 0]} />
+            <MainDisconnect position={[rail1.discX, L.rail1, 0]} />
             {doorExtras}
           </group>
         }
@@ -249,6 +263,19 @@ export function ControlCabinet({
             position={[rail1.tbX, 0, 0]}
           />
         </DinRail>
+        <SafetyRelay position={[rail1.safetyX, L.rail1, DIN_RAIL_DEPTH]} getOk={getSafetyOk} />
+        <DisconnectBody position={[rail1.discX, L.rail1, DIN_RAIL_DEPTH]} />
+        <IoHotspot
+          runtime={runtime}
+          title="K0 · 440R safety relay (hardwired E-stop)"
+          info={[
+            "The E-stop's 2nd N.C. contact opens this relay: its safety outputs drop the starter coil directly, even if the PLC keeps its output on.",
+            'The PLC input EStop_OK only tells the program what happened (to reset latches and show the fault).',
+          ]}
+          size={[0.03, 0.11, 0.12]}
+          position={[rail1.safetyX, L.rail1, 0.06]}
+          anchor={[rail1.safetyX + 0.03, L.rail1 + 0.07, 0.12]}
+        />
 
         {/* the PLC */}
         <ControlLogixRack hardware={hardware} live={live} wired position={[0, L.rackY, 0.002]} />
@@ -286,16 +313,16 @@ export function ControlCabinet({
         )}
 
         {/* managed Ethernet switch + patch cable to the EN2T */}
-        <EthernetSwitch position={[L.ductLen / 2 - 0.06, L.rail1, DIN_RAIL_DEPTH]} />
+        <EthernetSwitch position={[L.ductLen / 2 - 0.06, L.rail2, DIN_RAIL_DEPTH]} />
         {enX !== null && (
           <FieldCable
             points={[
               [enX, L.rackY + 0.035, 0.145],
               [enX + 0.02, L.rackY - 0.015, 0.13],
-              [enX + 0.08, L.rackY - 0.035, 0.07],
-              [L.sideX - 0.035, L.rackY - 0.03, 0.05],
-              [L.sideX - 0.035, L.rail1 - 0.08, 0.05],
-              [L.ductLen / 2 - 0.06, L.rail1 - 0.075, DIN_RAIL_DEPTH + 0.05],
+              [enX + 0.08, L.lowDuct + 0.035, 0.085],
+              [L.ductLen / 2 - 0.08, L.lowDuct + 0.03, 0.085],
+              [L.ductLen / 2 - 0.06, L.rail2 + 0.075, DIN_RAIL_DEPTH + 0.06],
+              [L.ductLen / 2 - 0.06, L.rail2 + 0.045, DIN_RAIL_DEPTH + 0.1],
             ]}
             radius={0.0028}
             color="#2f8f4e"
@@ -326,53 +353,152 @@ export function ControlCabinet({
           tieSpacing={0.05}
         />
         <Wires wires={wiring} />
+        <NoShadowCasters />
       </Enclosure>
       <CabinetLight size={size} />
     </group>
   );
 }
 
-/** Small LED strip light inside the cabinet top (lights the interior when the door is open). */
+/**
+ * LED strip inside the cabinet top, hidden behind a folded diffuser lip (a camera in front of the open door sees the
+ * lit interior, not a blown-out tube). The point light fills the interior.
+ */
 function CabinetLight({ size }: { size: Vec3 }) {
   return (
-    <group position={[0, size[1] - 0.04, size[2] * 0.55]}>
-      <mesh>
-        <boxGeometry args={[size[0] * 0.5, 0.012, 0.025]} />
-        <meshStandardMaterial color="#ffffff" emissive="#f1f6ff" emissiveIntensity={1.1} toneMapped={false} />
+    <group position={[0, size[1] - 0.045, size[2] * 0.55]}>
+      <mesh material={ledStripMat()}>
+        <boxGeometry args={[size[0] * 0.5, 0.01, 0.022]} />
       </mesh>
-      <pointLight intensity={0.22} distance={1.4} decay={2} color="#f2f6ff" position={[0, -0.05, 0.05]} />
+      {/* sheet-metal lip in front of / below the strip */}
+      <mesh material={paint('#d9dcd6', 0.55, 0.1)} position={[0, -0.012, 0.018]} castShadow={false}>
+        <boxGeometry args={[size[0] * 0.54, 0.032, 0.0015]} />
+      </mesh>
+      <mesh material={paint('#d9dcd6', 0.55, 0.1)} position={[0, 0.006, 0.005]}>
+        <boxGeometry args={[size[0] * 0.54, 0.0015, 0.028]} />
+      </mesh>
+      {/* soft interior fill from the front half of the cabinet (no hotspot on the white backplate) */}
+      <pointLight intensity={0.09} distance={1.8} decay={2} color="#f2f6ff" position={[0, -size[1] * 0.45, size[2] * 0.75]} />
     </group>
   );
 }
 
-/** 8-port DIN-rail managed Ethernet switch (Stratix-style), DIN clip plane origin. */
-function EthernetSwitch({ position }: { position: Vec3 }) {
-  const ports = [0, 1, 2, 3];
+/**
+ * Nothing inside a wall cabinet casts a useful shadow from the hall's main light (the enclosure body does): turn
+ * shadow casting off for every mesh on the backplate (devices mount lazily, so re-check a few times). Saves one
+ * shadow-pass draw per interior mesh.
+ */
+function NoShadowCasters() {
+  const ref = useRef<THREE.Group>(null);
+  const passes = useRef(0);
+  const next = useRef(0);
+  useFrame(({ clock }) => {
+    if (passes.current >= 5 || clock.elapsedTime < next.current) return;
+    passes.current++;
+    next.current = clock.elapsedTime + 1.2;
+    ref.current?.parent?.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh && m.castShadow) m.castShadow = false;
+    });
+  });
+  return <group ref={ref} />;
+}
+
+const lmats = new Map<string, THREE.Material>();
+function lmat<T extends THREE.Material>(key: string, make: () => T): T {
+  let m = lmats.get(key) as T | undefined;
+  if (!m) {
+    m = make();
+    lmats.set(key, m);
+  }
+  return m;
+}
+const ledStripMat = () => lmat('cab:ledStrip', () => new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#eef3ff', emissiveIntensity: 0.35, roughness: 0.4 }));
+const ledMat = (hex: string, on: number) =>
+  lmat(`cab:led:${hex}:${on}`, () => new THREE.MeshStandardMaterial({ color: on ? hex : '#1d2a22', emissive: hex, emissiveIntensity: on, toneMapped: on === 0 }));
+
+/** 22.5 mm safety relay (440R-style, yellow front): PWR, K1 / K2 output LEDs follow `getOk`. DIN clip plane origin. */
+function SafetyRelay({ position, getOk }: { position: Vec3; getOk: () => boolean }) {
+  const k1 = useRef<THREE.Mesh>(null);
+  const k2 = useRef<THREE.Mesh>(null);
+  const last = useRef<boolean | null>(null);
+  useFrame(() => {
+    const ok = getOk();
+    if (ok === last.current) return;
+    last.current = ok;
+    const m = ok ? ledMat('#22ff66', 2.4) : ledMat('#22ff66', 0);
+    if (k1.current) k1.current.material = m;
+    if (k2.current) k2.current.material = m;
+  });
   return (
     <group position={position}>
-      <mesh position={[0, 0, 0.05]} castShadow>
+      <mesh material={paint('#4a4d50', 0.5, 0.1)} position={[0, 0, 0.055]} castShadow>
+        <boxGeometry args={[0.0225, 0.1, 0.11]} />
+      </mesh>
+      <mesh material={paint('#f2c200', 0.45, 0.05)} position={[0, 0.0, 0.1105]}>
+        <boxGeometry args={[0.0215, 0.07, 0.002]} />
+      </mesh>
+      {/* terminal rows top / bottom */}
+      <Instances
+        geometry={unitBoxGeo}
+        material={paint('#8c9196', 0.4, 0.6)}
+        items={[-1, 1].flatMap((sy) => [-0.007, 0, 0.007].map((x) => ({ p: [x, sy * 0.043, 0.1] as Vec3, s: [0.004, 0.008, 0.012] as Vec3 })))}
+        castShadow={false}
+      />
+      <mesh material={ledMat('#22ff66', 2.4)} position={[0, 0.025, 0.1122]}>
+        <boxGeometry args={[0.004, 0.004, 0.0015]} />
+      </mesh>
+      <mesh ref={k1} material={ledMat('#22ff66', 2.4)} position={[0, 0.015, 0.1122]}>
+        <boxGeometry args={[0.004, 0.004, 0.0015]} />
+      </mesh>
+      <mesh ref={k2} material={ledMat('#22ff66', 2.4)} position={[0, 0.005, 0.1122]}>
+        <boxGeometry args={[0.004, 0.004, 0.0015]} />
+      </mesh>
+      <mesh material={paint('#e9e9e3', 0.6, 0)} position={[0, -0.018, 0.1122]}>
+        <boxGeometry args={[0.016, 0.012, 0.001]} />
+      </mesh>
+    </group>
+  );
+}
+
+/** Rotary main disconnect switch body (194E-style) with the coupling shaft toward the door handle. */
+function DisconnectBody({ position }: { position: Vec3 }) {
+  return (
+    <group position={position}>
+      <mesh material={paint('#34373a', 0.5, 0.1)} position={[0, 0, 0.04]} castShadow>
+        <boxGeometry args={[0.05, 0.085, 0.08]} />
+      </mesh>
+      <mesh material={paint('#232527', 0.45, 0.1)} position={[0, 0, 0.085]}>
+        <boxGeometry args={[0.03, 0.03, 0.01]} />
+      </mesh>
+      <mesh material={paint('#8e959b', 0.35, 0.7)} position={[0, 0, 0.13]} rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.0035, 0.0035, 0.08, 10]} />
+      </mesh>
+      <mesh material={paint('#e9e9e3', 0.6, 0)} position={[0, 0.03, 0.0805]}>
+        <boxGeometry args={[0.03, 0.012, 0.001]} />
+      </mesh>
+    </group>
+  );
+}
+
+const unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
+
+/** 8-port DIN-rail managed Ethernet switch (Stratix-style), DIN clip plane origin. Ports & LEDs are instanced. */
+function EthernetSwitch({ position }: { position: Vec3 }) {
+  const ports = useMemo(() => [0, 1, 2, 3].map((i) => ({ p: [0, 0.035 - i * 0.022, 0.101] as Vec3, s: [0.016, 0.013, 0.004] as Vec3 })), []);
+  const leds = useMemo(() => [0, 1].map((i) => ({ p: [0.014, 0.039 - i * 0.022, 0.102] as Vec3, s: [0.003, 0.003, 0.002] as Vec3 })), []);
+  return (
+    <group position={position}>
+      <mesh position={[0, 0, 0.05]} material={paint('#6b7075', 0.45, 0.5)} castShadow>
         <boxGeometry args={[0.05, 0.13, 0.1]} />
-        <meshStandardMaterial color="#6b7075" roughness={0.45} metalness={0.5} />
       </mesh>
-      <mesh position={[0, 0.0, 0.1005]}>
+      <mesh position={[0, 0.0, 0.1005]} material={paint('#2b2e31', 0.5, 0.1)}>
         <planeGeometry args={[0.044, 0.12]} />
-        <meshStandardMaterial color="#2b2e31" roughness={0.5} />
       </mesh>
-      {ports.map((i) => (
-        <group key={i} position={[0, 0.035 - i * 0.022, 0.101]}>
-          <mesh>
-            <boxGeometry args={[0.016, 0.013, 0.004]} />
-            <meshStandardMaterial color="#0d0e0f" roughness={0.6} />
-          </mesh>
-          <mesh position={[0.014, 0.004, 0.001]}>
-            <boxGeometry args={[0.003, 0.003, 0.002]} />
-            <meshStandardMaterial color="#22ff66" emissive="#22ff66" emissiveIntensity={i < 2 ? 2.5 : 0} toneMapped={false} />
-          </mesh>
-        </group>
-      ))}
-      <mesh position={[0, 0.057, 0.1012]}>
+      <Instances geometry={unitBoxGeo} material={paint('#0d0e0f', 0.6, 0.1)} items={ports} castShadow={false} />
+      <Instances geometry={unitBoxGeo} material={ledMat('#22ff66', 2.5)} items={leds} castShadow={false} receiveShadow={false} />
+      <mesh position={[0, 0.057, 0.1012]} material={paint('#e8e8e0', 0.6, 0)}>
         <boxGeometry args={[0.03, 0.006, 0.001]} />
-        <meshStandardMaterial color="#e8e8e0" roughness={0.6} />
       </mesh>
     </group>
   );
@@ -380,25 +506,14 @@ function EthernetSwitch({ position }: { position: Vec3 }) {
 
 /** Slim 12.5 mm DIN modules (4–20 mA signal isolators / interface relays) with a green status LED; instanced. */
 function SlimModules({ count, position }: { count: number; position: Vec3 }) {
-  const items = useMemo(() => Array.from({ length: count }, (_, i) => ({ x: i * 0.0125 })), [count]);
+  const bodies = useMemo(() => Array.from({ length: count }, (_, i) => ({ p: [i * 0.0125, 0, 0.045] as Vec3, s: [0.012, 0.1, 0.09] as Vec3, c: i % 3 === 2 ? '#3d4c63' : '#b9bdc0' })), [count]);
+  const leds = useMemo(() => Array.from({ length: count }, (_, i) => ({ p: [i * 0.0125, 0.03, 0.0905] as Vec3, s: [0.004, 0.004, 0.002] as Vec3 })), [count]);
+  const labels = useMemo(() => Array.from({ length: count }, (_, i) => ({ p: [i * 0.0125, -0.02, 0.0905] as Vec3, s: [0.009, 0.03, 0.001] as Vec3 })), [count]);
   return (
     <group position={position}>
-      {items.map(({ x }, i) => (
-        <group key={i} position={[x, 0, 0]}>
-          <mesh position={[0, 0, 0.045]} castShadow>
-            <boxGeometry args={[0.012, 0.1, 0.09]} />
-            <meshStandardMaterial color={i % 3 === 2 ? '#3d4c63' : '#b9bdc0'} roughness={0.55} />
-          </mesh>
-          <mesh position={[0, 0.03, 0.0905]}>
-            <boxGeometry args={[0.004, 0.004, 0.002]} />
-            <meshStandardMaterial color="#22ff66" emissive="#22ff66" emissiveIntensity={2.2} toneMapped={false} />
-          </mesh>
-          <mesh position={[0, -0.02, 0.0905]}>
-            <boxGeometry args={[0.009, 0.03, 0.001]} />
-            <meshStandardMaterial color="#e9e9e3" roughness={0.6} />
-          </mesh>
-        </group>
-      ))}
+      <Instances geometry={unitBoxGeo} material={paint('#ffffff', 0.55, 0)} items={bodies} />
+      <Instances geometry={unitBoxGeo} material={ledMat('#22ff66', 2.2)} items={leds} castShadow={false} receiveShadow={false} />
+      <Instances geometry={unitBoxGeo} material={paint('#e9e9e3', 0.6, 0)} items={labels} castShadow={false} />
     </group>
   );
 }

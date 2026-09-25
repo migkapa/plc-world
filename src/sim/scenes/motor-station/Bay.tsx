@@ -15,6 +15,7 @@ import {
   KCYL,
   KPLANE,
   LadderTray,
+  MergeStatic,
   SignPlate,
   Slab,
   TexturedFloor,
@@ -375,7 +376,7 @@ function extinguisherLabel() {
 
 export function MotorBay() {
   return (
-    <group>
+    <MergeStatic>
       <Walls />
       <FloorMarkings />
       <IColumns xs={[-3.45, 2.75]} />
@@ -423,7 +424,7 @@ export function MotorBay() {
         ctx.textBaseline = 'middle';
         ctx.fillText('CV-101', w / 2, h / 2);
       }} />
-    </group>
+    </MergeStatic>
   );
 }
 

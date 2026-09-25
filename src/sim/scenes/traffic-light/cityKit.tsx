@@ -13,11 +13,11 @@
  * Coordinates: meters, Y up, plan x = east, z = south (both scene logics use this frame).
  */
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Vec3 } from '../../../twin/contracts';
-import { Bezel800F, LegendPlate800F, selectorAngle } from '../../../twin/devices';
+import { Bezel800F, LegendPlate800F, roadMats, selectorAngle } from '../../../twin/devices';
 import { canvasTexture, kgeo, kmat, mulberry } from '../trainer/kit';
 
 // ---------------------------------------------------------------------------
@@ -58,6 +58,113 @@ export function useHoverCursor(enabled = true) {
   return { hovered: hovered && enabled, handlers };
 }
 
+/**
+ * Scene-local override of a shared (device-kit) material while the scene is mounted: the given fields are
+ * applied on mount and the original values restored on unmount. Used to tone down the traffic kit's road
+ * paint (its albedo + the street sun push it over the bloom threshold, so paint glowed like the lamps).
+ */
+export function useMaterialOverride(getMats: () => THREE.MeshStandardMaterial[], patch: { color?: string; roughness?: number; envMapIntensity?: number }) {
+  useLayoutEffect(() => {
+    const mats = getMats();
+    const saved = mats.map((m) => ({ m, color: m.color.clone(), roughness: m.roughness, env: m.envMapIntensity }));
+    for (const m of mats) {
+      if (patch.color) m.color.set(patch.color);
+      if (patch.roughness !== undefined) m.roughness = patch.roughness;
+      if (patch.envMapIntensity !== undefined) m.envMapIntensity = patch.envMapIntensity;
+    }
+    return () => {
+      for (const s of saved) {
+        s.m.color.copy(s.color);
+        s.m.roughness = s.roughness;
+        s.m.envMapIntensity = s.env;
+      }
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+/**
+ * Road paint: real thermoplastic is a diffuse, matte ~55 % white. The kit's paint (bright albedo, glossy,
+ * full environment reflection) went over the bloom threshold under the street sun and glowed like the
+ * lamps; tone it down while a street scene is mounted so only lamps and LEDs bloom.
+ */
+export function useQuietPaint() {
+  useMaterialOverride(() => [roadMats.white()], { color: '#a09f98', roughness: 1, envMapIntensity: 0.35 });
+  useMaterialOverride(() => [roadMats.yellow()], { color: '#c38f10', roughness: 1, envMapIntensity: 0.35 });
+}
+
+/**
+ * Like useMaterialOverride, for shared materials a device creates internally (e.g. painted stall numbers):
+ * after mount, every MeshStandardMaterial under `ref` that matches `pick` gets the patch; restored on unmount.
+ */
+export function useSubtreeMaterialPatch(
+  ref: RefObject<THREE.Object3D | null>,
+  pick: (m: THREE.MeshStandardMaterial) => boolean,
+  patch: { color?: string; roughness?: number; envMapIntensity?: number },
+) {
+  useEffect(() => {
+    const saved = new Map<THREE.MeshStandardMaterial, { color: THREE.Color; roughness: number; env: number }>();
+    const run = () =>
+      ref.current?.traverse((o) => {
+        const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+        if (!m || Array.isArray(m) || !m.isMeshStandardMaterial || saved.has(m) || !pick(m)) return;
+        saved.set(m, { color: m.color.clone(), roughness: m.roughness, env: m.envMapIntensity });
+        if (patch.color) m.color.set(patch.color);
+        if (patch.roughness !== undefined) m.roughness = patch.roughness;
+        if (patch.envMapIntensity !== undefined) m.envMapIntensity = patch.envMapIntensity;
+      });
+    run();
+    const t = window.setTimeout(run, 500);
+    return () => {
+      window.clearTimeout(t);
+      for (const [m, v] of saved) {
+        m.color.copy(v.color);
+        m.roughness = v.roughness;
+        m.envMapIntensity = v.env;
+      }
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+/** Turn off shadow casting for every mesh under `ref` (small interior parts: they only cost shadow draw calls). */
+export function useNoCastShadow(ref: RefObject<THREE.Object3D | null>) {
+  useEffect(() => {
+    const run = () => ref.current?.traverse((o) => void ((o as THREE.Mesh).isMesh && (o.castShadow = false)));
+    run();
+    // device components may mount their meshes a little later (suspense-free lazy parts)
+    const t1 = window.setTimeout(run, 400);
+    const t2 = window.setTimeout(run, 2000);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [ref]);
+}
+
+const noRaycast = () => {};
+const stop = (e: ThreeEvent<PointerEvent> | ThreeEvent<MouseEvent>) => e.stopPropagation();
+
+/**
+ * Invisible box that swallows pointer events (walls, roofs, closed doors): R3F only raycasts objects with
+ * handlers, so plain geometry would let a click reach a hidden device behind it. `getEnabled` switches it
+ * off (e.g. while a cabinet door is open).
+ */
+export function ClickBlocker({ position, size, rotation, getEnabled }: { position: Vec3; size: Vec3; rotation?: Vec3; getEnabled?: () => boolean }) {
+  const ref = useRef<THREE.Mesh>(null);
+  const get = useLatest(getEnabled);
+  const orig = useRef<THREE.Mesh['raycast'] | null>(null);
+  useFrame(() => {
+    const m = ref.current;
+    if (!m || !get.current) return;
+    if (!orig.current) orig.current = m.raycast;
+    const on = get.current();
+    const want = on ? orig.current : noRaycast;
+    if (m.raycast !== want) m.raycast = want;
+  });
+  return (
+    <mesh ref={ref} visible={false} position={position} rotation={rotation} scale={size} geometry={kgeo('city:blockerBox', () => new THREE.BoxGeometry(1, 1, 1))} onPointerDown={stop} onPointerUp={stop} onPointerMove={stop} onPointerOver={stop} onClick={stop} />
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Sky & far ground
 // ---------------------------------------------------------------------------
@@ -87,19 +194,28 @@ export function SkyDome({ top = '#5f8fcf', horizon = '#d3e2ee', ground = '#aab4b
   return <mesh geometry={geo} material={mat} renderOrder={-10} frustumCulled={false} />;
 }
 
-function grassTex() {
+/** Desaturated urban turf (repeat-wrapped canvas texture, shared). */
+export function grassTexture() {
   return canvasTexture(
-    'city:grass',
+    'city:grass2',
     256,
     256,
     (ctx, w, h) => {
       const rnd = mulberry(31);
-      ctx.fillStyle = '#58733e';
+      // desaturated, slightly dry urban turf with clover patches and soil showing through
+      ctx.fillStyle = '#6f8a4f';
       ctx.fillRect(0, 0, w, h);
-      for (let i = 0; i < 6000; i++) {
-        const g = 80 + rnd() * 80;
-        ctx.fillStyle = `rgba(${g * 0.6},${g},${g * 0.38},0.45)`;
-        ctx.fillRect(rnd() * w, rnd() * h, 1.5, 3);
+      for (let i = 0; i < 40; i++) {
+        ctx.fillStyle = rnd() < 0.5 ? 'rgba(128,132,86,0.18)' : 'rgba(84,110,62,0.2)';
+        ctx.beginPath();
+        ctx.ellipse(rnd() * w, rnd() * h, 10 + rnd() * 26, 8 + rnd() * 18, rnd() * 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      for (let i = 0; i < 7000; i++) {
+        const g = 95 + rnd() * 70;
+        const dry = rnd() < 0.18;
+        ctx.fillStyle = dry ? `rgba(${g * 0.95},${g * 0.9},${g * 0.55},0.4)` : `rgba(${g * 0.7},${g},${g * 0.52},0.42)`;
+        ctx.fillRect(rnd() * w, rnd() * h, 1.2, 2.6);
       }
     },
     { repeat: true },
@@ -109,7 +225,7 @@ function grassTex() {
 /** Large lawn plane under everything (slightly below y = 0). */
 export function GroundPlane({ size = 700, y = -0.04, tile = 6, color = '#ffffff' }: { size?: number; y?: number; tile?: number; color?: string }) {
   const mat = useMemo(() => {
-    const t = grassTex().clone();
+    const t = grassTexture().clone();
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.repeat.set(size / tile, size / tile);
     t.needsUpdate = true;
@@ -606,10 +722,26 @@ export interface TreeSpec {
 }
 
 const trunkGeo = () => kgeo('city:trunk', () => new THREE.CylinderGeometry(0.1, 0.17, 1, 7).translate(0, 0.5, 0));
-const canopyGeo = () => kgeo('city:canopy', () => new THREE.IcosahedronGeometry(1, 1));
+/** Smooth, lumpy canopy blob (detail-2 icosphere with low-frequency displacement, smooth normals). */
+const canopyGeo = () =>
+  kgeo('city:canopy2', () => {
+    const g = mergeVertices(new THREE.IcosahedronGeometry(1, 2).deleteAttribute('normal').deleteAttribute('uv'));
+    const pos = g.attributes.position!;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      const n = 1 + 0.09 * Math.sin(v.x * 4.1 + v.y * 2.3) * Math.cos(v.z * 3.7 - v.y * 1.9) + 0.05 * Math.sin(v.y * 7.3 + v.x * 5.1);
+      v.multiplyScalar(n);
+      // flatter underside, like a real crown
+      if (v.y < -0.3) v.y = -0.3 + (v.y + 0.3) * 0.55;
+      pos.setXYZ(i, v.x, v.y, v.z);
+    }
+    g.computeVertexNormals();
+    return g;
+  });
 const trunkMat = () => kmat('city:trunkMat', () => new THREE.MeshStandardMaterial({ color: '#5a4636', roughness: 0.95 }));
-const canopyMat = () => kmat('city:canopyMat', () => new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.92, flatShading: true }));
-const GREENS = ['#4f7a36', '#5c8a3c', '#476f33', '#6a9243', '#3f6530'];
+const canopyMat = () => kmat('city:canopyMat2', () => new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.88 }));
+const GREENS = ['#5d7f3e', '#6b8c45', '#56763a', '#7a9550', '#4e6d36', '#83985a', '#667f40'];
 
 /** Deciduous street trees: 2 instanced draw calls for any number of trees. */
 export function Trees({ items }: { items: TreeSpec[] }) {

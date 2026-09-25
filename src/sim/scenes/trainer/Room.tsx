@@ -7,7 +7,7 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import type { Vec3 } from '../../../twin/contracts';
-import { FONT, Instances, KBOX, KCYL, KPLANE, SignPlate, Slab, TexturedFloor, TexturedWall, canvasTexture, drawSafetySign, kgeo, km, kmat, mulberry, plasterTexture, vinylTileTexture } from './kit';
+import { FONT, Instances, KBOX, KCYL, KPLANE, MergeStatic, SignPlate, Slab, TexturedFloor, TexturedWall, canvasTexture, drawSafetySign, kgeo, km, kmat, mulberry, plasterTexture, vinylTileTexture } from './kit';
 
 export const ROOM = {
   backZ: -0.64,
@@ -426,7 +426,7 @@ export function LabRoom() {
   const cz = (backZ + frontZ) / 2;
   const win = ROOM.window;
   return (
-    <group>
+    <MergeStatic>
       <TexturedFloor center={[cx, cz]} size={[w, d]} texture={vinylTileTexture()} tile={1.2} roughness={0.42} />
       {/* back wall: painted dado band behind the bench + chair rail */}
       <TexturedWall position={[cx, (height + DADO_H) / 2, backZ]} size={[w, height - DADO_H]} texture={plaster} tile={[1.5, 1.5]} color={WALL} />
@@ -466,7 +466,7 @@ export function LabRoom() {
       <SignPlate id="lab-ppe" size={[0.24, 0.16]} position={[-1.55, 2.05, backZ + 0.001]} draw={drawSafetySign('warning', ['120 V AC', 'INSIDE TRAINER'])} />
       {/* waste bin */}
       <mesh geometry={kgeo('k:bin', () => new THREE.CylinderGeometry(0.15, 0.13, 0.38, 28, 1, true))} material={kmat('k:binmat', () => new THREE.MeshStandardMaterial({ color: '#2d5f8f', roughness: 0.5, side: THREE.DoubleSide }))} position={[1.45, 0.19, -0.35]} castShadow />
-    </group>
+    </MergeStatic>
   );
 }
 

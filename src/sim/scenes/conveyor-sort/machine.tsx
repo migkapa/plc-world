@@ -16,24 +16,31 @@ import {
   boxMaterial,
   BOX_SIZES,
   conveyorLayout,
+  FieldJunctionBox,
+  fieldJunctionBoxGlands,
   PhotoEye42EF,
   PneumaticCylinder,
   PushButtonStation,
+  pushButtonStationHoles,
+  pushButtonStationLayout,
   SelectorSwitch800F,
   SolenoidValve,
+  StackLight856T,
   type BoxState,
 } from '../../../twin/devices';
 import type { Vec3 } from '../../../twin/contracts';
 import { nextRandom, type RngState } from '../../testing/sceneKit';
 import type { SimRuntime } from '../../types';
-import { playSfx } from './kit';
+import { Glow, playSfx } from './kit';
 import { CONVEYOR_GEOMETRY as G, type ConveyorSortState } from './logic';
 import { Instances, paint, steel, unitBox, unitCylY, type CableSpec } from './hall';
 
 export const BELT_H = 0.85;
 export const LAY = conveyorLayout(G.beltWidth, BELT_H);
-/** Photo-eye lens standoff from the belt centre (sensor on +Z, reflector on −Z). */
+/** Photo-eye lens standoff from the belt centre (sensor on −Z = junction-box side, reflector on +Z). */
 export const EYE_Z = LAY.frameZ - 0.03;
+/** Overhead cable tray (world y / z) and the spur that ends above the feeder (z). */
+export const TRAY = { y: 2.65, z: -1.75, feederSpurZ: -0.62 } as const;
 
 /** Pusher paddle: face position across the belt for an extension 0..1 (visual stroke 0.82 m). */
 export const PADDLE = { z0: -0.29, stroke: 0.82, bottom: 0.075, height: 0.12, width: G.paddleWidth } as const;
@@ -152,6 +159,31 @@ export function peekNextBoxes(s: ConveyorSortState, out: boolean[]): boolean[] {
 // ---------------------------------------------------------------------------
 
 const MAG = { ix: 0.17, iz: 0.15, top: 1.12, legX: 0.3, legZ: 0.47, frameTop: 2.25 } as const;
+/** Feeder gate valve (2-station 5/2 manifold) on the front-right leg, feeder-local coordinates. */
+const GATE_VALVE: Vec3 = [MAG.legX, 1.36, MAG.legZ + 0.03];
+/** A/B working-port fittings of manifold station `k` (feeder-local; the valve faces +Z, unrotated). */
+function gateValvePort(k: number, port: 'a' | 'b'): Vec3 {
+  const pitch = 0.016;
+  const baseH = 0.024;
+  const x0 = -pitch + pitch / 2;
+  return [GATE_VALVE[0] + x0 + k * pitch, GATE_VALVE[1] + 0.012 - 0.004, GATE_VALVE[2] + baseH * (port === 'a' ? 0.3 : 0.72)];
+}
+/** Instructor box (feeder front-left leg), feeder-local. */
+export const INSTRUCTOR_BOX: Vec3 = [-MAG.legX, 1.12, MAG.legZ + 0.025];
+const INSTR_HOLES = pushButtonStationHoles(2);
+/** Selector centre of instructor-box hole `i` (feeder-local). */
+export const instructorHole = (i: number): Vec3 => [INSTRUCTOR_BOX[0] + INSTR_HOLES[i]![0], INSTRUCTOR_BOX[1] + INSTR_HOLES[i]![1], INSTRUCTOR_BOX[2] + INSTR_HOLES[i]![2]];
+/** Feeder gate valve position (machine frame) for hotspots. */
+export const FEEDER_VALVE: Vec3 = [G.feederX + GATE_VALVE[0], GATE_VALVE[1] + 0.06, GATE_VALVE[2] + 0.03];
+
+const _m4 = new THREE.Matrix4();
+const _q = new THREE.Quaternion();
+const _e = new THREE.Euler();
+/** Point `p` (parent coordinates) expressed in the frame of a child at `origin` with euler `rot`. */
+function toLocal(p: Vec3, origin: Vec3, rot: Vec3): Vec3 {
+  _m4.compose(new THREE.Vector3(...origin), _q.setFromEuler(_e.set(...rot)), new THREE.Vector3(1, 1, 1)).invert();
+  return new THREE.Vector3(...p).applyMatrix4(_m4).toArray() as Vec3;
+}
 
 export function Feeder({ state, runtime }: { state: ConveyorSortState; runtime: SimRuntime }) {
   const x = G.feederX;
@@ -204,6 +236,23 @@ export function Feeder({ state, runtime }: { state: ConveyorSortState; runtime: 
   const alu = steel('#c3c8cc', 0.42);
   const legH = MAG.frameTop;
   const guideH = MAG.top - G.dropHeight;
+  // gate cylinders (magazine-group coordinates, the group sits at gateY)
+  const cylPos = (sx: number): Vec3 => [sx * (MAG.ix + 0.06), 0.1, MAG.iz + 0.07];
+  const CYL_ROT: Vec3 = [Math.PI / 2, 0, 0];
+  const gateTubes = (sx: number, k: number) => {
+    const inGroup = (p: Vec3): Vec3 => [p[0], p[1] - gateY, p[2]];
+    return {
+      rear: toLocal(inGroup(gateValvePort(k, 'a')), cylPos(sx), CYL_ROT),
+      front: toLocal(inGroup(gateValvePort(k, 'b')), cylPos(sx), CYL_ROT),
+    };
+  };
+  // valve multicore + air supply: up the front-right leg, along the top rail to the back, up into the tray spur
+  const up = (dz: number): Vec3[] => [
+    [MAG.legX + 0.035, GATE_VALVE[1] + 0.2, MAG.legZ + dz],
+    [MAG.legX + 0.035, legH - 0.08, MAG.legZ + dz],
+    [MAG.legX + 0.03, legH + 0.03, MAG.legZ - 0.1],
+    [MAG.legX + 0.03, legH + 0.035, -MAG.legZ + 0.05],
+  ];
   return (
     <group position={[x, 0, 0]}>
       {/* portal frame: 4 legs outside the conveyor, top rails */}
@@ -218,6 +267,8 @@ export function Feeder({ state, runtime }: { state: ConveyorSortState; runtime: 
           // cross members carrying the magazine at gate level and at the top
           ...[gateY - 0.03, BELT_H + MAG.top].flatMap((yy) => [-1, 1].map((sz) => ({ p: [0, yy, sz * (MAG.iz + 0.03)] as Vec3, s: [2 * MAG.legX - 0.045, 0.03, 0.03] as Vec3 }))),
           ...[gateY - 0.03, BELT_H + MAG.top].flatMap((yy) => [-1, 1].map((sz) => ({ p: [0, yy, sz * ((MAG.iz + 0.03 + MAG.legZ) / 2)] as Vec3, s: [0.03, 0.03, MAG.legZ - MAG.iz - 0.03] as Vec3 }))),
+          // valve mounting plate on the front-right leg
+          { p: [GATE_VALVE[0], GATE_VALVE[1] + 0.05, MAG.legZ + 0.0255], s: [0.09, 0.14, 0.006] },
         ]}
       />
       {/* feet */}
@@ -256,17 +307,17 @@ export function Feeder({ state, runtime }: { state: ConveyorSortState; runtime: 
             <boxGeometry args={[0.17, 0.008, 2 * MAG.iz - 0.01]} />
           </mesh>
         </group>
-        {/* hinge shafts + gate cylinders (short-stroke) on the +Z side */}
-        {[-1, 1].map((sx) => (
+        {/* hinge shafts + short-stroke gate cylinders on the +Z side, piped to the gate valve */}
+        {[-1, 1].map((sx, k) => (
           <group key={sx}>
             <mesh geometry={unitCylY} material={steel()} position={[sx * MAG.ix, -0.006, 0]} rotation={[Math.PI / 2, 0, 0]} scale={[0.006, 2 * MAG.iz + 0.08, 0.006]} />
             <PneumaticCylinder
-              position={[sx * (MAG.ix + 0.06), 0.1, MAG.iz + 0.07]}
-              rotation={[Math.PI / 2, 0, 0]}
+              position={cylPos(sx)}
+              rotation={CYL_ROT}
               bore={0.032}
               stroke={0.04}
               getExtension={() => (state.sinceDropMs < 300 ? 1 : 0)}
-              tubes={false}
+              tubes={gateTubes(sx, k)}
             />
           </group>
         ))}
@@ -287,20 +338,42 @@ export function Feeder({ state, runtime }: { state: ConveyorSortState; runtime: 
           ))}
         </group>
       </group>
-      {/* instructor box on the front-left leg: box pattern selector */}
-      <group position={[-MAG.legX, 1.22, MAG.legZ + 0.025]}>
-        <PushButtonStation holes={1} position={[0, 0, 0]}>
-          <SelectorSwitch800F
-            positions={['RND', 'SHORT', 'TALL', 'ALT']}
-            legend="BOX PATTERN"
-            getPosition={() => Number(runtime.getControl('box_pattern'))}
-            onChange={(i) => {
-              runtime.setControl('box_pattern', i);
-              playSfx('toggle');
-            }}
-          />
-        </PushButtonStation>
-      </group>
+      {/* YV-102 gate valve: Feeder_Release (only used in PLC feeder mode) */}
+      <SolenoidValve
+        variant="pneumatic"
+        position={GATE_VALVE}
+        stations={2}
+        getEnergized={() => state.feederRelease}
+        getStation={() => state.feederRelease}
+        portsTo={false}
+        cableTo={{ via: up(0.03), to: [MAG.legX + 0.03, TRAY.y - 0.05, TRAY.feederSpurZ] }}
+        tubeTo={{ via: up(0.05), to: [MAG.legX + 0.05, TRAY.y - 0.05, TRAY.feederSpurZ] }}
+      />
+      {/* instructor box on the front-left leg: feeder mode + box pattern (instructor controls, NOT PLC inputs) */}
+      <PushButtonStation holes={2} position={INSTRUCTOR_BOX} gland={false}>
+        <SelectorSwitch800F
+          positions={['AUTO', 'PLC']}
+          legend="FEEDER MODE"
+          getPosition={() => Number(runtime.getControl('feeder_mode'))}
+          onChange={(i) => {
+            runtime.setControl('feeder_mode', i);
+            playSfx('toggle');
+          }}
+        />
+        <SelectorSwitch800F
+          positions={['RND', 'SHORT', 'TALL', 'ALT']}
+          legend="BOX PATTERN"
+          getPosition={() => Number(runtime.getControl('box_pattern'))}
+          onChange={(i) => {
+            runtime.setControl('box_pattern', i);
+            playSfx('toggle');
+          }}
+        />
+      </PushButtonStation>
+      <mesh position={[INSTRUCTOR_BOX[0], INSTRUCTOR_BOX[1] + pushButtonStationLayout(2).height + 0.032, INSTRUCTOR_BOX[2] + 0.002]} userData={{ noOcclude: true }}>
+        <planeGeometry args={[0.1, 0.045]} />
+        <meshStandardMaterial map={instructorPlate()} roughness={0.5} />
+      </mesh>
       {/* feeder nameplate */}
       <mesh position={[0, BELT_H + MAG.top + 0.09, MAG.iz + 0.04]} userData={{ noOcclude: true }}>
         <planeGeometry args={[0.3, 0.08]} />
@@ -308,6 +381,27 @@ export function Feeder({ state, runtime }: { state: ConveyorSortState; runtime: 
       </mesh>
     </group>
   );
+}
+
+let instructorTex: THREE.CanvasTexture | null = null;
+function instructorPlate() {
+  if (instructorTex) return instructorTex;
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 116;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#f5c400';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillStyle = '#111';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '900 30px Arial';
+  ctx.fillText('INSTRUCTOR', 128, 34);
+  ctx.font = '700 21px Arial';
+  ctx.fillText('not wired to the PLC', 128, 78);
+  instructorTex = new THREE.CanvasTexture(c);
+  instructorTex.colorSpace = THREE.SRGBColorSpace;
+  return instructorTex;
 }
 
 let feederPlateTex: THREE.CanvasTexture | null = null;
@@ -332,29 +426,29 @@ function feederPlate() {
 }
 
 // ---------------------------------------------------------------------------
-// Photo-eyes
+// Photo-eyes (sensors on the −Z / junction-box side, reflectors on the operator side)
 // ---------------------------------------------------------------------------
 
 type SensorKey = 'infeed' | 'tall' | 'divert' | 'exit';
 
+/** Distance from a −Z sensor lens to the near face of the box blocking the beam at `x`. */
 function blockDistance(s: ConveyorSortState, x: number): number {
   for (const b of s.boxes) {
     if (Math.abs(b.x - x) < G.boxLength / 2 && (b.state === 'belt' || b.state === 'diverted')) {
       const lat = b.state === 'diverted' ? Math.min(b.lateral, 0.4) : 0;
-      return Math.max(0.01, EYE_Z - lat - boxWidth(b.tall) / 2);
+      return Math.max(0.01, EYE_Z + lat - boxWidth(b.tall) / 2);
     }
   }
   return EYE_Z;
 }
 
-/** Straight-across photo-eye: sensor on the operator side (+Z) looking at a reflector on the −Z side. */
+/** Straight-across photo-eye: sensor on the −Z side looking at a reflector on the operator (+Z) side. */
 export function AcrossEye({ state, x, beamY, sensor }: { state: ConveyorSortState; x: number; beamY: number; sensor: SensorKey }) {
   const get = () => state.sensors[sensor];
   const out = sensor === 'infeed' ? () => state.sensors.infeedOutput : get;
   return (
     <PhotoEye42EF
-      position={[x, BELT_H + beamY, EYE_Z]}
-      rotation={[0, Math.PI, 0]}
+      position={[x, BELT_H + beamY, -EYE_Z]}
       getBlocked={get}
       getOutput={out}
       getBlockDistance={() => blockDistance(state, x)}
@@ -366,8 +460,8 @@ export function AcrossEye({ state, x, beamY, sensor }: { state: ConveyorSortStat
 
 /** PE_Divert: diagonal beam through the divert point (the pusher and the chute occupy both sides at x = 4.0). */
 export const DIVERT_EYE = (() => {
-  const from: Vec3 = [G.peDivertX + 0.3, BELT_H + 0.05, EYE_Z];
-  const to: Vec3 = [G.peDivertX - 0.3, BELT_H + 0.05, -EYE_Z];
+  const from: Vec3 = [G.peDivertX - 0.3, BELT_H + 0.05, -EYE_Z];
+  const to: Vec3 = [G.peDivertX + 0.3, BELT_H + 0.05, EYE_Z];
   const dx = to[0] - from[0];
   const dz = to[2] - from[2];
   return { from, to, len: Math.hypot(dx, dz), rotY: Math.atan2(dx, dz) };
@@ -402,14 +496,35 @@ export const CYL = {
 } as const;
 /** 5/2 valve manifold on the rear support (machine frame). */
 export const VALVE_POS: Vec3 = [G.pusherX + 0.13, 0.55, CYL.rearZ + 0.08];
+/** Filter-regulator next to the valve (machine frame). */
+export const FRL_POS: Vec3 = [G.pusherX + 0.31, VALVE_POS[1] + 0.02, VALVE_POS[2] + 0.02];
+/** Compressed-air drop (ball valve outlet) on the fence post behind the pusher (machine frame). */
+export const AIR_DROP: Vec3 = [3.6, 1.05, -1.41];
+/** A/B port fitting of manifold station 1 (machine frame). */
+function valvePort(port: 'a' | 'b'): Vec3 {
+  return [VALVE_POS[0] - 0.008, VALVE_POS[1] + 0.008, VALVE_POS[2] + 0.024 * (port === 'a' ? 0.3 : 0.72)];
+}
 
 export function Pusher({ state }: { state: ConveyorSortState }) {
   const ext = () => state.pusherPosition;
   const alu = steel('#c3c8cc', 0.42);
-  // tube ends at the valve (cylinder coordinates)
+  // tube ends at the valve A/B fittings (cylinder coordinates)
   const toCyl = (p: Vec3): Vec3 => [p[0] - G.pusherX, p[1] - CYL.y, p[2] - CYL.z];
-  const rear = toCyl([VALVE_POS[0] - 0.012, VALVE_POS[1] + 0.13, VALVE_POS[2] + 0.06]);
-  const front = toCyl([VALVE_POS[0] + 0.012, VALVE_POS[1] + 0.13, VALVE_POS[2] + 0.06]);
+  const rear = toCyl(valvePort('a'));
+  const front = toCyl(valvePort('b'));
+  // D-sub multicore: up the rear stand, tied along under the cylinder to the front bracket, down the bracket and
+  // along the frame to JB-201
+  const underCyl = CYL.y - 0.05;
+  const dsub: Vec3[] = [
+    [G.pusherX + 0.02, VALVE_POS[1] + 0.03, CYL.rearZ + 0.085],
+    [G.pusherX + 0.025, underCyl - 0.03, CYL.rearZ + 0.1],
+    [G.pusherX + 0.03, underCyl - 0.005, CYL.rearZ + 0.3],
+    [G.pusherX + 0.03, underCyl - 0.005, CYL.z - 0.15],
+    [G.pusherX + 0.12, underCyl - 0.02, CYL.z - 0.03],
+    [G.pusherX + 0.13, LAY.frameBottom + 0.02, -LAY.frameOuterZ - 0.012],
+    [G.pusherX + 0.2, LAY.frameBottom - 0.012, -LAY.frameOuterZ - 0.012],
+    ...jbRun(G.pusherX + 0.2, 3),
+  ];
   return (
     <group>
       <PneumaticCylinder
@@ -422,7 +537,7 @@ export function Pusher({ state }: { state: ConveyorSortState }) {
         pusher={[PADDLE.width, PADDLE.height]}
         tubes={{ rear, front }}
       />
-      {/* front bracket bolted to the conveyor side frame, rear support stand */}
+      {/* front bracket bolted to the conveyor side frame, rear support stand, valve plate */}
       <Instances
         geometry={unitBox}
         material={alu}
@@ -432,40 +547,45 @@ export function Pusher({ state }: { state: ConveyorSortState }) {
           { p: [G.pusherX, (CYL.y - 0.06) / 2, CYL.rearZ + 0.05], s: [0.045, CYL.y - 0.06, 0.045] },
           { p: [G.pusherX, CYL.y - 0.055, CYL.rearZ + 0.05], s: [0.12, 0.012, 0.08] },
           { p: [G.pusherX, 0.006, CYL.rearZ + 0.05], s: [0.16, 0.012, 0.16] },
-          { p: [G.pusherX + 0.07, VALVE_POS[1] + 0.06, CYL.rearZ + 0.075], s: [0.2, 0.2, 0.006] },
+          { p: [G.pusherX + 0.14, VALVE_POS[1] + 0.06, CYL.rearZ + 0.075], s: [0.34, 0.2, 0.006] },
         ]}
       />
-      {/* 5/2 single-solenoid valve (station 1 live) on its manifold */}
-      <SolenoidValve variant="pneumatic" position={VALVE_POS} getEnergized={() => state.pusherValve} stations={2} />
-      <FrlUnit position={[G.pusherX + 0.2, VALVE_POS[1] + 0.02, VALVE_POS[2] + 0.02]} />
+      {/* YV-101 5/2 single-solenoid valve (station 1 live) on its manifold */}
+      <SolenoidValve
+        variant="pneumatic"
+        position={VALVE_POS}
+        getEnergized={() => state.pusherValve}
+        stations={2}
+        portsTo={false}
+        cableTo={{ via: dsub.slice(0, -1), to: dsub[dsub.length - 1]! }}
+        tubeTo={{ via: [[FRL_POS[0] - 0.05, VALVE_POS[1] + 0.065, VALVE_POS[2] + 0.03]], to: [FRL_POS[0] - 0.026, FRL_POS[1] + 0.07, FRL_POS[2]] }}
+      />
+      <FrlUnit position={FRL_POS} />
+      {/* air drop on the fence post: galvanized pipe from the header + ball valve */}
+      <mesh geometry={unitCylY} material={steel('#aab1b6', 0.45)} position={[AIR_DROP[0], (AIR_DROP[1] + 3.3) / 2, AIR_DROP[2]]} scale={[0.011, 3.3 - AIR_DROP[1], 0.011]} castShadow />
+      <mesh material={paint('#c62828', 0.45)} position={[AIR_DROP[0] + 0.03, AIR_DROP[1] + 0.03, AIR_DROP[2]]}>
+        <boxGeometry args={[0.06, 0.01, 0.018]} />
+      </mesh>
+      <mesh material={steel('#b8a36a', 0.35)} position={[AIR_DROP[0], AIR_DROP[1] + 0.02, AIR_DROP[2]]}>
+        <boxGeometry args={[0.03, 0.04, 0.03]} />
+      </mesh>
     </group>
   );
 }
 
-/** Air supply drop (blue PU) and the valve coil cable (yellow) — machine frame, for <Cables>. */
-export function pusherCables(trayY: number, trayZ: number): CableSpec[] {
-  return [
-    {
-      points: [
-        [G.pusherX + 0.2, VALVE_POS[1] + 0.2, VALVE_POS[2] + 0.04],
-        [G.pusherX + 0.2, 1.6, VALVE_POS[2] + 0.04],
-        [G.pusherX + 0.3, trayY - 0.35, VALVE_POS[2] - 0.1],
-        [G.pusherX + 0.35, trayY - 0.03, trayZ],
-      ],
-      radius: 0.005,
-      color: '#1f5fd0',
-    },
-    {
-      points: [
-        [VALVE_POS[0] - 0.03, VALVE_POS[1] + 0.08, VALVE_POS[2] + 0.08],
-        [VALVE_POS[0] - 0.12, VALVE_POS[1] - 0.05, VALVE_POS[2] + 0.12],
-        [VALVE_POS[0] - 0.3, 0.3, -LAY.frameZ - 0.2],
-        [G.pusherX + 0.9, 0.62, -LAY.frameOuterZ - 0.03],
-      ],
-      radius: 0.0035,
-      color: '#e8b90f',
-    },
-  ];
+/** Air hose from the drop's ball valve to the FRL inlet (machine frame, for <Cables>). */
+export function pusherAirHose(): CableSpec {
+  return {
+    points: [
+      [AIR_DROP[0], AIR_DROP[1] - 0.02, AIR_DROP[2]],
+      [AIR_DROP[0] + 0.02, AIR_DROP[1] - 0.2, AIR_DROP[2] + 0.02],
+      [(AIR_DROP[0] + FRL_POS[0]) / 2, 0.42, (AIR_DROP[2] + FRL_POS[2]) / 2],
+      [FRL_POS[0] + 0.05, FRL_POS[1] + 0.07, FRL_POS[2]],
+      [FRL_POS[0] + 0.028, FRL_POS[1] + 0.07, FRL_POS[2]],
+    ],
+    radius: 0.005,
+    color: '#1f5fd0',
+  };
 }
 
 /** Filter-regulator with gauge & shut-off (machine frame). */
@@ -723,34 +843,110 @@ export function GoodPallet({ state }: { state: ConveyorSortState }) {
   return <instancedMesh ref={ref} args={[boxGeometry('short'), boxMaterial('short'), CAP]} castShadow receiveShadow frustumCulled={false} />;
 }
 
-/** Field junction box on the back side frame (sensor M12 cables land here). */
-export function JunctionBox({ position }: { position: Vec3 }) {
-  return (
-    <group position={position}>
-      <mesh material={paint('#d4d6d1', 0.5, 0.15)} castShadow>
-        <boxGeometry args={[0.2, 0.16, 0.08]} />
-      </mesh>
-      <mesh material={paint('#c4c6c1', 0.45, 0.15)} position={[0, 0, -0.042]}>
-        <boxGeometry args={[0.19, 0.15, 0.006]} />
-      </mesh>
-      {[-0.06, -0.02, 0.02, 0.06].map((x) => (
-        <mesh key={x} material={paint('#2a2b2d', 0.5)} position={[x, -0.085, 0]}>
-          <cylinderGeometry args={[0.007, 0.008, 0.014, 12]} />
-        </mesh>
-      ))}
-    </group>
-  );
+// ---------------------------------------------------------------------------
+// Field junction box JB-201 + frame cable runs
+// ---------------------------------------------------------------------------
+
+/** JB-201 hangs on a bracket under the back (−Z) side frame near the discharge end; its front faces −Z. */
+export const JB = { x: G.beltLength - 0.55, y: LAY.frameBottom - 0.1, z: -LAY.frameOuterZ - 0.012, size: [0.22, 0.16, 0.09] as Vec3, glands: 7 } as const;
+const JB_GLANDS = fieldJunctionBoxGlands(JB.size, JB.glands);
+/** Cable entry point of gland `i` (machine frame; the box is turned 180°, so gland 0 is the rightmost). */
+export function jbGland(i: number): Vec3 {
+  const g = JB_GLANDS[i]!;
+  return [JB.x - g[0], JB.y + g[1] + 0.002, JB.z - JB.size[2] * 0.36];
+}
+/** z of cables tied along the outer face of the back side frame. */
+export const FRAME_RUN_Z = -LAY.frameOuterZ - 0.012;
+const FRAME_RUN_Y = LAY.frameBottom - 0.012;
+
+/**
+ * End of a cable run along the frame into JB-201 gland `i`: down beside the box, under it, up into the gland
+ * (drip loop). Cables arriving from the left run deeper the further right their gland is, so loops never cross.
+ */
+export function jbRun(fromX: number, i: number): Vec3[] {
+  const g = jbGland(i);
+  const left = fromX < JB.x;
+  const s = left ? -1 : 1;
+  const side = JB.x + s * (JB.size[0] / 2 + 0.03);
+  const yU = g[1] - (left ? 0.03 + 0.011 * (JB.glands - 1 - i) : 0.03 + 0.011 * i);
+  return [
+    [side + s * 0.12, FRAME_RUN_Y, FRAME_RUN_Z],
+    [side + s * 0.02, FRAME_RUN_Y - 0.03, FRAME_RUN_Z - 0.006],
+    [side, yU + 0.04, (FRAME_RUN_Z + g[2]) / 2],
+    [side - s * 0.03, yU, g[2]],
+    [g[0] + s * 0.03, yU, g[2]],
+    [g[0], yU + 0.025, g[2]],
+    [g[0], g[1] - 0.004, g[2]],
+  ];
 }
 
-/** Yellow M12 sensor cable along the frame, from a sensor down to the junction box (for <Cables>). */
-export function sensorCable(from: Vec3, to: Vec3, frameSide = -1): CableSpec {
-  const zRun = frameSide * (LAY.frameOuterZ + 0.012);
-  const yRun = LAY.frameBottom - 0.02;
-  const dir = Math.sign(to[0] - from[0] || 1);
+/** Yellow M12 cordset from a photo-eye post base, down the frame face and along it into JB-201 gland `i`. */
+export function sensorCable(x: number, i: number): CableSpec {
+  const from: Vec3 = [x + 0.004, LAY.frameTop - 0.004, -EYE_Z - 0.01];
+  const dir = Math.sign(JB.x - x) || 1;
   return {
-    points: [from, [from[0], yRun + 0.06, from[2]], [from[0] + 0.05 * dir, yRun, zRun], [to[0] - 0.08 * dir, yRun, zRun], to],
+    points: [from, [x + 0.006, LAY.frameTop - 0.02, FRAME_RUN_Z + 0.004], [x + 0.03 * dir, FRAME_RUN_Y + 0.02, FRAME_RUN_Z], [x + 0.09 * dir, FRAME_RUN_Y, FRAME_RUN_Z], ...jbRun(x, i)],
     radius: 0.003,
     color: '#e8b90f',
   };
 }
 
+export function JunctionBox() {
+  return (
+    <group>
+      {/* hanger bracket from the side frame */}
+      <Instances
+        geometry={unitBox}
+        material={steel('#c3c8cc', 0.42)}
+        items={[-1, 1].map((sx) => ({ p: [JB.x + sx * 0.08, (LAY.frameBottom + JB.y) / 2 + 0.02, JB.z + 0.004] as Vec3, s: [0.025, LAY.frameBottom - JB.y + 0.06, 0.006] as Vec3 }))}
+      />
+      <FieldJunctionBox size={JB.size} glands={JB.glands} label="JB-201" position={[JB.x, JB.y, JB.z]} rotation={[0, Math.PI, 0]} />
+    </group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 855T stack light on a pole at the discharge end (readable from the whole line)
+// ---------------------------------------------------------------------------
+
+export const STACK = { x: 5.18, z: -(LAY.frameOuterZ + 0.05), pole: 1.05 } as const;
+const S855_DIMS = { moduleH: 0.0575, adapterH: 0.034, footH: 0.012 } as const;
+const STACK_BASE = LAY.frameTop + 0.006;
+/** Centre height of tier `i` (0 = top / red). */
+export const stackTierY = (i: number) => STACK_BASE + S855_DIMS.footH + STACK.pole - 0.004 + S855_DIMS.adapterH + (2 - i) * S855_DIMS.moduleH + S855_DIMS.moduleH / 2;
+
+export function LineStackLight({ state }: { state: ConveyorSortState }) {
+  return (
+    <group>
+      {/* L-bracket bolted to the frame face */}
+      <Instances
+        geometry={unitBox}
+        material={steel('#c3c8cc', 0.42)}
+        items={[
+          { p: [STACK.x, LAY.frameTop - 0.04, -LAY.frameOuterZ - 0.003], s: [0.1, 0.09, 0.006] },
+          { p: [STACK.x, STACK_BASE - 0.003, (STACK.z - LAY.frameOuterZ) / 2 - 0.02], s: [0.1, 0.006, 0.11] },
+        ]}
+      />
+      <StackLight856T
+        series="855T"
+        position={[STACK.x, STACK_BASE, STACK.z]}
+        tiers={['red', 'amber', 'green']}
+        getTier={(i) => (i === 0 ? state.lightRed : i === 1 ? state.lightAmber : state.lightGreen)}
+        mount="pole"
+        poleLength={STACK.pole}
+      />
+      <Glow get={() => state.lightRed} color="#ff2a14" position={[STACK.x, stackTierY(0), STACK.z]} size={0.26} grow={0.09} intensity={2} />
+      <Glow get={() => state.lightAmber} color="#ffab1a" position={[STACK.x, stackTierY(1), STACK.z]} size={0.26} grow={0.09} intensity={2} />
+      <Glow get={() => state.lightGreen} color="#2dff5a" position={[STACK.x, stackTierY(2), STACK.z]} size={0.26} grow={0.09} intensity={1.5} />
+    </group>
+  );
+}
+
+/** Stack light cable: from the pole foot down the frame into JB-201. */
+export function stackLightCable(i: number): CableSpec {
+  return {
+    points: [[STACK.x - 0.02, STACK_BASE + 0.004, STACK.z + 0.02], [STACK.x - 0.03, STACK_BASE - 0.02, -LAY.frameOuterZ - 0.016], [STACK.x - 0.05, FRAME_RUN_Y + 0.02, FRAME_RUN_Z], ...jbRun(STACK.x - 0.08, i)],
+    radius: 0.0035,
+    color: '#6f7479',
+  };
+}

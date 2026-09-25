@@ -4,12 +4,12 @@
  * buttons on the north crosswalk (click them = `ped`), inductive loops on both side-street approaches
  * (they glow while a car is detected), cars (instanced fleet) and pedestrians animated from the scene
  * state, crash effects on signal conflicts, the roadside controller cabinet with the live CompactLogix
- * rack + NIGHT FLASH key switch (`night`), and a city block around it.
+ * rack + the AUTO/FLASH key on its police panel (`night`), and a city block around it.
  *
  * The view never ticks the runtime: it reads `state` in useFrame and writes controls via runtime.setControl.
  */
 import { useFrame } from '@react-three/fiber';
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { sfx } from '../../../audio/sfx';
 import type { Vec3 } from '../../../twin/contracts';
@@ -21,16 +21,18 @@ import {
   PedestrianPushButton,
   PedestrianSignal,
   poleRadiusAt,
+  SIGNAL_HEAD_DIMS,
   SignalPole,
   TrafficSignalHead,
   type CarInstance,
   type MastArmSpec,
 } from '../../../twin/devices';
 import type { SceneViewProps, SimRuntime } from '../../types';
-import { audioAllowed, canvasTexture, fitFont, IoTag, ioLine, kgeo, kmat, TagLayer, useSfxLoops } from '../trainer/kit';
+import { audioAllowed, canvasTexture, fitFont, IoTag, ioLine, kgeo, kmat, TagLayer, useSfxLoops, type TagGroup } from '../trainer/kit';
 import { TrafficCabinet } from './cabinet';
-import { useLatest } from './cityKit';
+import { useQuietPaint } from './cityKit';
 import { CABINET, OCCLUDERS, PARKED_CARS, ROAD, TrafficEnvironment } from './environment';
+import { glowTexture, PointSprites, smokeTexture, type SpriteBuffers } from './fx';
 import { TRAFFIC_GEOMETRY as G, type Approach, type Pedestrian as PedState, type TrafficLightState } from './logic';
 
 type P = SceneViewProps<TrafficLightState>;
@@ -56,6 +58,10 @@ const ARM = { length: 7.4, heads: [3.2, 5.1] as const };
 const ARM_H = mastArmHeightForClearance({ clearance: 5.03, at: ARM.heads[0], length: ARM.length, baseElevation: ROAD.curb });
 /** Approximate head centre height above the road (for tag boxes). */
 const HEAD_Y = 5.03 + 0.62;
+/** Lens centres below a head's mounting point (default hanger), and a point just inside the visor. */
+const HANGER = SIGNAL_HEAD_DIMS.defaultHanger;
+const SECTION = SIGNAL_HEAD_DIMS.sectionHeight;
+const LENS_Z = SIGNAL_HEAD_DIMS.housingDepth / 2 + 0.05;
 
 /** An EW car waiting on its approach's loop (same test as the logic's detector). */
 function loopOccupied(state: TrafficLightState, approach: Approach): boolean {
@@ -64,6 +70,87 @@ function loopOccupied(state: TrafficLightState, approach: Approach): boolean {
     if (c.s <= STOP_S + 0.5 && c.s >= STOP_S - G.loopLength) return true;
   }
   return false;
+}
+
+/** Pinned-overlay groups: far away, each collapses into one summary chip. */
+const TG: Record<string, TagGroup> = {
+  ns: { id: 'ns', label: 'Main-street heads (NS)', mode: 'rows', collapseBelow: 34 },
+  ew: { id: 'ew', label: 'Side-street heads (EW)', mode: 'rows', collapseBelow: 34 },
+  ped: { id: 'ped', label: 'North crosswalk: ped signal + button', mode: 'rows', collapseBelow: 22 },
+  cab: { id: 'cab', label: 'Controller cabinet CAB 07', mode: 'rows', collapseBelow: 16 },
+};
+
+// ---------------------------------------------------------------------------
+// Lamp halos: one Points draw call for every signal lens (readable lamp states from far away)
+// ---------------------------------------------------------------------------
+
+interface HaloSrc {
+  obj: THREE.Object3D;
+  rgb: [number, number, number];
+  size: number;
+  get: () => boolean;
+  level: number;
+}
+
+const HaloContext = createContext<HaloSrc[] | null>(null);
+
+const HALO_RGB: Record<'red' | 'yellow' | 'green' | 'walk' | 'hand', [number, number, number]> = {
+  red: [1.0, 0.12, 0.04],
+  yellow: [1.0, 0.55, 0.05],
+  green: [0.05, 1.0, 0.62],
+  walk: [0.9, 0.95, 1.0],
+  hand: [1.0, 0.42, 0.05],
+};
+
+function HaloAnchor({ position, color, get, size = 2.3 }: { position: Vec3; color: keyof typeof HALO_RGB; get: () => boolean; size?: number }) {
+  const list = useContext(HaloContext);
+  const ref = useRef<THREE.Group>(null);
+  const getRef = useRef(get);
+  getRef.current = get;
+  useLayoutEffect(() => {
+    if (!list || !ref.current) return;
+    const src: HaloSrc = { obj: ref.current, rgb: HALO_RGB[color], size, get: () => getRef.current(), level: 0 };
+    list.push(src);
+    return () => {
+      const i = list.indexOf(src);
+      if (i >= 0) list.splice(i, 1);
+    };
+  }, [list, color, size]);
+  return <group ref={ref} position={position} />;
+}
+
+function LampHalos({ children }: { children: ReactNode }) {
+  const list = useMemo<HaloSrc[]>(() => [], []);
+  const v = useMemo(() => new THREE.Vector3(), []);
+  const update = useMemo(
+    () => (b: SpriteBuffers, dt: number) => {
+      const k = 1 - Math.exp(-dt * 30);
+      let n = 0;
+      for (const h of list) {
+        h.level += ((h.get() ? 1 : 0) - h.level) * k;
+        if (h.level < 0.02) continue;
+        h.obj.getWorldPosition(v);
+        b.pos[n * 3] = v.x;
+        b.pos[n * 3 + 1] = v.y;
+        b.pos[n * 3 + 2] = v.z;
+        b.col[n * 3] = h.rgb[0] * 0.75;
+        b.col[n * 3 + 1] = h.rgb[1] * 0.75;
+        b.col[n * 3 + 2] = h.rgb[2] * 0.75;
+        b.size[n] = h.size;
+        b.alpha[n] = h.level;
+        b.rot[n] = 0;
+        n++;
+      }
+      return n;
+    },
+    [list, v],
+  );
+  return (
+    <HaloContext.Provider value={list}>
+      {children}
+      <PointSprites capacity={48} map={glowTexture()} additive update={update} />
+    </HaloContext.Provider>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -88,14 +175,21 @@ function useLampGetters(state: TrafficLightState) {
 
 /**
  * Countdown display: like real countdown pedestrian modules, it learns the length of the flashing
- * DON'T WALK interval of the previous cycle and counts it down (blank on the first cycle).
+ * DON'T WALK interval of the previous cycle and counts it down (blank on the first cycle). A plant
+ * reset (time running backwards) forgets what it learned.
  */
 function usePedCountdown(state: TrafficLightState) {
-  const s = useRef({ prevWalk: false, prevDw: false, t0: -1, lastRise: 0, steadySince: 0, learned: 0, counting: false });
+  const s = useRef({ prevWalk: false, prevDw: false, t0: -1, lastRise: 0, steadySince: 0, learned: 0, counting: false, prevNow: 0 });
   return useMemo(
     () => () => {
       const k = s.current;
       const now = state.timeMs;
+      if (now < k.prevNow) {
+        k.prevWalk = k.prevDw = k.counting = false;
+        k.t0 = -1;
+        k.lastRise = k.steadySince = k.learned = 0;
+      }
+      k.prevNow = now;
       const walk = state.lamps.walk;
       const dw = state.lamps.dontWalk;
       if (k.prevWalk && !walk) {
@@ -122,6 +216,8 @@ function usePedCountdown(state: TrafficLightState) {
   );
 }
 
+type Road = 'ns' | 'ew';
+
 function Signals({ state, runtime }: P) {
   const g = useLampGetters(state);
   const countdown = usePedCountdown(state);
@@ -146,17 +242,31 @@ function Signals({ state, runtime }: P) {
     }),
     [runtime],
   );
-  const night = () => runtime.getControl('night') === true;
-  const head = (road: 'ns' | 'ew') =>
-    road === 'ns' ? <TrafficSignalHead getRed={g.nsR} getYellow={g.nsY} getGreen={g.nsG} /> : <TrafficSignalHead getRed={g.ewR} getYellow={g.ewY} getGreen={g.ewG} />;
-  const arm = (angle: number, road: 'ns' | 'ew'): MastArmSpec => ({
+  const head = (road: Road) => {
+    const [r, y, gr] = road === 'ns' ? [g.nsR, g.nsY, g.nsG] : [g.ewR, g.ewY, g.ewG];
+    return (
+      <group>
+        <TrafficSignalHead getRed={r} getYellow={y} getGreen={gr} />
+        <HaloAnchor position={[0, -HANGER - SECTION * 0.5, LENS_Z]} color="red" get={r} />
+        <HaloAnchor position={[0, -HANGER - SECTION * 1.5, LENS_Z]} color="yellow" get={y} />
+        <HaloAnchor position={[0, -HANGER - SECTION * 2.5, LENS_Z]} color="green" get={gr} />
+      </group>
+    );
+  };
+  const arm = (angle: number, road: Road): MastArmSpec => ({
     length: ARM.length,
     angle,
     height: ARM_H,
     streetSign: { at: 6.4, text: road === 'ns' ? 'LOGIX AVE' : 'MAIN ST', width: 1.6 },
     attachments: ARM.heads.map((at) => ({ at, node: head(road), flip: true })),
   });
-  const pedHead = <PedestrianSignal getWalk={g.walk} getDontWalk={g.dw} getCountdown={countdown} />;
+  const pedHead = (
+    <group>
+      <PedestrianSignal getWalk={g.walk} getDontWalk={g.dw} getCountdown={countdown} />
+      <HaloAnchor position={[-0.1, 0, 0.36]} color="walk" get={g.walk} size={1.5} />
+      <HaloAnchor position={[-0.1, 0, 0.36]} color="hand" get={g.dw} size={1.5} />
+    </group>
+  );
   const button = (arrow: 'left' | 'right') => (
     <PedestrianPushButton mount="none" poleRadius={poleRadiusAt(1.1)} arrow={arrow} getPressed={pedPressed} getLit={pedLit} onPress={press.onPress} onRelease={press.onRelease} />
   );
@@ -164,8 +274,11 @@ function Signals({ state, runtime }: P) {
   const nsLines = [L('NS_Red'), L('NS_Yellow'), L('NS_Green')];
   const ewLines = [L('EW_Red'), L('EW_Yellow'), L('EW_Green')];
   const pedLines = [L('Walk'), L('Dont_Walk')];
-  /** Tag box around the two heads of an arm (arm heading `a` from a pole at x, z). */
-  const headTag = (x: number, z: number, a: number, lines: typeof nsLines, title: string) => {
+  /**
+   * Tag box around the two heads of an arm (arm heading `a` from a pole at x, z). Both arms of a road carry
+   * the same outputs: one arm per road takes part in the pinned overlay (no duplicate rows), both hover.
+   */
+  const headTag = (x: number, z: number, a: number, lines: typeof nsLines, title: string, group?: TagGroup) => {
     const mid = (ARM.heads[0] + ARM.heads[1]) / 2;
     return (
       <IoTag
@@ -175,6 +288,8 @@ function Signals({ state, runtime }: P) {
         anchor={[0, 0.95, 0]}
         title={title}
         lines={lines}
+        pin={!!group}
+        group={group}
       />
     );
   };
@@ -185,14 +300,14 @@ function Signals({ state, runtime }: P) {
         position={[POLE, ROAD.curb, -POLE]}
         poleId="NE-1"
         arms={[arm(Math.PI, 'ns')]}
-        luminaire={{ angle: Math.PI, getLit: night }}
+        luminaire={{ angle: Math.PI }}
         attachments={[
           { height: 3.0, angle: -Math.PI / 2, node: pedHead },
           { height: 0.95, angle: 0, bands: false, node: button('left') },
         ]}
       />
       {/* SW: SB heads (arm east) */}
-      <SignalPole position={[-POLE, ROAD.curb, POLE]} poleId="SW-3" arms={[arm(0, 'ns')]} luminaire={{ angle: 0, getLit: night }} />
+      <SignalPole position={[-POLE, ROAD.curb, POLE]} poleId="SW-3" arms={[arm(0, 'ns')]} luminaire={{ angle: 0 }} />
       {/* SE: EB heads (arm north) */}
       <SignalPole position={[POLE, ROAD.curb, POLE]} poleId="SE-2" arms={[arm(Math.PI / 2, 'ew')]} />
       {/* NW: WB heads (arm south) + ped head facing the NE corner + push button */}
@@ -201,20 +316,39 @@ function Signals({ state, runtime }: P) {
         poleId="NW-4"
         arms={[arm(-Math.PI / 2, 'ew')]}
         attachments={[
-          { height: 3.0, angle: Math.PI / 2, node: <PedestrianSignal getWalk={g.walk} getDontWalk={g.dw} getCountdown={countdown} /> },
+          {
+            height: 3.0,
+            angle: Math.PI / 2,
+            node: (
+              <group>
+                <PedestrianSignal getWalk={g.walk} getDontWalk={g.dw} getCountdown={countdown} />
+                <HaloAnchor position={[-0.1, 0, 0.36]} color="walk" get={g.walk} size={1.5} />
+                <HaloAnchor position={[-0.1, 0, 0.36]} color="hand" get={g.dw} size={1.5} />
+              </group>
+            ),
+          },
           { height: 0.95, angle: 0, bands: false, node: button('right') },
         ]}
       />
-      {headTag(POLE, -POLE, Math.PI, nsLines, 'Main street heads (northbound)')}
-      {headTag(-POLE, POLE, 0, nsLines, 'Main street heads (southbound)')}
-      {headTag(POLE, POLE, Math.PI / 2, ewLines, 'Side street heads (eastbound)')}
-      {headTag(-POLE, -POLE, -Math.PI / 2, ewLines, 'Side street heads (westbound)')}
+      {headTag(POLE, -POLE, Math.PI, nsLines, 'Main street heads, northbound (NB)', TG.ns)}
+      {headTag(-POLE, POLE, 0, nsLines, 'Main street heads, southbound (SB) — same outputs as NB')}
+      {headTag(POLE, POLE, Math.PI / 2, ewLines, 'Side street heads, eastbound (EB)', TG.ew)}
+      {headTag(-POLE, -POLE, -Math.PI / 2, ewLines, 'Side street heads, westbound (WB) — same outputs as EB')}
       {/* ped heads (3.0 m on the pole, facing across the crosswalk) */}
-      <IoTag position={[POLE - 0.45, ROAD.curb + 3.0, -POLE]} size={[0.35, 0.55, 0.55]} anchor={[0, 0.4, 0]} title="Pedestrian signal (NE pole)" lines={pedLines} />
-      <IoTag position={[-POLE + 0.45, ROAD.curb + 3.0, -POLE]} size={[0.35, 0.55, 0.55]} anchor={[0, 0.4, 0]} title="Pedestrian signal (NW pole)" lines={pedLines} />
-      {/* push buttons (0.95 m, south face of the NE / NW poles) */}
+      <IoTag position={[POLE - 0.45, ROAD.curb + 3.0, -POLE]} size={[0.35, 0.55, 0.55]} anchor={[0, 0.4, 0]} title="Pedestrian signal (NE pole)" lines={pedLines} pin={false} />
+      <IoTag position={[-POLE + 0.45, ROAD.curb + 3.0, -POLE]} size={[0.35, 0.55, 0.55]} anchor={[0, 0.4, 0]} title="Pedestrian signal (NW pole)" lines={pedLines} group={TG.ped} />
+      {/* push buttons (0.95 m, south face of the NE / NW poles), wired in parallel */}
       {[POLE, -POLE].map((x) => (
-        <IoTag key={x} position={[x, ROAD.curb + 1.1, -POLE + 0.3]} size={[0.2, 0.45, 0.2]} anchor={[0, 0.35, 0]} title="Pedestrian push button (N.O.)" lines={[L('Ped_PB')]} />
+        <IoTag
+          key={x}
+          position={[x, ROAD.curb + 1.1, -POLE + 0.3]}
+          size={[0.2, 0.45, 0.2]}
+          anchor={[0, 0.35, 0]}
+          title="Pedestrian push button (N.O., both corners in parallel)"
+          lines={[L('Ped_PB')]}
+          pin={x < 0}
+          group={x < 0 ? TG.ped : undefined}
+        />
       ))}
     </group>
   );
@@ -224,12 +358,14 @@ function Loops({ state, runtime }: P) {
   const eb = useMemo(() => () => loopOccupied(state, 'EB'), [state]);
   const wb = useMemo(() => () => loopOccupied(state, 'WB'), [state]);
   const line = [ioLine(runtime, 'Car_Sensor_EW')];
+  const title = (dir: string) => `Loop (${dir}) → detector amplifier ch 1 in the cabinet → Local:1:I.Pt01`;
   return (
     <group>
       <InductiveLoopMarking position={[-LOOP_CENTER, 0, G.laneOffset]} length={G.loopLength} width={1.8} leadIn={0.85} getActive={eb} hint="strong" />
       <InductiveLoopMarking position={[LOOP_CENTER, 0, -G.laneOffset]} rotation={[0, Math.PI, 0]} length={G.loopLength} width={1.8} leadIn={0.85} getActive={wb} hint="strong" />
-      <IoTag position={[-LOOP_CENTER, 0.1, G.laneOffset]} size={[G.loopLength, 0.25, 1.9]} anchor={[0, 0.4, 0]} title="Loop detector, eastbound stop line" lines={line} />
-      <IoTag position={[LOOP_CENTER, 0.1, -G.laneOffset]} size={[G.loopLength, 0.25, 1.9]} anchor={[0, 0.4, 0]} title="Loop detector, westbound stop line" lines={line} />
+      {/* both loops feed the same detector channel: each gets its own pill (a large, flat device) */}
+      <IoTag position={[-LOOP_CENTER, 0.1, G.laneOffset]} size={[G.loopLength, 0.25, 1.9]} anchor={[0, 0.4, 0]} title={title('eastbound')} lines={line} />
+      <IoTag position={[LOOP_CENTER, 0.1, -G.laneOffset]} size={[G.loopLength, 0.25, 1.9]} anchor={[0, 0.4, 0]} title={title('westbound')} lines={line} />
     </group>
   );
 }
@@ -238,9 +374,9 @@ function Loops({ state, runtime }: P) {
 // Cars
 // ---------------------------------------------------------------------------
 
-const MAX_CARS = 48;
+const MAX_CARS = 44;
 
-function Traffic({ state, runtime }: P) {
+function Traffic({ state }: P) {
   const getCar = useMemo(
     () => (i: number, o: CarInstance) => {
       const cars = state.cars;
@@ -264,7 +400,7 @@ function Traffic({ state, runtime }: P) {
       o.length = c.length;
       o.distance = c.s;
       o.braking = c.braking;
-      o.headlights = runtime.getControl('night') === true;
+      // daytime: headlights off (the signal controller has nothing to do with them)
       if (c.state === 'crashed') {
         const t = c.crashMs / 1000;
         o.blinker = 'hazard';
@@ -276,7 +412,7 @@ function Traffic({ state, runtime }: P) {
       }
       return true;
     },
-    [state, runtime],
+    [state],
   );
   return <CarFleet capacity={MAX_CARS} getCar={getCar} />;
 }
@@ -285,20 +421,24 @@ function Traffic({ state, runtime }: P) {
 // Pedestrians
 // ---------------------------------------------------------------------------
 
-/** Keep React in sync with the pedestrian list (re-render only when somebody appears / leaves). */
+/** Keep React in sync with the pedestrian list (re-render only when somebody appears / leaves; remount all on a plant reset). */
 function usePedIds(state: TrafficLightState) {
-  const [ids, setIds] = useState<{ id: number; variant: number }[]>([]);
+  const [ids, setIds] = useState<{ key: string; id: number; variant: number }[]>([]);
   const last = useRef('');
   const acc = useRef(0);
+  const gen = useRef({ n: 0, t: 0 });
   useFrame((_, dt) => {
+    if (state.timeMs < gen.current.t) gen.current.n++;
+    gen.current.t = state.timeMs;
     acc.current += dt;
     if (acc.current < 0.05) return;
     acc.current = 0;
-    let key = '';
+    let key = `${gen.current.n}:`;
     for (const p of state.pedestrians) key += `${p.id},`;
     if (key === last.current) return;
     last.current = key;
-    setIds(state.pedestrians.map((p) => ({ id: p.id, variant: p.variant })));
+    const n = gen.current.n;
+    setIds(state.pedestrians.map((p) => ({ key: `${n}:${p.id}`, id: p.id, variant: p.variant })));
   });
   return ids;
 }
@@ -387,7 +527,7 @@ function Pedestrians({ state }: P) {
   return (
     <group>
       {ids.map((p) => (
-        <PedSlot key={p.id} state={state} id={p.id} variant={p.variant} />
+        <PedSlot key={p.key} state={state} id={p.id} variant={p.variant} />
       ))}
       <AmbientWalker variant={2} from={[5.4, -12]} to={[5.4, -34]} speed={1.3} phase={3} />
       <AmbientWalker variant={4} from={[-12, 5.3]} to={[-36, 5.3]} speed={1.2} phase={11} />
@@ -399,76 +539,153 @@ function Pedestrians({ state }: P) {
 // Crash effects & conflict warning
 // ---------------------------------------------------------------------------
 
-const PUFFS = 7;
+const PUFFS = 9;
+const SPARKS = 16;
 const SHARDS = 14;
 const MAX_FX = 4;
 
+/** Conflict banner, one texture per cause (the monitor tells which outputs were on together). */
+function conflictSignTexture(kind: 'streets' | 'walk') {
+  const sub = kind === 'streets' ? 'NS and EW both released (green/yellow)' : 'WALK lit during main-street green/yellow';
+  return canvasTexture(`tl:conflictSign:${kind}`, 640, 180, (ctx, w, h) => {
+    ctx.fillStyle = '#b91c1c';
+    ctx.beginPath();
+    ctx.roundRect(4, 4, w - 8, h - 8, 26);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 6;
+    ctx.stroke();
+    // warning triangle
+    ctx.fillStyle = '#facc15';
+    ctx.beginPath();
+    ctx.moveTo(66, 30);
+    ctx.lineTo(114, 116);
+    ctx.lineTo(18, 116);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.fillRect(62, 56, 8, 36);
+    ctx.fillRect(62, 98, 8, 8);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    fitFont(ctx, 'SIGNAL CONFLICT', w - 170, 58, 800);
+    ctx.fillText('SIGNAL CONFLICT', w / 2 + 55, h * 0.34);
+    fitFont(ctx, sub, w - 170, 30, 600);
+    ctx.fillText(sub, w / 2 + 55, h * 0.72);
+  });
+}
+
 function CrashEffects({ state }: P) {
-  const smoke = useRef<THREE.InstancedMesh>(null);
   const shards = useRef<THREE.InstancedMesh>(null);
   const sign = useRef<THREE.Sprite>(null);
   const tmp = useMemo(() => ({ m: new THREE.Matrix4(), q: new THREE.Quaternion(), e: new THREE.Euler(), p: new THREE.Vector3(), s: new THREE.Vector3() }), []);
-  const smokeGeo = kgeo('tl:puff', () => new THREE.IcosahedronGeometry(1, 1));
-  const smokeMat = kmat('tl:puffMat', () => new THREE.MeshStandardMaterial({ color: '#b9bbbd', roughness: 1, transparent: true, opacity: 0.32, depthWrite: false, flatShading: true }));
   const shardGeo = kgeo('tl:shard', () => new THREE.BoxGeometry(0.12, 0.012, 0.07));
   const shardMat = kmat('tl:shardMat', () => new THREE.MeshStandardMaterial({ color: '#2a2d30', roughness: 0.4, metalness: 0.3 }));
-  const signMat = useMemo(() => {
-    const tex = canvasTexture('tl:conflictSign', 512, 160, (ctx, w, h) => {
-      ctx.fillStyle = '#b91c1c';
-      ctx.beginPath();
-      ctx.roundRect(4, 4, w - 8, h - 8, 26);
-      ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 6;
-      ctx.stroke();
-      // warning triangle
-      ctx.fillStyle = '#facc15';
-      ctx.beginPath();
-      ctx.moveTo(62, 26);
-      ctx.lineTo(108, 106);
-      ctx.lineTo(16, 106);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = '#111';
-      ctx.fillRect(58, 50, 8, 34);
-      ctx.fillRect(58, 90, 8, 8);
-      ctx.fillStyle = '#fff';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      fitFont(ctx, 'SIGNAL CONFLICT', w - 150, 54, 800);
-      ctx.fillText('SIGNAL CONFLICT', w / 2 + 50, h * 0.36);
-      fitFont(ctx, 'both streets released at once', w - 150, 28, 600);
-      ctx.fillText('both streets released at once', w / 2 + 50, h * 0.72);
-    });
-    return new THREE.SpriteMaterial({ map: tex, toneMapped: false, depthTest: false, transparent: true });
-  }, []);
-  useEffect(() => () => signMat.dispose(), [signMat]);
-  useFrame(({ clock }) => {
-    const sm = smoke.current;
-    const sh = shards.current;
-    let np = 0;
-    let ns = 0;
-    const fxs = state.crashFx;
-    for (let f = 0; f < fxs.length && f < MAX_FX; f++) {
-      const fx = fxs[f]!;
-      const t = fx.ageMs / 1000;
-      const seed = (Math.round(fx.x * 13.7 + fx.z * 7.3) & 0xff) + 1;
-      if (sm) {
+  const signMats = useMemo(
+    () => ({
+      streets: new THREE.SpriteMaterial({ map: conflictSignTexture('streets'), toneMapped: false, depthTest: false, transparent: true }),
+      walk: new THREE.SpriteMaterial({ map: conflictSignTexture('walk'), toneMapped: false, depthTest: false, transparent: true }),
+    }),
+    [],
+  );
+  useEffect(
+    () => () => {
+      signMats.streets.dispose();
+      signMats.walk.dispose();
+    },
+    [signMats],
+  );
+  const cause = useRef<'streets' | 'walk'>('streets');
+  const seed = (x: number, z: number) => (Math.round(x * 13.7 + z * 7.3) & 0xff) + 1;
+  /** Billboard smoke: grey puffs that billow up and thin out over ~4 s. */
+  const smoke = useMemo(
+    () => (b: SpriteBuffers) => {
+      let n = 0;
+      const fxs = state.crashFx;
+      for (let f = 0; f < fxs.length && f < MAX_FX; f++) {
+        const fx = fxs[f]!;
+        const t = fx.ageMs / 1000;
+        const sd = seed(fx.x, fx.z);
         for (let i = 0; i < PUFFS; i++) {
-          const a = seed * 1.7 + i * 2.39;
-          const r = 0.4 + 0.25 * i * Math.min(1, t);
-          const grow = Math.min(1, t * 1.6) * (1 - Math.max(0, (t - 3) / 1));
-          const sc = (0.5 + 0.18 * i) * Math.max(0.01, grow);
-          tmp.p.set(fx.x + Math.cos(a) * r, 0.4 + t * (0.35 + 0.08 * i), fx.z + Math.sin(a) * r);
-          tmp.s.setScalar(sc);
-          tmp.q.identity();
-          tmp.m.compose(tmp.p, tmp.q, tmp.s);
-          sm.setMatrixAt(np++, tmp.m);
+          const delay = i * 0.08;
+          const tt = t - delay;
+          if (tt <= 0) continue;
+          const a = sd * 1.7 + i * 2.39;
+          const r = 0.5 + 0.6 * Math.min(1, tt) + 0.14 * i;
+          b.pos[n * 3] = fx.x + Math.cos(a) * r;
+          // start above the crumpled hoods, billow up and drift
+          b.pos[n * 3 + 1] = 1.25 + tt * (0.5 + 0.08 * i);
+          b.pos[n * 3 + 2] = fx.z + Math.sin(a) * r;
+          const shade = 0.42 + 0.05 * (i % 3);
+          b.col[n * 3] = shade;
+          b.col[n * 3 + 1] = shade;
+          b.col[n * 3 + 2] = shade * 1.02;
+          b.size[n] = 1.2 + 1.4 * Math.min(1, tt * 0.8) + 0.12 * i;
+          b.alpha[n] = Math.min(1, tt * 3) * Math.max(0, 1 - tt / 4.2) * 0.9;
+          b.rot[n] = a + tt * 0.3;
+          n++;
         }
       }
-      if (sh) {
+      return n;
+    },
+    [state],
+  );
+  /** Impact flash + sparks (additive, first ~0.8 s). */
+  const flash = useMemo(
+    () => (b: SpriteBuffers) => {
+      let n = 0;
+      const fxs = state.crashFx;
+      for (let f = 0; f < fxs.length && f < MAX_FX; f++) {
+        const fx = fxs[f]!;
+        const t = fx.ageMs / 1000;
+        if (t > 0.9) continue;
+        const sd = seed(fx.x, fx.z);
+        if (t < 0.25) {
+          b.pos[n * 3] = fx.x;
+          b.pos[n * 3 + 1] = 0.7;
+          b.pos[n * 3 + 2] = fx.z;
+          b.col[n * 3] = 1.6;
+          b.col[n * 3 + 1] = 1.3;
+          b.col[n * 3 + 2] = 0.9;
+          b.size[n] = 3.2 + t * 6;
+          b.alpha[n] = 1 - t / 0.25;
+          b.rot[n] = 0;
+          n++;
+        }
+        for (let i = 0; i < SPARKS; i++) {
+          const a = sd * 0.7 + i * 2.399;
+          const up = 2.2 + ((i * 53) % 7) * 0.4;
+          const sp = 3 + ((i * 29) % 5) * 0.8;
+          const y = 0.6 + up * t - 4.9 * t * t;
+          if (y < 0.02) continue;
+          b.pos[n * 3] = fx.x + Math.cos(a) * sp * t;
+          b.pos[n * 3 + 1] = y;
+          b.pos[n * 3 + 2] = fx.z + Math.sin(a) * sp * t;
+          b.col[n * 3] = 1.8;
+          b.col[n * 3 + 1] = 1.0;
+          b.col[n * 3 + 2] = 0.35;
+          b.size[n] = 0.16;
+          b.alpha[n] = Math.max(0, 1 - t / 0.9);
+          b.rot[n] = 0;
+          n++;
+        }
+      }
+      return n;
+    },
+    [state],
+  );
+  useFrame(({ clock }) => {
+    const sh = shards.current;
+    let ns = 0;
+    const fxs = state.crashFx;
+    if (sh) {
+      for (let f = 0; f < fxs.length && f < MAX_FX; f++) {
+        const fx = fxs[f]!;
+        const t = fx.ageMs / 1000;
+        const sd = seed(fx.x, fx.z);
         for (let i = 0; i < SHARDS; i++) {
-          const a = seed * 0.9 + i * 0.449 * Math.PI;
+          const a = sd * 0.9 + i * 0.449 * Math.PI;
           const fly = Math.min(1, t * 3);
           const r = (0.8 + ((i * 37) % 11) * 0.22) * fly;
           tmp.e.set(0, a * 3, 0);
@@ -479,28 +696,31 @@ function CrashEffects({ state }: P) {
           sh.setMatrixAt(ns++, tmp.m);
         }
       }
-    }
-    if (sm) {
-      sm.count = np;
-      sm.instanceMatrix.needsUpdate = true;
-    }
-    if (sh) {
       sh.count = ns;
       sh.instanceMatrix.needsUpdate = true;
     }
     const sg = sign.current;
     if (sg) {
-      const recent = state.lastConflictMs >= 0 && state.timeMs - state.lastConflictMs < 4000;
+      const L = state.lamps;
+      if (state.conflict) {
+        const nsGo = L.nsGreen || L.nsYellow;
+        const ewGo = L.ewGreen || L.ewYellow;
+        cause.current = nsGo && ewGo ? 'streets' : 'walk';
+      }
+      const recent = state.lastConflictMs >= 0 && state.timeMs - state.lastConflictMs < 4000 && state.timeMs >= state.lastConflictMs;
       sg.visible = state.conflict || recent;
+      const mat = signMats[cause.current];
+      if (sg.material !== mat) sg.material = mat;
       // pulse instead of blinking, so it is always readable
-      signMat.opacity = 0.65 + 0.35 * Math.abs(Math.sin(clock.elapsedTime * 4));
+      mat.opacity = 0.65 + 0.35 * Math.abs(Math.sin(clock.elapsedTime * 4));
     }
   });
   return (
     <group>
-      <instancedMesh ref={smoke} args={[smokeGeo, smokeMat, PUFFS * MAX_FX]} frustumCulled={false} />
-      <instancedMesh ref={shards} args={[shardGeo, shardMat, SHARDS * MAX_FX]} frustumCulled={false} castShadow />
-      <sprite ref={sign} material={signMat} position={[0, 8.6, 0]} scale={[5.2, 1.625, 1]} visible={false} renderOrder={20} />
+      <PointSprites capacity={PUFFS * MAX_FX} map={smokeTexture()} additive={false} update={smoke} renderOrder={12} />
+      <PointSprites capacity={(SPARKS + 1) * MAX_FX} map={glowTexture()} additive update={flash} renderOrder={13} />
+      <instancedMesh ref={shards} args={[shardGeo, shardMat, SHARDS * MAX_FX]} frustumCulled={false} />
+      <sprite ref={sign} material={signMats.streets} position={[0, 8.6, 0]} scale={[5.8, 1.63, 1]} visible={false} renderOrder={20} />
     </group>
   );
 }
@@ -559,20 +779,21 @@ function useTrafficSound(state: TrafficLightState, runtime: SimRuntime) {
 // ---------------------------------------------------------------------------
 
 export const TrafficLightView = memo(function TrafficLightView({ state, runtime }: P) {
-  const nightRef = useLatest(runtime);
-  const getNight = useMemo(() => () => nightRef.current.getControl('night') === true, [nightRef]);
   useTrafficSound(state, runtime);
+  useQuietPaint();
   const cabOcc: [Vec3, Vec3] = [
     [CABINET.x - 0.75, 0, CABINET.z - 0.75],
     [CABINET.x + 0.75, 1.6, CABINET.z + 0.75],
   ];
   return (
     <group>
-      <TrafficEnvironment getNight={getNight} />
-      <TagLayer occluders={[...OCCLUDERS, cabOcc]}>
-        <Signals state={state} runtime={runtime} />
+      <TrafficEnvironment />
+      <TagLayer occluders={[...OCCLUDERS, cabOcc]} pinStyle="pill">
+        <LampHalos>
+          <Signals state={state} runtime={runtime} />
+        </LampHalos>
         <Loops state={state} runtime={runtime} />
-        <TrafficCabinet state={state} runtime={runtime} position={[CABINET.x, CABINET.y, CABINET.z]} rotationY={CABINET.rotY} />
+        <TrafficCabinet state={state} runtime={runtime} position={[CABINET.x, CABINET.y, CABINET.z]} rotationY={CABINET.rotY} tagGroup={TG.cab} />
       </TagLayer>
       <Traffic state={state} runtime={runtime} />
       <Pedestrians state={state} runtime={runtime} />
@@ -582,4 +803,3 @@ export const TrafficLightView = memo(function TrafficLightView({ state, runtime 
 });
 
 export default TrafficLightView;
-

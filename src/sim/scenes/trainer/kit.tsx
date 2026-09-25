@@ -1,19 +1,27 @@
 /**
- * Scene-composition kit shared by the `trainer` and `motor-station` views (owned by those scenes).
+ * Scene-composition kit shared by the `trainer` and `motor-station` views (owned by those scenes; the
+ * traffic-light and parking-garage views reuse parts of it).
  *
- *  - <TagLayer> + <IoTag>: the LEARNING OVERLAY. Every wired device gets an invisible hover proxy; hovering
- *    it (or turning on `useSceneOverlay().showTags`) shows a small floating chip
- *    "Start_PB · Local:1:I.Data.0 · 1" with the live tag value. Chips are plain DOM elements positioned
- *    by ONE useFrame for the whole layer (no drei <Html>: its React root is not StrictMode-safe under
- *    React 19), occlusion-tested against a few coarse boxes (walls, cabinet, bench) and de-cluttered.
+ *  - <TagLayer> + <IoTag>: the LEARNING OVERLAY. Every wired device gets an invisible hover proxy; hovering it
+ *    shows a floating chip "Start_PB · Local:1:I.Data.0 · 1" with the live tag value (clamped to the
+ *    viewport). With `useSceneOverlay().showTags` on, a TagLayer with pinStyle="pill" pins compact value
+ *    pills beside/below each device (never on top of another device); devices too small on screen collapse
+ *    into one summary chip per TagGroup ("Switch_0..7  0100 1000"). Panel devices (`facing`) hide when seen
+ *    from behind; coarse occluder boxes hide chips behind walls/cabinets. Chips are plain DOM positioned by
+ *    ONE useFrame (no drei <Html>: its React root is not StrictMode-safe under React 19).
+ *  - IoTag interaction: `onPress` makes the whole hover box one drag-safe click target (toggles, selectors,
+ *    receives the local hit point), `momentary` makes it press/release (push buttons, RESET). The device
+ *    underneath then gets no click of its own, so one physical click is exactly one action.
  *  - Control helpers (momentary / toggle / selector wiring to runtime.setControl + click sounds).
  *  - Sound helpers (throttled sfx loops driven from state, one-shots on transitions, stop on unmount).
+ *  - <MergeStatic>: merges static child meshes per material after mount (fewer draw calls).
  *  - Environment props: procedural concrete / block wall / vinyl tile textures, conduit, ladder cable
  *    tray, cables, light fixtures, signs, hazard tape.
  */
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { sfx, type LoopName, type SfxName } from '../../../audio/sfx';
 import type { Vec3 } from '../../../twin/contracts';
 import { filletedPath } from '../../../twin/devices/panel/Wire';
@@ -346,6 +354,92 @@ export function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: numbe
 // Simple props
 // ---------------------------------------------------------------------------
 
+/**
+ * Merges the STATIC meshes among its children into one mesh per material after mount (the originals are hidden,
+ * instanced meshes and multi-material meshes are left alone). Use it only around props that never move or
+ * change material: a panel full of small parts becomes a handful of draw calls.
+ */
+export function MergeStatic({ children }: { children: ReactNode }) {
+  const root = useRef<THREE.Group>(null);
+  const [merged, setMerged] = useState<{ geo: THREE.BufferGeometry; mat: THREE.Material; cast: boolean; receive: boolean }[]>([]);
+  useLayoutEffect(() => {
+    const g = root.current;
+    if (!g) return;
+    g.updateWorldMatrix(true, true);
+    const inv = new THREE.Matrix4().copy(g.matrixWorld).invert();
+    const m = new THREE.Matrix4();
+    const groups = new Map<THREE.Material, { geos: THREE.BufferGeometry[]; cast: boolean; receive: boolean }>();
+    const hidden: THREE.Mesh[] = [];
+    g.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || (mesh as THREE.Mesh & { isInstancedMesh?: boolean }).isInstancedMesh || Array.isArray(mesh.material) || !mesh.visible) return;
+      const src = mesh.geometry;
+      const pos = src.getAttribute('position');
+      if (!pos) return;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', pos.clone());
+      const nrm = src.getAttribute('normal');
+      if (nrm) geo.setAttribute('normal', nrm.clone());
+      const uv = src.getAttribute('uv');
+      geo.setAttribute('uv', uv ? uv.clone() : new THREE.BufferAttribute(new Float32Array(pos.count * 2), 2));
+      geo.setIndex(src.index ? src.index.clone() : Array.from({ length: pos.count }, (_, i) => i));
+      if (!nrm) geo.computeVertexNormals();
+      geo.applyMatrix4(m.multiplyMatrices(inv, mesh.matrixWorld));
+      let e = groups.get(mesh.material);
+      if (!e) {
+        e = { geos: [], cast: false, receive: false };
+        groups.set(mesh.material, e);
+      }
+      e.geos.push(geo);
+      e.cast ||= mesh.castShadow;
+      e.receive ||= mesh.receiveShadow;
+      hidden.push(mesh);
+    });
+    const out: { geo: THREE.BufferGeometry; mat: THREE.Material; cast: boolean; receive: boolean }[] = [];
+    for (const [mat, e] of groups) {
+      const geo = e.geos.length === 1 ? e.geos[0]! : mergeGeometries(e.geos, false);
+      if (e.geos.length > 1) e.geos.forEach((x) => x.dispose());
+      if (!geo) continue;
+      geo.computeBoundingSphere();
+      out.push({ geo, mat, cast: e.cast, receive: e.receive });
+    }
+    for (const h of hidden) h.visible = false;
+    setMerged(out);
+    return () => {
+      for (const h of hidden) h.visible = true;
+      for (const o of out) o.geo.dispose();
+      setMerged([]);
+    };
+  }, []);
+  return (
+    <group ref={root}>
+      {children}
+      {merged.map((mm, i) => (
+        <mesh key={i} geometry={mm.geo} material={mm.mat} castShadow={mm.cast} receiveShadow={mm.receive} />
+      ))}
+    </group>
+  );
+}
+
+/**
+ * Turns shadow CASTING off for every mesh below it (they still receive shadows): small devices inside a
+ * cabinet or on a panel face add little to the picture but each costs a draw call in the shadow pass.
+ * Re-applied once shortly after mount for parts that mount late.
+ */
+export function NoCastShadow({ children }: { children: ReactNode }) {
+  const root = useRef<THREE.Group>(null);
+  useLayoutEffect(() => {
+    const apply = () =>
+      root.current?.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) o.castShadow = false;
+      });
+    apply();
+    const t = window.setTimeout(apply, 1500);
+    return () => window.clearTimeout(t);
+  }, []);
+  return <group ref={root}>{children}</group>;
+}
+
 /** Axis-aligned box from min to max corner (shared unit geometry, one draw call). */
 export function Slab({
   min,
@@ -472,11 +566,16 @@ export function Conduit({ points, radius = 0.0115, bend = 0.12, straps = [] }: {
   }, [JSON.stringify(points)]); // eslint-disable-line react-hooks/exhaustive-deps
   const fit = kgeo(`k:conduitfit:${radius}`, () => new THREE.CylinderGeometry(radius * 1.35, radius * 1.35, 0.045, 14).translate(0, 0.0225, 0));
   const strap = kgeo(`k:strap:${radius}`, () => new THREE.TorusGeometry(radius * 1.12, 0.0022, 6, 16, Math.PI));
+  // plain meshes (not instanced) so a surrounding <MergeStatic> folds every conduit run into ~2 draw calls
   return (
     <group>
       <Tube points={points} radius={radius} bend={bend} material={km.galv()} />
-      <Instances geometry={fit} material={km.metal('#a9aeb2', 0.4)} items={ends} castShadow={false} />
-      {straps.length > 0 && <Instances geometry={strap} material={km.galv()} items={straps.map((p) => ({ p }))} castShadow={false} />}
+      {ends.map((e, i) => (
+        <mesh key={i} geometry={fit} material={km.metal('#a9aeb2', 0.4)} position={e.p} rotation={e.r} />
+      ))}
+      {straps.map((p, i) => (
+        <mesh key={`s${i}`} geometry={strap} material={km.galv()} position={p} />
+      ))}
     </group>
   );
 }
@@ -825,8 +924,10 @@ export function infoLine(label: string, get: () => number, units = '', decimals 
 export interface TagGroup {
   id: string;
   label: string;
-  /** 'bits' = digital values as a bit string (grouped by 4); 'rows' = one "alias value" row per member. */
+  /** 'bits' = digital values as a bit string (grouped by 4); 'rows' = one "alias value" row per tag line. */
   mode?: 'bits' | 'rows';
+  /** Collapse into the summary chip while the members' average projected half-size is below this (px). */
+  collapseBelow?: number;
 }
 
 type Line = IoTagLine & { decimals?: number };
@@ -879,6 +980,8 @@ interface TagEntry {
   pillShown: boolean;
   pillText: string;
   pillWide: boolean;
+  /** The wide pill did not fit last time (value-only pill shown). */
+  narrowed: boolean;
   pw: number;
   ph: number;
   plx: number;
@@ -1000,7 +1103,7 @@ function formatValue(l: Line): string {
   return `${v.toFixed(d)}${l.units ? ` ${l.units}` : ''}`;
 }
 
-/** Short value of an entry for pills / group chips: its first line (plus the second for 2-line digital tags). */
+/** Short value of an entry for pills / bit strings: its first line (plus the second for 2-line digital tags). */
 function pillValue(e: TagEntry): string {
   const a = e.lines[0];
   if (!a) return '';
@@ -1009,6 +1112,9 @@ function pillValue(e: TagEntry): string {
   if (b && !a.analog && !b.analog) return s + formatValue(b);
   return s;
 }
+
+/** True when the pill shows several "alias value" pairs (2-line digital tags such as a H-O-A selector). */
+const multiDigital = (e: TagEntry) => e.lines.length > 1 && e.lines.every((l) => !l.analog && l.address);
 
 function setBadge(span: HTMLSpanElement, s: string, digital: boolean) {
   span.textContent = s;
@@ -1278,7 +1384,7 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
         n++;
         sum += m.pr;
       }
-      gc.collapse = n > 0 && sum / n < PIN_MIN_PX * 2.2;
+      gc.collapse = n > 0 && sum / n < (gc.g.collapseBelow ?? PIN_MIN_PX * 2.2);
       if (gc.collapse) for (const m of gc.members) if (m.vis) m.vis = false;
     }
     // device footprints are obstacles, so pills never cover a lamp or button
@@ -1293,45 +1399,15 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
         hidePill(e);
         continue;
       }
-      const wide = e.pr >= PIN_ALIAS_PX;
-      if (doText || e.pillText === '' || wide !== e.pillWide) {
-        const s = pillValue(e);
-        if (s !== e.pillText || wide !== e.pillWide) {
-          e.pillText = s;
-          e.pillWide = wide;
-          e.pillAlias.style.display = wide ? '' : 'none';
-          const digital = !e.lines[0]?.analog;
-          e.pillVal.textContent = s;
-          const on = digital && /1/.test(s);
-          e.pill.style.background = digital ? (on ? 'rgba(22,163,74,0.92)' : 'rgba(30,41,59,0.88)') : 'rgba(10,14,20,0.82)';
-          e.pill.style.color = digital && !on ? '#cbd5e1' : '#f8fafc';
-          // measure (needs layout: show it for the read, restore afterwards)
-          if (!e.pillShown) e.pill.style.display = 'block';
-          e.pw = e.pill.offsetWidth;
-          e.ph = e.pill.offsetHeight;
-          if (!e.pillShown) e.pill.style.display = 'none';
-        }
-      }
-      // candidate spots: below, right, left, above the device footprint
-      const r = e.pr * 0.85 + 2;
-      const spots: [number, number][] = [
-        [e.cx - e.pw / 2, e.cy + r],
-        [e.cx + r, e.cy - e.ph / 2],
-        [e.cx - r - e.pw, e.cy - e.ph / 2],
-        [e.cx - e.pw / 2, e.cy - r - e.ph],
-      ];
+      // wide pills carry the alias; when a wide pill finds no free spot, retry with the value-only pill
+      // (a pill that had to fall back retries the wide form only at the 10 Hz text rate: no per-frame re-measuring)
       let best: Rect | null = null;
-      for (const [sx, sy] of spots) {
-        const cand = { x: clamp(sx, EDGE, W - e.pw - EDGE), y: clamp(sy, EDGE, H - e.ph - EDGE), w: e.pw, h: e.ph };
-        let hit = false;
-        for (const o of rects) {
-          if (overlaps(cand, o, 1)) {
-            hit = true;
-            break;
-          }
-        }
-        if (!hit) {
-          best = cand;
+      const canWide = e.pr >= PIN_ALIAS_PX;
+      for (const wide of canWide && (doText || !e.narrowed) ? [true, false] : [false]) {
+        if (doText || e.pillText === '' || wide !== e.pillWide) setPill(e, wide);
+        best = placePill(e, rects, W, H);
+        if (best) {
+          e.narrowed = canWide && !wide;
           break;
         }
       }
@@ -1387,16 +1463,20 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
         }
       }
       gc.shown = true;
-      const cand = { x: clamp(sx / n - gc.w / 2, EDGE, W - gc.w - EDGE), y: clamp(top - 6 - gc.h, EDGE, H - gc.h - EDGE), w: gc.w, h: gc.h };
-      for (let iter = 0; iter < 6; iter++) {
-        let moved = false;
-        for (const o of rects) {
-          if (overlaps(cand, o, 2)) {
-            cand.y = o.y - cand.h - 3;
-            moved = true;
-          }
+      const cx0 = sx / n - gc.w / 2;
+      const cy0 = clamp(top - 6 - gc.h, EDGE, H - gc.h - EDGE);
+      const free = (c: Rect) => !rects.some((o) => overlaps(c, o, 2));
+      let cand: Rect = { x: clamp(cx0, EDGE, W - gc.w - EDGE), y: cy0, w: gc.w, h: gc.h };
+      // beside the preferred spot first (keeps the chip next to its devices), then stack upward
+      for (const dx of [0, gc.w * 0.55, -gc.w * 0.55, gc.w * 1.05, -gc.w * 1.05]) {
+        const c = { x: clamp(cx0 + dx, EDGE, W - gc.w - EDGE), y: cy0, w: gc.w, h: gc.h };
+        if (free(c)) {
+          cand = c;
+          break;
         }
-        if (!moved) break;
+      }
+      for (let iter = 0; iter < 6 && !free(cand); iter++) {
+        for (const o of rects) if (overlaps(cand, o, 2)) cand.y = o.y - cand.h - 3;
       }
       cand.y = clamp(cand.y, EDGE, H - gc.h - EDGE);
       rects.push(cand);
@@ -1415,6 +1495,49 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
   );
 }
 
+/** (Re)build the pill content ("alias value", or several pairs for 2-line tags) and measure it. */
+function setPill(e: TagEntry, wide: boolean) {
+  const multi = multiDigital(e);
+  const s = multi && wide ? e.lines.map((l) => `${l.alias} ${formatValue(l)}`).join(' · ') : pillValue(e);
+  if (s === e.pillText && wide === e.pillWide) return;
+  e.pillText = s;
+  e.pillWide = wide;
+  e.pillAlias.style.display = wide && !multi ? '' : 'none';
+  const digital = !e.lines[0]?.analog;
+  e.pillVal.textContent = s;
+  const on = digital && /1/.test(s);
+  e.pill.style.background = digital ? (on ? 'rgba(22,163,74,0.92)' : 'rgba(30,41,59,0.88)') : 'rgba(10,14,20,0.82)';
+  e.pill.style.color = digital && !on ? '#cbd5e1' : '#f8fafc';
+  // measure (needs layout: show it for the read, restore afterwards)
+  if (!e.pillShown) e.pill.style.display = 'block';
+  e.pw = e.pill.offsetWidth;
+  e.ph = e.pill.offsetHeight;
+  if (!e.pillShown) e.pill.style.display = 'none';
+}
+
+/** First free spot around the device footprint: below, right, left, above (null when all are taken). */
+function placePill(e: TagEntry, rects: Rect[], W: number, H: number): Rect | null {
+  const r = e.pr * 0.85 + 2;
+  const spots: [number, number][] = [
+    [e.cx - e.pw / 2, e.cy + r],
+    [e.cx + r, e.cy - e.ph / 2],
+    [e.cx - r - e.pw, e.cy - e.ph / 2],
+    [e.cx - e.pw / 2, e.cy - r - e.ph],
+  ];
+  for (const [sx, sy] of spots) {
+    const cand = { x: clamp(sx, EDGE, W - e.pw - EDGE), y: clamp(sy, EDGE, H - e.ph - EDGE), w: e.pw, h: e.ph };
+    let hit = false;
+    for (const o of rects) {
+      if (overlaps(cand, o, 1)) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) return cand;
+  }
+  return null;
+}
+
 function hidePill(e: TagEntry) {
   if (e.pill.style.display !== 'none') e.pill.style.display = 'none';
   e.pillShown = false;
@@ -1424,8 +1547,10 @@ function hidePill(e: TagEntry) {
 function groupText(gc: GroupChip): string {
   const mode = gc.g.mode ?? 'bits';
   if (mode === 'rows') {
-    const w = Math.max(...gc.members.map((m) => (m.lines[0]?.alias.length ?? 0)));
-    return gc.members.map((m) => `${(m.lines[0]?.alias ?? '').padEnd(w)} ${pillValue(m)}`).join('\n');
+    const rows: [string, string][] = [];
+    for (const m of gc.members) for (const l of m.lines) rows.push([l.alias, formatValue(l)]);
+    const w = Math.max(...rows.map((r) => r[0].length));
+    return rows.map(([a, v]) => `${a.padEnd(w)} ${v}`).join('\n');
   }
   let bits = '';
   gc.members.forEach((m, i) => {
@@ -1543,6 +1668,7 @@ function buildChip(id: string, title: string, lines: IoTagLine[]): ChipParts {
     pillShown: false,
     pillText: '',
     pillWide: false,
+    narrowed: false,
     pw: 0,
     ph: 0,
     plx: -1e9,

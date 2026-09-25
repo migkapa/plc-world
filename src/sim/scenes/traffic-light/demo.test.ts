@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createDemoRuntime } from '../../demo';
-import { TRAFFIC_DEMO_RUNGS } from './demo';
+import { TRAFFIC_DEMO_RUNGS, TRAFFIC_DEMO_TAGS } from './demo';
 import { trafficLightLogic, type TrafficLightState } from './logic';
 
-const setup = () => createDemoRuntime(trafficLightLogic, TRAFFIC_DEMO_RUNGS);
+const setup = () => createDemoRuntime(trafficLightLogic, TRAFFIC_DEMO_RUNGS, { tags: TRAFFIC_DEMO_TAGS });
 
 describe('traffic-light demo program', () => {
   it('verifies and cycles without a single conflict; cars and pedestrians get through', () => {
@@ -87,5 +87,44 @@ describe('traffic-light demo program', () => {
     expect(o.nsGreen).toBe(true);
     runtime.step(60_000);
     expect(runtime.observe().conflicts).toBe(0);
+  });
+
+  it('gives pedestrians a 5 s WALK and a 7 s flashing clearance, never overlapping the main street', () => {
+    const { runtime } = setup();
+    runtime.setControl('auto_traffic', false);
+    runtime.step(12_000);
+    runtime.setControl('ped', true);
+    runtime.step(200);
+    runtime.setControl('ped', false);
+    let walkMs = 0;
+    let clearMs = 0;
+    for (let t = 0; t < 40_000; t += 50) {
+      runtime.step(50);
+      const o = runtime.observe();
+      if (o.walk) {
+        walkMs += 50;
+        expect(o.nsGreen || o.nsYellow).toBe(false);
+      }
+      if (walkMs > 0 && !o.walk && o.ewGreen) clearMs += 50;
+    }
+    expect(walkMs).toBeGreaterThanOrEqual(4900);
+    expect(walkMs).toBeLessThanOrEqual(5100);
+    expect(clearMs).toBeGreaterThanOrEqual(6900);
+    expect(Number(runtime.observe().pedCrossed)).toBe(1);
+    expect(runtime.observe().conflicts).toBe(0);
+  });
+
+  it('keeps its memory in internal tags, not in the I/O image', () => {
+    const { runtime } = setup();
+    let spareToggles = 0;
+    let prev = false;
+    for (let t = 0; t < 60_000; t += 100) {
+      runtime.step(100);
+      const v = runtime.controller.tags.readBool('Local:2:O.Pt08.Data');
+      if (v !== prev) spareToggles++;
+      prev = v;
+    }
+    expect(spareToggles).toBe(0);
+    expect(runtime.controller.tags.readNumber('Local:1:I.DiagnosticSequenceCount')).toBe(0);
   });
 });

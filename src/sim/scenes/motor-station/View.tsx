@@ -49,7 +49,29 @@ import {
 import { rackLiveFromController } from '../../../twin/live';
 import type { SceneViewProps } from '../../types';
 import { GlowDisc, LampBoost } from '../trainer/fx';
-import { Conduit, FONT, IoTag, fitFont, KBOX, KCYL, SignPlate, Slab, TagLayer, infoLine, ioLine, km, kmat, textLine, useControls, useEdgeSfx, useSfxLoops, type TagGroup } from '../trainer/kit';
+import {
+  Conduit,
+  FONT,
+  IoTag,
+  fitFont,
+  KBOX,
+  KCYL,
+  MergeStatic,
+  NoCastShadow,
+  SignPlate,
+  Slab,
+  TagLayer,
+  infoLine,
+  ioLine,
+  km,
+  kmat,
+  textLine,
+  useControls,
+  useEdgeSfx,
+  useSfxLoops,
+  type TagGroup,
+} from '../trainer/kit';
+import { DistanceSwitch, RackImpostor } from '../trainer/rackLod';
 import { rackCableRuns } from '../trainer/rackRuns';
 import { BAY_OCCLUDERS, BIN_OCCLUDER, MotorBay } from './Bay';
 import { CouplingGuard, DeckJunctionBox, DrivePlatform, InlineReducer, MACHINE_BLUE, headAngle } from './Drive';
@@ -62,7 +84,7 @@ type P = SceneViewProps<MotorStationState>;
 /** Panel-mounted device tag: hidden when seen from behind its panel. */
 const PANEL = { facing: true } as const;
 const G: Record<string, TagGroup> = {
-  station: { id: 'station', label: 'M-101 push-button station', mode: 'rows' },
+  station: { id: 'station', label: 'M-101 push-button station', mode: 'rows', collapseBelow: 20 },
   starter: { id: 'starter', label: 'K1 / OL1 starter', mode: 'rows' },
   remote: { id: 'remote', label: 'LINE 2 remote run', mode: 'rows' },
 };
@@ -88,10 +110,26 @@ interface Slot {
 
 function useConveyorBoxes(state: MotorStationState) {
   const boxes = useMemo<BoxState[]>(
-    () => Array.from({ length: N_BOXES }, (_, i) => ({ x: 0, y: CONV.height, z: ((i * 37) % 7) * 0.012 - 0.036, tall: i % 3 === 1, id: i + 1, visible: false })),
+    () =>
+      Array.from({ length: N_BOXES }, (_, i) => ({
+        x: 0,
+        y: CONV.height,
+        z: ((i * 37) % 7) * 0.012 - 0.036,
+        tall: i % 3 === 1,
+        id: i + 1,
+        visible: false,
+      })),
     [],
   );
-  const slots = useMemo<Slot[]>(() => Array.from({ length: N_BOXES }, () => ({ s: -99, fall: -1, done: false })), []);
+  const slots = useMemo<Slot[]>(
+    () =>
+      Array.from({ length: N_BOXES }, () => ({
+        s: -99,
+        fall: -1,
+        done: false,
+      })),
+    [],
+  );
   // visual belt travel: follows the belt, but freezes while a box is jammed (the belt slips under the load)
   const travel = useRef({ v: 0, last: Number.NaN });
   useFrame((_, dtRaw) => {
@@ -154,9 +192,19 @@ function JamMarker({ state }: { state: MotorStationState }) {
   return (
     <group>
       <Boxes getBoxes={() => JAM_BOX} maxCount={1} />
-      <mesh geometry={KBOX()} position={[0.02, 0.2, 0]} rotation={[0.2, 0.5, 0.42]} scale={[0.36, 0.42, 0.3]} renderOrder={2}>
-        <meshBasicMaterial ref={shell} color={new THREE.Color('#ff2a1a').multiplyScalar(1.6)} transparent opacity={0} blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
-      </mesh>
+      <group rotation={[0.2, 0.5, 0.42]}>
+        <mesh geometry={KBOX()} position={[0, 0.175, 0]} scale={[0.34, 0.39, 0.29]} renderOrder={2}>
+          <meshBasicMaterial
+            ref={shell}
+            color={new THREE.Color('#ff2a1a').multiplyScalar(1.6)}
+            transparent
+            opacity={0}
+            blending={THREE.AdditiveBlending}
+            depthWrite={false}
+            toneMapped={false}
+          />
+        </mesh>
+      </group>
     </group>
   );
 }
@@ -204,14 +252,24 @@ function PanelInterior({ state, runtime }: P) {
     /** Conductor from a terminal at (x, y, z) straight up (dir 1) / down (dir -1) into a duct at `duct`. */
     const run = (x: number, y: number, z: number, dir: 1 | -1, duct: number, color: string, r = 0.0009) => {
       const edge = duct - (dir * D_W) / 2;
-      out.push({ color, radius: r, points: [[x, y, z], [x, y + dir * 0.012, z], [x, edge - dir * 0.008, 0.03], [x, edge + dir * 0.008, 0.03]] });
+      out.push({
+        color,
+        radius: r,
+        points: [
+          [x, y, z],
+          [x, y + dir * 0.012, z],
+          [x, edge - dir * 0.008, 0.03],
+          [x, edge + dir * 0.008, 0.03],
+        ],
+      });
     };
     const tb = (x: number, rail: number, up: number, down: number | null, color: string, r = 0.0009) => {
       run(x, rail + TB1492_J3.length / 2, zE, 1, up, color, r);
       if (down !== null) run(x, rail - TB1492_J3.length / 2, zE, -1, down, color, r);
     };
     // R1: power terminals X1/X2 (120 V control), +24 / 0V, PE
-    for (let i = 0; i < tbPwr.count; i++) tb(tbPwr.x + terminalX(i, tbPwr.count), R1_Y, D_TOP, D_MID, i < 2 ? '#c62828' : i < 4 ? '#eeeeee' : i < 6 ? '#1f4fd1' : i < 8 ? '#8fb3ff' : '#3f9a3a');
+    for (let i = 0; i < tbPwr.count; i++)
+      tb(tbPwr.x + terminalX(i, tbPwr.count), R1_Y, D_TOP, D_MID, i < 2 ? '#c62828' : i < 4 ? '#eeeeee' : i < 6 ? '#1f4fd1' : i < 8 ? '#8fb3ff' : '#3f9a3a');
     // main disconnect: 480 V line (top) / load (bottom)
     for (const dx of [-0.026, 0, 0.026]) {
       run(DS.x + dx, DS.y + 0.062, 0.05, 1, D_TOP, '#111111', 0.0016);
@@ -255,18 +313,19 @@ function PanelInterior({ state, runtime }: P) {
     for (let i = 0; i < tbMot.count; i++) tb(tbMot.x + terminalX(i, tbMot.count), R2_Y, D_LOW, D_BOT, i < 3 ? '#111111' : '#3f9a3a', 0.0014);
     for (let i = 0; i < tbCtl.count; i++) tb(tbCtl.x + terminalX(i, tbCtl.count), R2_Y, D_LOW, D_BOT, i % 5 === 4 ? '#8fb3ff' : '#1f4fd1');
     // rack: RTB harnesses, patch cables and the PS cord into the duct under the rack
-    out.push(...rackCableRuns({ hardware, layout, rackX: RACK_X, rackY: RACK_Y, ductTop: D_LOW + D_W / 2 }));
+    out.push(
+      ...rackCableRuns({
+        hardware,
+        layout,
+        rackX: RACK_X,
+        rackY: RACK_Y,
+        ductTop: D_LOW + D_W / 2,
+      }),
+    );
     return out;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const ductWires = ['#1f4fd1', '#1f4fd1', '#eeeeee', '#1f4fd1', '#111111', '#c62828', '#111111'];
   const L = (a: string) => ioLine(runtime, a);
-  const blink = useMemo(() => {
-    let t0 = 0;
-    return () => {
-      t0 = performance.now();
-      return state.overloadTripped && Math.floor(t0 / 350) % 2 === 0;
-    };
-  }, [state]);
   return (
     <group>
       <WireDuct length={0.66} position={[0, D_TOP, 0]} width={D_W} height={0.06} wires={ductWires} />
@@ -274,7 +333,15 @@ function PanelInterior({ state, runtime }: P) {
       <WireDuct length={0.64} position={[0, D_LOW, 0]} width={D_W} height={0.06} wires={ductWires} />
       <WireDuct length={0.66} position={[0, D_BOT, 0]} width={D_W} height={0.06} wires={ductWires} />
       <WireDuct length={0.81} vertical position={[-0.345, 0, 0]} width={D_W} height={0.06} />
-      <WireDuct length={0.81} vertical position={[0.345, 0, 0]} width={D_W} height={0.06} cover={false} wires={['#111111', '#111111', '#111111', '#1f4fd1', '#1f4fd1', '#3f9a3a']} />
+      <WireDuct
+        length={0.81}
+        vertical
+        position={[0.345, 0, 0]}
+        width={D_W}
+        height={0.06}
+        cover={false}
+        wires={['#111111', '#111111', '#111111', '#1f4fd1', '#1f4fd1', '#3f9a3a']}
+      />
       {/* upper row: CPT (bolted), fuse + breakers + 24 V supply + power terminals on a short rail, main disconnect (bolted) */}
       <ControlTransformer1497 position={[CPT.x, CPT.y, 0]} />
       <DinRail length={0.3} position={[R1_X, R1_Y, 0]}>
@@ -282,11 +349,21 @@ function PanelInterior({ state, runtime }: P) {
         <CircuitBreaker1489 poles={1} rating="C2" position={[-0.1575 - R1_X, 0, 0]} getOn={() => true} />
         <CircuitBreaker1489 poles={1} rating="C4" position={[-0.14 - R1_X, 0, 0]} getOn={() => true} />
         <PowerSupply1606 position={[-0.085 - R1_X, 0, 0]} getOk={() => true} />
-        <TerminalBlocks1492 count={tbPwr.count} colors={Array.from({ length: tbPwr.count }, (_, i) => (i < 4 ? TB_COLORS.gray : i < 8 ? TB_COLORS.blue : TB_COLORS.green))} labels={['X1', 'X1', 'X2', 'X2', '+24', '+24', '0V', '0V', 'PE', 'PE']} position={[tbPwr.x - R1_X, 0, 0]} />
+        <TerminalBlocks1492
+          count={tbPwr.count}
+          colors={Array.from({ length: tbPwr.count }, (_, i) => (i < 4 ? TB_COLORS.gray : i < 8 ? TB_COLORS.blue : TB_COLORS.green))}
+          labels={['X1', 'X1', 'X2', 'X2', '+24', '+24', '0V', '0V', 'PE', 'PE']}
+          position={[tbPwr.x - R1_X, 0, 0]}
+        />
       </DinRail>
       <Disconnect1494 position={[DS.x, DS.y, 0]} rodTo={WALL_IN_X} />
       {/* rack */}
-      <ControlLogixRack hardware={hardware} live={live} wired position={[RACK_X, RACK_Y, 0]} />
+      {/* live rack near; a 3-draw-call impostor from the bay / operator views (rack ~40 px wide there) */}
+      <DistanceSwitch
+        distance={3}
+        near={<ControlLogixRack hardware={hardware} live={live} wired position={[RACK_X, RACK_Y, 0]} />}
+        far={<RackImpostor hardware={hardware} position={[RACK_X, RACK_Y, 0]} />}
+      />
       {hardware.modules.map((mod) => (
         <IoTag
           key={mod.slot}
@@ -307,11 +384,20 @@ function PanelInterior({ state, runtime }: P) {
           <OverloadRelay193 position={[0, OL_Y, 0]} getTripped={() => state.overloadTripped} catalog="193-EEDB" variant="E1Plus" fla={6.6} range={[3.2, 16]} />
           {/* state cues: armature window (contacts closed), trip window (tripped), RESET (a reset would be accepted) */}
           <GlowDisc color="#39ff6a" getOn={() => state.contacts.on} size={0.034} position={C_WIN} gain={1.5} />
-          <GlowDisc color="#ff3b1a" getOn={blink} size={0.036} position={OL_FLAG} gain={1.8} />
+          <GlowDisc color="#ff3b1a" getOn={() => state.overloadTripped} size={0.04} position={OL_FLAG} gain={2} />
           <GlowDisc color="#3d8bff" getOn={() => state.overloadTripped && state.overloadResetReady} size={0.03} position={OL_RESET} gain={1.6} />
         </group>
-        <TerminalBlocks1492 count={tbMot.count} colors={[TB_COLORS.gray, TB_COLORS.gray, TB_COLORS.gray, TB_COLORS.green]} labels={['T1', 'T2', 'T3', 'PE']} position={[tbMot.x, 0, 0]} />
-        <TerminalBlocks1492 count={tbCtl.count} colors={Array.from({ length: tbCtl.count }, (_, i) => (i % 5 === 4 ? TB_COLORS.blue : TB_COLORS.gray))} position={[tbCtl.x, 0, 0]} />
+        <TerminalBlocks1492
+          count={tbMot.count}
+          colors={[TB_COLORS.gray, TB_COLORS.gray, TB_COLORS.gray, TB_COLORS.green]}
+          labels={['T1', 'T2', 'T3', 'PE']}
+          position={[tbMot.x, 0, 0]}
+        />
+        <TerminalBlocks1492
+          count={tbCtl.count}
+          colors={Array.from({ length: tbCtl.count }, (_, i) => (i % 5 === 4 ? TB_COLORS.blue : TB_COLORS.gray))}
+          position={[tbCtl.x, 0, 0]}
+        />
       </DinRail>
       <IoTag
         {...PANEL}
@@ -360,7 +446,13 @@ function Pedestal({ state, runtime }: P) {
   const paint = km.paint('#3d4247', 0.45, 0.45);
   const pz = ST_Z;
   const hole = (st: { x: number }, h: Vec3, y0 = ST_Y): Vec3 => [st.x + h[0], y0 + h[1], pz + h[2]];
-  const PBTAG = { ...PANEL, group: G.station, size: [0.04, 0.06, 0.05] as Vec3, center: [0, 0.008, 0.025] as Vec3, anchor: [0, 0.045, 0.03] as Vec3 };
+  const PBTAG = {
+    ...PANEL,
+    group: G.station,
+    size: [0.04, 0.06, 0.05] as Vec3,
+    center: [0, 0.008, 0.025] as Vec3,
+    anchor: [0, 0.045, 0.03] as Vec3,
+  };
   // H-O-A: the whole selector cell is the click target: left half = one step toward HAND, right = toward AUTO
   const hoa = useMemo(
     () => (local: THREE.Vector3) => {
@@ -373,7 +465,15 @@ function Pedestal({ state, runtime }: P) {
     },
     [runtime],
   );
-  const lit = useMemo(() => ({ ready: () => state.readyLight, run: () => state.runLight, fault: () => state.faultLight, horn: () => state.horn }), [state]);
+  const lit = useMemo(
+    () => ({
+      ready: () => state.readyLight,
+      run: () => state.runLight,
+      fault: () => state.faultLight,
+      horn: () => state.horn,
+    }),
+    [state],
+  );
   return (
     <group position={[PEDESTAL.x, 0, PEDESTAL.z]}>
       {/* base plate + anchors, post, mounting plate, top junction box */}
@@ -386,7 +486,20 @@ function Pedestal({ state, runtime }: P) {
       ].map(([a, b], i) => (
         <mesh key={i} geometry={KCYL()} material={km.metal('#b9bdc1', 0.35)} scale={[0.018, 0.02, 0.018]} position={[a! * 0.11, 0.02, b! * 0.11]} />
       ))}
-      <Slab min={[-0.04, 0.012, -0.04]} max={[0.04, PEDESTAL.plateY1, 0.04]} material={kmat('ms:ped-yellow', () => new THREE.MeshStandardMaterial({ color: '#f2c200', roughness: 0.45, metalness: 0.3 }))} castShadow />
+      <Slab
+        min={[-0.04, 0.012, -0.04]}
+        max={[0.04, PEDESTAL.plateY1, 0.04]}
+        material={kmat(
+          'ms:ped-yellow',
+          () =>
+            new THREE.MeshStandardMaterial({
+              color: '#f2c200',
+              roughness: 0.45,
+              metalness: 0.3,
+            }),
+        )}
+        castShadow
+      />
       <Slab min={[-0.105, PEDESTAL.plateY0, 0.04]} max={[0.105, PEDESTAL.plateY1, 0.048]} material={paint} castShadow />
       <Slab min={[-0.06, PEDESTAL.plateY1, -0.04]} max={[0.06, JB_TOP, 0.05]} material={km.paint('#8d9296', 0.45, 0.4)} castShadow />
       <SignPlate
@@ -405,55 +518,71 @@ function Pedestal({ state, runtime }: P) {
         }}
       />
       {/* warning horn + amber beacon on the junction box (sounds with the Horn output) */}
-      <IoTag position={[0.028, JB_TOP, 0.012]} size={[0.075, 0.1, 0.075]} center={[0, 0.05, 0]} anchor={[0, 0.115, 0]} group={G.station} title="Warning horn + amber beacon (856T)" lines={[L('Horn')]}>
+      <IoTag
+        position={[0.028, JB_TOP, 0.012]}
+        size={[0.075, 0.1, 0.075]}
+        center={[0, 0.05, 0]}
+        anchor={[0, 0.115, 0]}
+        group={G.station}
+        title="Warning horn + amber beacon (856T)"
+        lines={[L('Horn')]}
+      >
         <StackLight856T tiers={['amber']} getTier={lit.horn} getHorn={lit.horn} getFlashing={() => true} mount="base" showSoundFx />
       </IoTag>
       {/* stations (cabling enters from the back through the mounting plate: no bottom glands) */}
-      <PushButtonStation holes={ST_A.holes} position={[ST_A.x, ST_Y, pz]} autoPlace={false} gland={false} />
-      <PushButtonStation holes={ST_B.holes} position={[ST_B.x, ST_Y, pz]} autoPlace={false} gland={false} />
-      <PushButtonStation holes={1} color="yellow" {...E_OPTS} position={[ST_B.x, E_Y, pz]} autoPlace={false} gland={false} />
-      {/* column A: READY / RUN / FAULT / H-O-A */}
-      <IoTag position={hole(ST_A, holesA[0]!, ST_Y)} {...PBTAG} title="800F white LED pilot light" lines={[L('Ready_Light')]}>
-        <LampBoost color="white" getLit={lit.ready}>
-          <PilotLight800F color="white" legend="READY" getLit={lit.ready} rear={false} />
-        </LampBoost>
-      </IoTag>
-      <IoTag position={hole(ST_A, holesA[1]!, ST_Y)} {...PBTAG} title="800F green LED pilot light" lines={[L('Run_Light')]}>
-        <LampBoost color="green" getLit={lit.run}>
-          <PilotLight800F color="green" legend="RUN" getLit={lit.run} rear={false} />
-        </LampBoost>
-      </IoTag>
-      <IoTag position={hole(ST_A, holesA[2]!, ST_Y)} {...PBTAG} title="800F red LED pilot light" lines={[L('Fault_Light')]}>
-        <LampBoost color="red" getLit={lit.fault}>
-          <PilotLight800F color="red" legend="FAULT" getLit={lit.fault} rear={false} />
-        </LampBoost>
-      </IoTag>
-      <IoTag position={hole(ST_A, holesA[3]!, ST_Y)} {...PBTAG} title="800F 3-pos selector · click left/right half" lines={[L('HOA_Hand'), L('HOA_Auto')]} onPress={hoa}>
-        <SelectorSwitch800F positions={['HAND', 'OFF', 'AUTO']} legend="H-O-A" getPosition={() => state.controls.hoa} rear={false} />
-      </IoTag>
-      {/* column B: START / STOP / JOG, E-stop on top */}
-      <IoTag position={hole(ST_B, holesB[0]!, ST_Y)} {...PBTAG} title="800F green flush PB (N.O.) · key S" lines={[L('Start_PB')]} momentary={ctl.momentary('start')}>
-        <PushButton800F color="green" legend="START" contact="N.O." getPressed={() => state.controls.start} rear={false} />
-      </IoTag>
-      <IoTag position={hole(ST_B, holesB[1]!, ST_Y)} {...PBTAG} title="800F red extended PB (N.C.) · key X" lines={[L('Stop_PB')]} momentary={ctl.momentary('stop')}>
-        <PushButton800F color="red" style="extended" legend="STOP" contact="N.C." getPressed={() => state.controls.stop} rear={false} />
-      </IoTag>
-      <IoTag position={hole(ST_B, holesB[2]!, ST_Y)} {...PBTAG} title="800F black flush PB (N.O.) · key J" lines={[L('Jog_PB')]} momentary={ctl.momentary('jog')}>
-        <PushButton800F color="black" legend="JOG" contact="N.O." getPressed={() => state.controls.jog} rear={false} />
-      </IoTag>
-      <IoTag
-        position={hole(ST_B, holesE[0]!, E_Y)}
-        {...PANEL}
-        group={G.station}
-        size={[0.07, 0.07, 0.055]}
-        center={[0, 0, 0.0275]}
-        anchor={[0, 0.045, 0.03]}
-        title="800FM E-stop, 2 × N.C. · click: push / twist-release"
-        lines={[L('EStop_OK')]}
-        onPress={ctl.toggle('estop', 'press')}
-      >
-        <EStop800FM getEngaged={() => state.controls.estop} rear={false} />
-      </IoTag>
+      <NoCastShadow>
+        <PushButtonStation holes={ST_A.holes} position={[ST_A.x, ST_Y, pz]} autoPlace={false} gland={false} />
+        <PushButtonStation holes={ST_B.holes} position={[ST_B.x, ST_Y, pz]} autoPlace={false} gland={false} />
+        <PushButtonStation holes={1} color="yellow" {...E_OPTS} position={[ST_B.x, E_Y, pz]} autoPlace={false} gland={false} />
+        {/* column A: READY / RUN / FAULT / H-O-A */}
+        <IoTag position={hole(ST_A, holesA[0]!, ST_Y)} {...PBTAG} title="800F white LED pilot light" lines={[L('Ready_Light')]}>
+          <LampBoost color="white" getLit={lit.ready}>
+            <PilotLight800F color="white" legend="READY" getLit={lit.ready} rear={false} />
+          </LampBoost>
+        </IoTag>
+        <IoTag position={hole(ST_A, holesA[1]!, ST_Y)} {...PBTAG} title="800F green LED pilot light" lines={[L('Run_Light')]}>
+          <LampBoost color="green" getLit={lit.run}>
+            <PilotLight800F color="green" legend="RUN" getLit={lit.run} rear={false} />
+          </LampBoost>
+        </IoTag>
+        <IoTag position={hole(ST_A, holesA[2]!, ST_Y)} {...PBTAG} title="800F red LED pilot light" lines={[L('Fault_Light')]}>
+          <LampBoost color="red" getLit={lit.fault}>
+            <PilotLight800F color="red" legend="FAULT" getLit={lit.fault} rear={false} />
+          </LampBoost>
+        </IoTag>
+        <IoTag
+          position={hole(ST_A, holesA[3]!, ST_Y)}
+          {...PBTAG}
+          title="800F 3-pos selector · click left/right half"
+          lines={[L('HOA_Hand'), L('HOA_Auto')]}
+          onPress={hoa}
+        >
+          <SelectorSwitch800F positions={['HAND', 'OFF', 'AUTO']} legend="H-O-A" getPosition={() => state.controls.hoa} rear={false} />
+        </IoTag>
+        {/* column B: START / STOP / JOG, E-stop on top */}
+        <IoTag position={hole(ST_B, holesB[0]!, ST_Y)} {...PBTAG} title="800F green flush PB (N.O.) · key S" lines={[L('Start_PB')]} momentary={ctl.momentary('start')}>
+          <PushButton800F color="green" legend="START" contact="N.O." getPressed={() => state.controls.start} rear={false} />
+        </IoTag>
+        <IoTag position={hole(ST_B, holesB[1]!, ST_Y)} {...PBTAG} title="800F red extended PB (N.C.) · key X" lines={[L('Stop_PB')]} momentary={ctl.momentary('stop')}>
+          <PushButton800F color="red" style="extended" legend="STOP" contact="N.C." getPressed={() => state.controls.stop} rear={false} />
+        </IoTag>
+        <IoTag position={hole(ST_B, holesB[2]!, ST_Y)} {...PBTAG} title="800F black flush PB (N.O.) · key J" lines={[L('Jog_PB')]} momentary={ctl.momentary('jog')}>
+          <PushButton800F color="black" legend="JOG" contact="N.O." getPressed={() => state.controls.jog} rear={false} />
+        </IoTag>
+        <IoTag
+          position={hole(ST_B, holesE[0]!, E_Y)}
+          {...PANEL}
+          group={G.station}
+          size={[0.07, 0.07, 0.055]}
+          center={[0, 0, 0.0275]}
+          anchor={[0, 0.045, 0.03]}
+          title="800FM E-stop, 2 × N.C. · click: push / twist-release"
+          lines={[L('EStop_OK')]}
+          onPress={ctl.toggle('estop', 'press')}
+        >
+          <EStop800FM getEngaged={() => state.controls.estop} rear={false} />
+        </IoTag>
+      </NoCastShadow>
     </group>
   );
 }
@@ -474,34 +603,48 @@ function RemoteRunStation({ state, runtime }: P) {
     [runtime],
   );
   const on = useMemo(() => () => state.controls.remote_run, [state]);
-  const tag = { ...PANEL, group: G.remote, size: [0.04, 0.06, 0.05] as Vec3, center: [0, 0.008, 0.025] as Vec3, anchor: [0, 0.045, 0.03] as Vec3 };
+  const tag = {
+    ...PANEL,
+    group: G.remote,
+    size: [0.04, 0.06, 0.05] as Vec3,
+    center: [0, 0.008, 0.025] as Vec3,
+    anchor: [0, 0.045, 0.03] as Vec3,
+  };
   return (
-    <group position={[REMOTE.x, REMOTE.y, z]}>
-      <PushButtonStation holes={2} autoPlace={false} gland={false} />
-      <IoTag position={holes[0]!} {...tag} title="Upstream line run request (relay contact)" lines={[L]}>
-        <LampBoost color="blue" getLit={on}>
-          <PilotLight800F color="blue" legend="REMOTE" getLit={on} rear={false} />
-        </LampBoost>
-      </IoTag>
-      <IoTag position={holes[1]!} {...tag} title="Upstream request test switch · click" lines={[textLine('LINE 2 switch', () => (state.controls.remote_run ? 'RUN' : 'OFF'))]} onPress={toggle}>
-        <SelectorSwitch800F positions={['OFF', 'RUN']} legend="LINE 2" getPosition={() => (state.controls.remote_run ? 1 : 0)} rear={false} />
-      </IoTag>
-      <SignPlate
-        id="remote-sign"
-        size={[0.2, 0.09]}
-        position={[-0.16, 0.1, 0.002]}
-        draw={(ctx, w, h) => {
-          ctx.fillStyle = '#1f4f9c';
-          ctx.fillRect(0, 0, w, h);
-          ctx.fillStyle = '#fff';
-          ctx.textAlign = 'center';
-          fitFont(ctx, 'UPSTREAM LINE 2', w * 0.9, h * 0.3);
-          ctx.fillText('UPSTREAM LINE 2', w / 2, h * 0.4);
-          fitFont(ctx, 'RUN REQUEST → CV-101', w * 0.9, h * 0.2, 600);
-          ctx.fillText('RUN REQUEST → CV-101', w / 2, h * 0.74);
-        }}
-      />
-    </group>
+    <NoCastShadow>
+      <group position={[REMOTE.x, REMOTE.y, z]}>
+        <PushButtonStation holes={2} autoPlace={false} gland={false} />
+        <IoTag position={holes[0]!} {...tag} title="Upstream line run request (relay contact)" lines={[L]}>
+          <LampBoost color="blue" getLit={on}>
+            <PilotLight800F color="blue" legend="REMOTE" getLit={on} rear={false} />
+          </LampBoost>
+        </IoTag>
+        <IoTag
+          position={holes[1]!}
+          {...tag}
+          title="Upstream request test switch · click"
+          lines={[textLine('LINE 2 switch', () => (state.controls.remote_run ? 'RUN' : 'OFF'))]}
+          onPress={toggle}
+        >
+          <SelectorSwitch800F positions={['OFF', 'RUN']} legend="LINE 2" getPosition={() => (state.controls.remote_run ? 1 : 0)} rear={false} />
+        </IoTag>
+        <SignPlate
+          id="remote-sign"
+          size={[0.2, 0.09]}
+          position={[-0.16, 0.1, 0.002]}
+          draw={(ctx, w, h) => {
+            ctx.fillStyle = '#1f4f9c';
+            ctx.fillRect(0, 0, w, h);
+            ctx.fillStyle = '#fff';
+            ctx.textAlign = 'center';
+            fitFont(ctx, 'UPSTREAM LINE 2', w * 0.9, h * 0.3);
+            ctx.fillText('UPSTREAM LINE 2', w / 2, h * 0.4);
+            fitFont(ctx, 'RUN REQUEST → CV-101', w * 0.9, h * 0.2, 600);
+            ctx.fillText('RUN REQUEST → CV-101', w / 2, h * 0.74);
+          }}
+        />
+      </group>
+    </NoCastShadow>
   );
 }
 
@@ -514,7 +657,12 @@ function Disconnect() {
   const z = STANCHION.z + 0.021 + 0.06;
   return (
     <group>
-      <Slab min={[STANCHION.x - 0.021, 0, STANCHION.z - 0.021]} max={[STANCHION.x + 0.021, TRAY.y, STANCHION.z + 0.021]} material={km.paint('#c9ccce', 0.5, 0.6)} castShadow />
+      <Slab
+        min={[STANCHION.x - 0.021, 0, STANCHION.z - 0.021]}
+        max={[STANCHION.x + 0.021, TRAY.y, STANCHION.z + 0.021]}
+        material={km.paint('#c9ccce', 0.5, 0.6)}
+        castShadow
+      />
       <Slab min={[STANCHION.x - 0.08, 0, STANCHION.z - 0.08]} max={[STANCHION.x + 0.08, 0.01, STANCHION.z + 0.08]} material={km.paint('#c9ccce', 0.5, 0.6)} />
       <group position={[STANCHION.x, y, z]}>
         <mesh geometry={KBOX()} material={km.paint('#9aa0a4', 0.45, 0.35)} scale={[0.16, 0.22, 0.12]} castShadow />
@@ -606,7 +754,11 @@ export function MotorStationView({ state, runtime }: P) {
     const L = (a: string) => ioLine(runtime, a);
     return {
       horn: [L('Horn')],
-      motor: [infoLine('Speed', () => state.motorRpm, 'rpm'), infoLine('Current', () => state.motorCurrentA, 'A', 1), textLine('Contacts', () => (state.contacts.on ? 'CLOSED' : 'OPEN'))],
+      motor: [
+        infoLine('Speed', () => state.motorRpm, 'rpm'),
+        infoLine('Current', () => state.motorCurrentA, 'A', 1),
+        textLine('Contacts', () => (state.contacts.on ? 'CLOSED' : 'OPEN')),
+      ],
       jam: [textLine('Fault', 'jam · click the box to clear')],
     };
   }, [runtime, state]);
@@ -646,64 +798,126 @@ export function MotorStationView({ state, runtime }: P) {
 
       {/* ---- conveyor CV-101 (local X runs toward +Z) ---- */}
       <group position={[CONV.x, 0, CONV.z0]} rotation={[0, -Math.PI / 2, 0]}>
-        <Conveyor length={CONV.length} width={CONV.width} height={CONV.height} getBeltPosition={() => state.beltPosition} driveSide="none" frameStyle="powder" frameColor={MACHINE_BLUE} />
+        <Conveyor
+          length={CONV.length}
+          width={CONV.width}
+          height={CONV.height}
+          getBeltPosition={() => state.beltPosition}
+          driveSide="none"
+          frameStyle="powder"
+          frameColor={MACHINE_BLUE}
+        />
         <Boxes getBoxes={getBoxes} maxCount={8} />
         <group ref={jamVisible} visible={false}>
           {/* wedged against the far side rail, nose up */}
-          <IoTag position={[JAM_X, CONV.height + 0.03, CONV.width / 2 - 0.14]} size={[0.4, 0.44, 0.32]} center={[0, 0.2, 0]} anchor={[0, 0.48, 0]} title="Conveyor jam (instructor fault)" lines={lines.jam} onPress={clearJam} active={jamActive}>
+          <IoTag
+            position={[JAM_X, CONV.height + 0.03, CONV.width / 2 - 0.14]}
+            size={[0.4, 0.44, 0.32]}
+            center={[0, 0.2, 0]}
+            anchor={[0, 0.48, 0]}
+            title="Conveyor jam (instructor fault)"
+            lines={lines.jam}
+            onPress={clearJam}
+            active={jamActive}
+          >
             <JamMarker state={state} />
           </IoTag>
         </group>
       </group>
 
       {/* ---- drive: platform, gearbox, couplings, guards, motor ---- */}
-      <DrivePlatform />
+      <MergeStatic>
+        <DrivePlatform />
+        <CouplingGuard x0={0.692} x1={0.8} halfW={0.062} top={0.07} />
+        <CouplingGuard x0={0.325} x1={0.41} halfW={0.07} top={0.075} />
+        <DeckJunctionBox position={[0.93, DRIVE.deck.top - 0.07, DRIVE.deck.z1 + 0.036]} />
+        <Disconnect />
+      </MergeStatic>
       <InlineReducer getInputAngle={motorAngle} getOutputAngle={outAngle} />
-      <CouplingGuard x0={0.692} x1={0.8} halfW={0.062} top={0.07} />
-      <CouplingGuard x0={0.325} x1={0.41} halfW={0.07} top={0.075} />
-      <IoTag position={[DRIVE.motor[0] + 0.03, AXIS_Y, HEAD_Z]} size={[0.5, 0.26, 0.3]} anchor={[0, 0.2, 0]} title="M-101 · 5 HP TEFC motor, 184T, 460 V, 6.6 A FLA" lines={lines.motor}>
+      <IoTag
+        position={[DRIVE.motor[0] + 0.03, AXIS_Y, HEAD_Z]}
+        size={[0.5, 0.26, 0.3]}
+        anchor={[0, 0.2, 0]}
+        title="M-101 · 5 HP TEFC motor, 184T, 460 V, 6.6 A FLA"
+        lines={lines.motor}
+      >
         <group position={[-0.03, DRIVE.motor[1] - AXIS_Y, 0]} rotation={[0, -Math.PI / 2, 0]}>
           <Motor frame="medium" getRpm={() => state.motorRpm} getShaftAngle={motorAngle} getOverloaded={() => state.stallMs > 600} />
         </group>
       </IoTag>
-      <DeckJunctionBox position={[0.93, DRIVE.deck.top - 0.07, DRIVE.deck.z1 + 0.036]} />
 
       {/* ---- control panel MCP-101 (460 V) ---- */}
       <Enclosure size={CABINET.size} position={CABINET.pos} doorAngle={2.0} nameplate={'MCP-101\nCONVEYOR CV-101\n460 V 3 PH 60 HZ'} glands={0}>
-        <PanelInterior state={state} runtime={runtime} />
+        <NoCastShadow>
+          <PanelInterior state={state} runtime={runtime} />
+        </NoCastShadow>
       </Enclosure>
       <FlangeHandle position={[wallOutX, CABINET.pos[1] + CABINET.size[1] / 2 + DS.y + 0.02, CABINET.pos[2] + BP_Z + ROD_Z]} />
-      <IoTag position={[CABINET.pos[0] + 0.26, CABINET.pos[1] + CABINET.size[1], CABINET.pos[2] + 0.17]} size={[0.09, 0.2, 0.09]} center={[0, 0.1, 0]} anchor={[0, 0.22, 0]} title="Warning horn / amber beacon (panel)" lines={lines.horn} pin={false}>
+      <IoTag
+        position={[CABINET.pos[0] + 0.26, CABINET.pos[1] + CABINET.size[1], CABINET.pos[2] + 0.17]}
+        size={[0.09, 0.2, 0.09]}
+        center={[0, 0.1, 0]}
+        anchor={[0, 0.22, 0]}
+        title="Warning horn / amber beacon (panel)"
+        lines={lines.horn}
+        pin={false}
+      >
         <StackLight856T tiers={['amber']} getTier={horn} getHorn={horn} getFlashing={() => true} mount="base" />
       </IoTag>
 
-      {/* ---- conduit & field wiring ---- */}
-      {[-0.13, -0.02].map((dx) => (
-        <Conduit key={dx} points={[[CABINET.pos[0] + dx, CABINET.pos[1] + CABINET.size[1], CABINET.pos[2] + 0.12], [CABINET.pos[0] + dx, TRAY.y, CABINET.pos[2] + 0.12]]} />
-      ))}
-      {/* 480 V feeder into the top of the panel, straight above the main disconnect */}
-      <Conduit points={[[CABINET.pos[0] + DS.x, CABINET.pos[1] + CABINET.size[1], CABINET.pos[2] + 0.1], [CABINET.pos[0] + DS.x, TRAY.y - 0.1, CABINET.pos[2] + 0.1], [CABINET.pos[0] + DS.x, TRAY.y, CABINET.pos[2] + 0.2]]} radius={0.016} />
-      <Conduit points={[[REMOTE.x, TRAY.y, CABINET.pos[2] + 0.035], [REMOTE.x, REMOTE.y + 0.146, CABINET.pos[2] + 0.035]]} radius={0.0095} />
-      <Conduit points={[[TRAY.runX, TRAY.y, STANCHION.z + 0.081], [TRAY.runX, 1.51, STANCHION.z + 0.081]]} radius={0.016} />
-      <Conduit
-        points={[
-          [TRAY.runX, 1.29, STANCHION.z + 0.081],
-          [TRAY.runX, 0.59, STANCHION.z + 0.081],
-          [1.06, 0.59, DRIVE.deck.z1 + 0.036],
-          [0.99, 0.59, DRIVE.deck.z1 + 0.036],
-        ]}
-        radius={0.016}
-      />
-      <Conduit
-        points={[
-          [TRAY.runX + 0.1, TRAY.y, PEDESTAL.z - 0.012],
-          [TRAY.runX + 0.1, 2.15, PEDESTAL.z - 0.012],
-          [PEDESTAL.x - 0.03, 1.9, PEDESTAL.z - 0.012],
-          [PEDESTAL.x - 0.03, JB_TOP, PEDESTAL.z - 0.012],
-        ]}
-        radius={0.0115}
-      />
-      <Disconnect />
+      {/* ---- conduit & field wiring (static: merged) ---- */}
+      <MergeStatic>
+        {[-0.13, -0.02].map((dx) => (
+          <Conduit
+            key={dx}
+            points={[
+              [CABINET.pos[0] + dx, CABINET.pos[1] + CABINET.size[1], CABINET.pos[2] + 0.12],
+              [CABINET.pos[0] + dx, TRAY.y, CABINET.pos[2] + 0.12],
+            ]}
+          />
+        ))}
+        {/* 480 V feeder into the top of the panel, straight above the main disconnect */}
+        <Conduit
+          points={[
+            [CABINET.pos[0] + DS.x, CABINET.pos[1] + CABINET.size[1], CABINET.pos[2] + 0.1],
+            [CABINET.pos[0] + DS.x, TRAY.y - 0.1, CABINET.pos[2] + 0.1],
+            [CABINET.pos[0] + DS.x, TRAY.y, CABINET.pos[2] + 0.2],
+          ]}
+          radius={0.016}
+        />
+        <Conduit
+          points={[
+            [REMOTE.x, TRAY.y, CABINET.pos[2] + 0.035],
+            [REMOTE.x, REMOTE.y + 0.146, CABINET.pos[2] + 0.035],
+          ]}
+          radius={0.0095}
+        />
+        <Conduit
+          points={[
+            [TRAY.runX, TRAY.y, STANCHION.z + 0.081],
+            [TRAY.runX, 1.51, STANCHION.z + 0.081],
+          ]}
+          radius={0.016}
+        />
+        <Conduit
+          points={[
+            [TRAY.runX, 1.29, STANCHION.z + 0.081],
+            [TRAY.runX, 0.59, STANCHION.z + 0.081],
+            [1.06, 0.59, DRIVE.deck.z1 + 0.036],
+            [0.99, 0.59, DRIVE.deck.z1 + 0.036],
+          ]}
+          radius={0.016}
+        />
+        <Conduit
+          points={[
+            [TRAY.runX + 0.1, TRAY.y, PEDESTAL.z - 0.012],
+            [TRAY.runX + 0.1, 2.15, PEDESTAL.z - 0.012],
+            [PEDESTAL.x - 0.03, 1.9, PEDESTAL.z - 0.012],
+            [PEDESTAL.x - 0.03, JB_TOP, PEDESTAL.z - 0.012],
+          ]}
+          radius={0.0115}
+        />
+      </MergeStatic>
       <Pedestal state={state} runtime={runtime} />
       <RemoteRunStation state={state} runtime={runtime} />
     </TagLayer>

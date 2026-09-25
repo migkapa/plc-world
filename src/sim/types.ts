@@ -105,6 +105,8 @@ export interface SceneDefinition<S = unknown> {
   environment?: 'hall' | 'street' | 'studio';
   /** Optional demo program (neutral text rungs) that makes the plant come alive in previews/showroom. */
   demoRungs?: string[];
+  /** Internal tags (BOOL / TIMER / COUNTER / DINT…) the demo program uses; loaded together with `demoRungs`. */
+  demoTags?: TagDef[];
 }
 
 /**

@@ -334,7 +334,7 @@ function SandboxWorkspace({ scene, start, onLoadSlot }: { scene: SceneLogic<unkn
         </button>
       </div>
       <div className="flex flex-wrap items-center justify-end gap-1">
-      <Button size="sm" variant="ghost" icon={<Sparkles size={14} className="text-amber-300" />} disabled={!definition?.demoRungs?.length} onClick={() => guarded('Load the example program?', 'Your current program is replaced (it stays in its save slot if you saved it).', () => { if (loadDoc({ rungs: definition?.demoRungs ?? [''], comments: [], tags: [] }, 'Example program')) toast({ tone: 'info', title: 'Example program loaded', body: 'Operate the plant and watch the rungs light up.' }); })} data-testid="load-example" title="Load the plant's demo program">
+      <Button size="sm" variant="ghost" icon={<Sparkles size={14} className="text-amber-300" />} disabled={!definition?.demoRungs?.length} onClick={() => guarded('Load the example program?', 'Your current program is replaced (it stays in its save slot if you saved it).', () => { if (loadDoc({ rungs: definition?.demoRungs ?? [''], comments: [], tags: definition?.demoTags ?? [] }, 'Example program')) toast({ tone: 'info', title: 'Example program loaded', body: 'Operate the plant and watch the rungs light up.' }); })} data-testid="load-example" title="Load the plant's demo program">
         <span className="hidden lg:inline">Example</span>
       </Button>
       <Button size="sm" variant="ghost" icon={<FilePlus2 size={14} />} onClick={() => guarded('Start a new program?', 'The current program is replaced by an empty routine.', () => loadDoc({ ...emptyProgram(scene) }, 'Untitled'))} title="New empty program">

@@ -39,5 +39,14 @@ describe('trainer demo program', () => {
     runtime.setControl('pb_red', true);
     runtime.step(50);
     expect(runtime.observe().buzzer).toBe(true);
+    // the chaser follows the pot through Meter_1 (42 % -> lamp 3's window)
+    runtime.setControl('pb_red', false);
+    runtime.setControl('sw3', false);
+    runtime.step(50);
+    expect([0, 1, 2, 3, 4, 5, 6, 7].filter((i) => runtime.observe()[`light${i}`] === true)).toEqual([3]);
+  });
+
+  it('uses no unused output point as scratch memory', () => {
+    for (const r of TRAINER_DEMO_RUNGS) expect(r).not.toMatch(/Local:\d+:O\./);
   });
 });

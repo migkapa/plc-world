@@ -48,7 +48,32 @@ describe('motor-station demo program', () => {
     expect(runtime.observe().contactor).toBe(false);
   });
 
-  it('AUTO follows the upstream request; overload trip → fault light + horn until STOP', () => {
+  it('JOG while running cancels the latched run command', () => {
+    const { runtime } = setup();
+    runtime.setControl('hoa', 0);
+    runtime.setControl('start', true);
+    runtime.step(100);
+    runtime.setControl('start', false);
+    runtime.step(500);
+    expect(runtime.observe().runLight).toBe(true);
+    runtime.setControl('jog', true);
+    runtime.step(100);
+    expect(runtime.observe().contactor).toBe(true);
+    expect(runtime.observe().runLight).toBe(false);
+    runtime.setControl('jog', false);
+    runtime.step(100);
+    expect(runtime.observe().contactor).toBe(false);
+  });
+
+  it('uses no unused output point as scratch memory', () => {
+    const outputs = new Set(motorStationLogic.io.filter((p) => p.dir === 'output').map((p) => p.alias));
+    for (const r of MOTOR_STATION_DEMO_RUNGS) {
+      expect(r).not.toMatch(/Local:\d+:O\./);
+      for (const m of r.matchAll(/OT[ELU]\(([^)]+)\)/g)) expect(outputs.has(m[1]!)).toBe(true);
+    }
+  });
+
+  it('AUTO follows the upstream request; overload trip → fault light + horn until the selector goes to OFF', () => {
     const { runtime } = setup();
     runtime.setControl('hoa', 2);
     runtime.setControl('remote_run', true);
@@ -60,12 +85,11 @@ describe('motor-station demo program', () => {
     expect(o.contactor).toBe(false);
     expect(o.faultLight).toBe(true);
     expect(o.horn).toBe(true);
-    runtime.setControl('stop', true);
-    runtime.step(50);
-    runtime.setControl('stop', false);
+    runtime.setControl('hoa', 1);
     runtime.step(50);
     o = runtime.observe();
     expect(o.horn).toBe(false);
     expect(o.faultLight).toBe(true);
+    expect(o.readyLight).toBe(false);
   });
 });

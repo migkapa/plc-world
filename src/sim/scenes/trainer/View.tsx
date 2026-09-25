@@ -45,6 +45,8 @@ import {
   KBOX,
   KCYL,
   KPLANE,
+  MergeStatic,
+  NoCastShadow,
   MONO,
   Slab,
   TagLayer,
@@ -73,11 +75,21 @@ export const TOP = 0.8;
 const BENCH = { x0: -1.1, x1: 1.1, z0: -0.62, z1: 0.16 } as const;
 const UPRIGHT = { x0: -1.05, x1: 0.75, z: -0.605, y1: 2.06 } as const;
 /** Cabinet: Enclosure origin (back-bottom-center) and size. */
-export const CAB = { pos: [-0.65, 1.05, UPRIGHT.z] as Vec3, size: [0.7, 0.8, 0.24] as Vec3 };
+export const CAB = {
+  pos: [-0.65, 1.05, UPRIGHT.z] as Vec3,
+  size: [0.7, 0.8, 0.24] as Vec3,
+};
 /** Output panel center (front surface) and size. */
 const OUT = { c: [0.28, 1.47, UPRIGHT.z + 0.025] as Vec3, w: 0.72, h: 0.5 };
 /** Sloped input console. */
-const CON = { cx: -0.28, w: 1.34, zBack: -0.27, zFront: 0.05, hFront: 0.05, rise: 0.22 };
+const CON = {
+  cx: -0.28,
+  w: 1.34,
+  zBack: -0.27,
+  zFront: 0.05,
+  hFront: 0.05,
+  rise: 0.22,
+};
 const CON_DEPTH = CON.zFront - CON.zBack;
 const CON_ALPHA = Math.atan2(CON.rise, CON_DEPTH);
 const CON_LEN = Math.hypot(CON.rise, CON_DEPTH);
@@ -93,10 +105,46 @@ const INK = '#eef2f5';
 const SW_X = (i: number) => -0.6 + i * 0.056;
 const SW_Y = 0.035;
 const PB = [
-  { id: 'pb_green', alias: 'PB_Green', color: 'green', style: 'flush', legend: 'PB GREEN', contact: 'N.O.', x: -0.13, addr: 'I.Data.8' },
-  { id: 'pb_red', alias: 'PB_Red', color: 'red', style: 'extended', legend: 'PB RED', contact: 'N.C.', x: -0.063, addr: 'I.Data.9' },
-  { id: 'pb_black1', alias: 'PB_Black_1', color: 'black', style: 'flush', legend: 'PB BLK 1', contact: 'N.O.', x: 0.004, addr: 'I.Data.10' },
-  { id: 'pb_black2', alias: 'PB_Black_2', color: 'black', style: 'flush', legend: 'PB BLK 2', contact: 'N.O.', x: 0.071, addr: 'I.Data.11' },
+  {
+    id: 'pb_green',
+    alias: 'PB_Green',
+    color: 'green',
+    style: 'flush',
+    legend: 'PB GREEN',
+    contact: 'N.O.',
+    x: -0.13,
+    addr: 'I.Data.8',
+  },
+  {
+    id: 'pb_red',
+    alias: 'PB_Red',
+    color: 'red',
+    style: 'extended',
+    legend: 'PB RED',
+    contact: 'N.C.',
+    x: -0.063,
+    addr: 'I.Data.9',
+  },
+  {
+    id: 'pb_black1',
+    alias: 'PB_Black_1',
+    color: 'black',
+    style: 'flush',
+    legend: 'PB BLK 1',
+    contact: 'N.O.',
+    x: 0.004,
+    addr: 'I.Data.10',
+  },
+  {
+    id: 'pb_black2',
+    alias: 'PB_Black_2',
+    color: 'black',
+    style: 'flush',
+    legend: 'PB BLK 2',
+    contact: 'N.O.',
+    x: 0.071,
+    addr: 'I.Data.11',
+  },
 ] as const;
 const PB_Y = 0.02;
 const POT_X = [0.215, 0.315];
@@ -330,14 +378,32 @@ function PanelBuzzer({ getOn, getPhase, position }: { getOn: () => boolean; getP
   return (
     <group position={position}>
       {/* hex nut + bezel ring (glows while sounding) */}
-      <mesh geometry={kgeo('buz-nut', () => new THREE.CylinderGeometry(0.019, 0.019, 0.003, 6).rotateX(Math.PI / 2))} material={km.metal('#b9bdc1', 0.35)} position={[0, 0, 0.0015]} />
+      <mesh
+        geometry={kgeo('buz-nut', () => new THREE.CylinderGeometry(0.019, 0.019, 0.003, 6).rotateX(Math.PI / 2))}
+        material={km.metal('#b9bdc1', 0.35)}
+        position={[0, 0, 0.0015]}
+      />
       <mesh geometry={kgeo('buz-ring', () => new THREE.TorusGeometry(0.0172, 0.0018, 10, 48))} position={[0, 0, 0.0035]}>
         <meshStandardMaterial ref={ring} color="#5a1210" emissive="#ff2a1a" emissiveIntensity={0} toneMapped={false} roughness={0.35} />
       </mesh>
       <group ref={body}>
-        <mesh geometry={kgeo('buz-body', () => new THREE.CylinderGeometry(0.0155, 0.016, 0.011, 40).rotateX(Math.PI / 2))} material={km.plastic('#141517', 0.45)} position={[0, 0, 0.0085]} />
-        <mesh geometry={kgeo('buz-top', () => new THREE.CylinderGeometry(0.0135, 0.0155, 0.002, 40).rotateX(Math.PI / 2))} material={km.plastic('#1d1f22', 0.35)} position={[0, 0, 0.0148]} />
-        <Instances geometry={kgeo('buz-hole', () => new THREE.CylinderGeometry(0.0011, 0.0011, 0.0006, 10).rotateX(Math.PI / 2))} material={km.basic('#050505')} items={holes} castShadow={false} receiveShadow={false} />
+        <mesh
+          geometry={kgeo('buz-body', () => new THREE.CylinderGeometry(0.0155, 0.016, 0.011, 40).rotateX(Math.PI / 2))}
+          material={km.plastic('#141517', 0.45)}
+          position={[0, 0, 0.0085]}
+        />
+        <mesh
+          geometry={kgeo('buz-top', () => new THREE.CylinderGeometry(0.0135, 0.0155, 0.002, 40).rotateX(Math.PI / 2))}
+          material={km.plastic('#1d1f22', 0.35)}
+          position={[0, 0, 0.0148]}
+        />
+        <Instances
+          geometry={kgeo('buz-hole', () => new THREE.CylinderGeometry(0.0011, 0.0011, 0.0006, 10).rotateX(Math.PI / 2))}
+          material={km.basic('#050505')}
+          items={holes}
+          castShadow={false}
+          receiveShadow={false}
+        />
       </group>
       <SoundWaves getOn={getOn} r0={0.021} r1={0.058} position={[0, 0, 0.0165]} color="#ff9a30" />
       {/* legend window above the buzzer */}
@@ -367,9 +433,22 @@ function laptopScreenTexture() {
     ctx.fillRect(0, 64, 230, h - 64);
     ctx.fillStyle = '#334155';
     ctx.font = `500 14px ${FONT}`;
-    ['Controller TR1756', '  Controller Tags', 'Tasks', '  MainTask', '    MainProgram', '      MainRoutine', 'I/O Configuration', '  1756 Backplane', '   [0] 1756-L85E', '   [1] 1756-IB16', '   [2] 1756-OB16E', '   [3] 1756-IF8', '   [4] 1756-OF8', '   [5] 1756-EN2T'].forEach((t, i) =>
-      ctx.fillText(t, 10, 92 + i * 24),
-    );
+    [
+      'Controller TR1756',
+      '  Controller Tags',
+      'Tasks',
+      '  MainTask',
+      '    MainProgram',
+      '      MainRoutine',
+      'I/O Configuration',
+      '  1756 Backplane',
+      '   [0] 1756-L85E',
+      '   [1] 1756-IB16',
+      '   [2] 1756-OB16E',
+      '   [3] 1756-IF8',
+      '   [4] 1756-OF8',
+      '   [5] 1756-EN2T',
+    ].forEach((t, i) => ctx.fillText(t, 10, 92 + i * 24));
     // ladder
     const L = 270;
     const R = w - 30;
@@ -426,7 +505,15 @@ function laptopScreenTexture() {
 function Laptop({ position, rotation }: { position: Vec3; rotation: Vec3 }) {
   const screen = kmat(
     'trainer-laptop-screen',
-    () => new THREE.MeshStandardMaterial({ map: laptopScreenTexture(), emissiveMap: laptopScreenTexture(), color: '#6d7278', emissive: '#ffffff', emissiveIntensity: 0.42, roughness: 0.2 }),
+    () =>
+      new THREE.MeshStandardMaterial({
+        map: laptopScreenTexture(),
+        emissiveMap: laptopScreenTexture(),
+        color: '#6d7278',
+        emissive: '#ffffff',
+        emissiveIntensity: 0.42,
+        roughness: 0.2,
+      }),
   );
   const shell = km.paint('#2b2f35', 0.4, 0.5);
   return (
@@ -457,7 +544,11 @@ function PegboardTools() {
         [-0.14, 1.55],
         [0.66, 1.84],
         [0.7, 1.84],
-      ].map(([x, y]) => ({ p: [x!, y!, z + 0.02] as Vec3, r: [Math.PI / 2, 0, 0] as Vec3, s: [0.003, 0.04, 0.003] as Vec3 })),
+      ].map(([x, y]) => ({
+        p: [x!, y!, z + 0.02] as Vec3,
+        r: [Math.PI / 2, 0, 0] as Vec3,
+        s: [0.003, 0.04, 0.003] as Vec3,
+      })),
     [],
   );
   return (
@@ -482,17 +573,54 @@ function PegboardTools() {
         <mesh geometry={KBOX()} material={km.paint('#a9b8a3', 0.3)} scale={[0.06, 0.035, 0.002]} position={[0, 0.045, 0.026]} />
         <mesh geometry={KCYL()} material={km.plastic('#2b2d30', 0.5)} rotation={[Math.PI / 2, 0, 0]} scale={[0.04, 0.008, 0.04]} position={[0, -0.02, 0.028]} />
         {[-0.022, 0, 0.022].map((x, i) => (
-          <mesh key={x} geometry={KCYL()} material={km.plastic(i === 0 ? '#c62828' : '#111', 0.4)} rotation={[Math.PI / 2, 0, 0]} scale={[0.008, 0.006, 0.008]} position={[x, -0.068, 0.027]} />
+          <mesh
+            key={x}
+            geometry={KCYL()}
+            material={km.plastic(i === 0 ? '#c62828' : '#111', 0.4)}
+            rotation={[Math.PI / 2, 0, 0]}
+            scale={[0.008, 0.006, 0.008]}
+            position={[x, -0.068, 0.027]}
+          />
         ))}
       </group>
       {/* test leads hanging */}
-      <Tube points={[[-0.192, 1.37, z + 0.055], [-0.2, 1.3, z + 0.03], [-0.22, 1.2, z + 0.02], [-0.24, 1.14, z + 0.015]]} radius={0.0022} bend={0.04} material={km.plastic('#c62828', 0.5)} castShadow={false} />
-      <Tube points={[[-0.17, 1.37, z + 0.055], [-0.165, 1.28, z + 0.03], [-0.15, 1.18, z + 0.02], [-0.135, 1.12, z + 0.015]]} radius={0.0022} bend={0.04} material={km.plastic('#16181a', 0.5)} castShadow={false} />
+      <Tube
+        points={[
+          [-0.192, 1.37, z + 0.055],
+          [-0.2, 1.3, z + 0.03],
+          [-0.22, 1.2, z + 0.02],
+          [-0.24, 1.14, z + 0.015],
+        ]}
+        radius={0.0022}
+        bend={0.04}
+        material={km.plastic('#c62828', 0.5)}
+        castShadow={false}
+      />
+      <Tube
+        points={[
+          [-0.17, 1.37, z + 0.055],
+          [-0.165, 1.28, z + 0.03],
+          [-0.15, 1.18, z + 0.02],
+          [-0.135, 1.12, z + 0.015],
+        ]}
+        radius={0.0022}
+        bend={0.04}
+        material={km.plastic('#16181a', 0.5)}
+        castShadow={false}
+      />
       {/* wire stripper */}
       <group position={[0.68, 1.8, z + 0.02]} rotation={[0, 0, 0.08]}>
         <mesh geometry={KBOX()} material={km.metal('#8f969c', 0.35)} scale={[0.025, 0.07, 0.01]} castShadow />
         {[-1, 1].map((sx) => (
-          <mesh key={sx} geometry={KBOX()} material={km.plastic('#e35d12', 0.5)} scale={[0.014, 0.1, 0.014]} position={[sx * 0.012, -0.08, 0]} rotation={[0, 0, sx * 0.08]} castShadow />
+          <mesh
+            key={sx}
+            geometry={KBOX()}
+            material={km.plastic('#e35d12', 0.5)}
+            scale={[0.014, 0.1, 0.014]}
+            position={[sx * 0.012, -0.08, 0]}
+            rotation={[0, 0, sx * 0.08]}
+            castShadow
+          />
         ))}
       </group>
     </group>
@@ -512,7 +640,10 @@ function consoleGeo() {
     s.lineTo(-CON.zFront + d, CON.hFront + CON.rise);
     s.lineTo(-CON.zFront + d, 0);
     s.closePath();
-    const g = new THREE.ExtrudeGeometry(s, { depth: CON.w, bevelEnabled: false });
+    const g = new THREE.ExtrudeGeometry(s, {
+      depth: CON.w,
+      bevelEnabled: false,
+    });
     g.rotateY(Math.PI / 2);
     g.translate(-CON.w / 2, 0, 0);
     g.computeVertexNormals();
@@ -531,7 +662,10 @@ function Bench() {
         [BENCH.x1 - 0.04, BENCH.z0 + 0.04],
         [BENCH.x0 + 0.04, BENCH.z1 - 0.04],
         [BENCH.x1 - 0.04, BENCH.z1 - 0.04],
-      ].map(([x, z]) => ({ p: [x!, (TOP - 0.035) / 2, z!] as Vec3, s: [0.05, TOP - 0.035, 0.05] as Vec3 })),
+      ].map(([x, z]) => ({
+        p: [x!, (TOP - 0.035) / 2, z!] as Vec3,
+        s: [0.05, TOP - 0.035, 0.05] as Vec3,
+      })),
     [],
   );
   const drawerX0 = 0.52;
@@ -554,8 +688,18 @@ function Bench() {
         return (
           <group key={i}>
             <Slab min={[drawerX0 + 0.012, y0, BENCH.z1 - 0.03]} max={[BENCH.x1 - 0.072, y0 + 0.185, BENCH.z1 - 0.012]} material={km.paint('#46627f', 0.45, 0.3)} />
-            <mesh geometry={KBOX()} material={km.metal('#c9cdd1', 0.3)} scale={[0.16, 0.014, 0.018]} position={[(drawerX0 + BENCH.x1 - 0.06) / 2, y0 + 0.15, BENCH.z1 - 0.003]} />
-            <mesh geometry={KBOX()} material={km.plastic('#f5f5f0', 0.6)} scale={[0.07, 0.022, 0.001]} position={[(drawerX0 + BENCH.x1 - 0.06) / 2, y0 + 0.11, BENCH.z1 - 0.011]} />
+            <mesh
+              geometry={KBOX()}
+              material={km.metal('#c9cdd1', 0.3)}
+              scale={[0.16, 0.014, 0.018]}
+              position={[(drawerX0 + BENCH.x1 - 0.06) / 2, y0 + 0.15, BENCH.z1 - 0.003]}
+            />
+            <mesh
+              geometry={KBOX()}
+              material={km.plastic('#f5f5f0', 0.6)}
+              scale={[0.07, 0.022, 0.001]}
+              position={[(drawerX0 + BENCH.x1 - 0.06) / 2, y0 + 0.11, BENCH.z1 - 0.011]}
+            />
           </group>
         );
       })}
@@ -569,11 +713,22 @@ function Bench() {
       ))}
       <Slab min={[UPRIGHT.x0, UPRIGHT.y1 - 0.04, UPRIGHT.z - 0.02]} max={[UPRIGHT.x1, UPRIGHT.y1, UPRIGHT.z + 0.02]} material={extr} castShadow />
       <Slab min={[UPRIGHT.x0, TOP, UPRIGHT.z - 0.02]} max={[UPRIGHT.x1, TOP + 0.03, UPRIGHT.z + 0.02]} material={extr} />
-      <mesh geometry={KPLANE()} material={pegboardMaterial()} position={[(UPRIGHT.x0 + UPRIGHT.x1) / 2, (TOP + UPRIGHT.y1) / 2, UPRIGHT.z - 0.012]} scale={[UPRIGHT.x1 - UPRIGHT.x0 - 0.08, UPRIGHT.y1 - TOP - 0.07, 1]} receiveShadow />
+      <mesh
+        geometry={KPLANE()}
+        material={pegboardMaterial()}
+        position={[(UPRIGHT.x0 + UPRIGHT.x1) / 2, (TOP + UPRIGHT.y1) / 2, UPRIGHT.z - 0.012]}
+        scale={[UPRIGHT.x1 - UPRIGHT.x0 - 0.08, UPRIGHT.y1 - TOP - 0.07, 1]}
+        receiveShadow
+      />
       <Slab min={[UPRIGHT.x0 + 0.04, TOP + 0.03, UPRIGHT.z - 0.02]} max={[UPRIGHT.x1 - 0.04, UPRIGHT.y1 - 0.04, UPRIGHT.z - 0.013]} material={km.paint('#9aa3ab', 0.6)} />
       {/* top shelf light bar */}
       <Slab min={[UPRIGHT.x0, UPRIGHT.y1, UPRIGHT.z - 0.03]} max={[UPRIGHT.x1, UPRIGHT.y1 + 0.03, UPRIGHT.z + 0.16]} material={extr} castShadow />
-      <mesh geometry={KBOX()} material={km.emissive('#f4f6ff', 1.4)} scale={[UPRIGHT.x1 - UPRIGHT.x0 - 0.1, 0.004, 0.04]} position={[(UPRIGHT.x0 + UPRIGHT.x1) / 2, UPRIGHT.y1 - 0.002, UPRIGHT.z + 0.12]} />
+      <mesh
+        geometry={KBOX()}
+        material={km.emissive('#f4f6ff', 1.4)}
+        scale={[UPRIGHT.x1 - UPRIGHT.x0 - 0.1, 0.004, 0.04]}
+        position={[(UPRIGHT.x0 + UPRIGHT.x1) / 2, UPRIGHT.y1 - 0.002, UPRIGHT.z + 0.12]}
+      />
       {/* sloped console body */}
       <mesh geometry={consoleGeo()} material={km.paint('#34404d', 0.5, 0.3)} position={[CON.cx, TOP, 0]} castShadow receiveShadow />
       <Slab min={[CON.cx - CON.w / 2, TOP, CON.zFront]} max={[CON.cx + CON.w / 2, TOP + CON.hFront, CON.zFront + 0.002]} material={km.metal('#b6bcc2', 0.35)} />
@@ -597,14 +752,18 @@ function pegboardMaterial() {
           [32, 96],
           [96, 96],
         ])
-          ctx.beginPath(), ctx.arc(x!, y!, 7, 0, Math.PI * 2), ctx.fill();
+          (ctx.beginPath(), ctx.arc(x!, y!, 7, 0, Math.PI * 2), ctx.fill());
       },
       { repeat: true },
     ).clone();
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.repeat.set(1.72 / 0.05, 1.19 / 0.05);
     t.needsUpdate = true;
-    return new THREE.MeshStandardMaterial({ map: t, roughness: 0.7, metalness: 0.2 });
+    return new THREE.MeshStandardMaterial({
+      map: t,
+      roughness: 0.7,
+      metalness: 0.2,
+    });
   });
 }
 
@@ -642,9 +801,27 @@ function CabinetInterior({ runtime }: Pick<SceneViewProps<TrainerState>, 'runtim
   const wiring = useMemo(() => {
     const out: { points: Vec3[]; color: string; radius?: number }[] = [];
     const up = (x: number, rail: number, duct: number, color: string, r = 0.0009) =>
-      out.push({ color, radius: r, points: [[x, rail + TB1492_J3.length / 2, zEntry], [x, rail + TB1492_J3.length / 2 + 0.012, zEntry], [x, duct - DUCT_W / 2 - 0.006, 0.03], [x, duct - DUCT_W / 2 + 0.008, 0.03]] });
+      out.push({
+        color,
+        radius: r,
+        points: [
+          [x, rail + TB1492_J3.length / 2, zEntry],
+          [x, rail + TB1492_J3.length / 2 + 0.012, zEntry],
+          [x, duct - DUCT_W / 2 - 0.006, 0.03],
+          [x, duct - DUCT_W / 2 + 0.008, 0.03],
+        ],
+      });
     const down = (x: number, rail: number, duct: number, color: string, r = 0.0009) =>
-      out.push({ color, radius: r, points: [[x, rail - TB1492_J3.length / 2, zEntry], [x, rail - TB1492_J3.length / 2 - 0.012, zEntry], [x, duct + DUCT_W / 2 + 0.006, 0.03], [x, duct + DUCT_W / 2 - 0.008, 0.03]] });
+      out.push({
+        color,
+        radius: r,
+        points: [
+          [x, rail - TB1492_J3.length / 2, zEntry],
+          [x, rail - TB1492_J3.length / 2 - 0.012, zEntry],
+          [x, duct + DUCT_W / 2 + 0.006, 0.03],
+          [x, duct + DUCT_W / 2 - 0.008, 0.03],
+        ],
+      });
     for (let i = 0; i < tbPower.count; i++) {
       const x = tbPower.x + terminalX(i, tbPower.count);
       const c = i < 2 ? '#111111' : i < 4 ? '#eeeeee' : i < 8 ? '#1f4fd1' : '#3f9a3a';
@@ -659,9 +836,21 @@ function CabinetInterior({ runtime }: Pick<SceneViewProps<TrainerState>, 'runtim
         down(x, R2_Y, DUCT_BOT, field(i));
       }
     };
-    strip(tbDi, () => '#1f4fd1', (i) => (i >= 16 ? '#1f4fd1' : '#3b6fe0'));
-    strip(tbDo, (i) => (i >= 9 ? '#eeeeee' : '#1f4fd1'), (i) => (i >= 9 ? '#eeeeee' : '#3b6fe0'));
-    strip(tbAi, (i) => (i % 2 ? '#eeeeee' : '#111111'), (i) => (i % 2 ? '#eeeeee' : '#111111'));
+    strip(
+      tbDi,
+      () => '#1f4fd1',
+      (i) => (i >= 16 ? '#1f4fd1' : '#3b6fe0'),
+    );
+    strip(
+      tbDo,
+      (i) => (i >= 9 ? '#eeeeee' : '#1f4fd1'),
+      (i) => (i >= 9 ? '#eeeeee' : '#3b6fe0'),
+    );
+    strip(
+      tbAi,
+      (i) => (i % 2 ? '#eeeeee' : '#111111'),
+      (i) => (i % 2 ? '#eeeeee' : '#111111'),
+    );
     // breakers line side (black) into top duct, load side (black/red) into mid duct
     for (const [x, c] of [
       [-0.265, '#111111'],
@@ -669,11 +858,35 @@ function CabinetInterior({ runtime }: Pick<SceneViewProps<TrainerState>, 'runtim
       [-0.2175, '#c62828'],
       [-0.2, '#c62828'],
     ] as const) {
-      out.push({ color: c, points: [[x, R1_Y + 0.045, zEntry + 0.03], [x, R1_Y + 0.07, zEntry + 0.03], [x, DUCT_TOP - 0.024, 0.03], [x, DUCT_TOP, 0.03]] });
-      out.push({ color: c, points: [[x, R1_Y - 0.045, zEntry + 0.03], [x, R1_Y - 0.07, zEntry + 0.03], [x, DUCT_MID + 0.024, 0.03], [x, DUCT_MID, 0.03]] });
+      out.push({
+        color: c,
+        points: [
+          [x, R1_Y + 0.045, zEntry + 0.03],
+          [x, R1_Y + 0.07, zEntry + 0.03],
+          [x, DUCT_TOP - 0.024, 0.03],
+          [x, DUCT_TOP, 0.03],
+        ],
+      });
+      out.push({
+        color: c,
+        points: [
+          [x, R1_Y - 0.045, zEntry + 0.03],
+          [x, R1_Y - 0.07, zEntry + 0.03],
+          [x, DUCT_MID + 0.024, 0.03],
+          [x, DUCT_MID, 0.03],
+        ],
+      });
     }
     // rack: RTB harnesses, patch cables and the PS cord into the duct under the rack
-    out.push(...rackCableRuns({ hardware, layout, rackX: RACK_X, rackY: RACK_Y, ductTop: DUCT_LOW + DUCT_W / 2 }));
+    out.push(
+      ...rackCableRuns({
+        hardware,
+        layout,
+        rackX: RACK_X,
+        rackY: RACK_Y,
+        ductTop: DUCT_LOW + DUCT_W / 2,
+      }),
+    );
     return out;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const diColors = Array.from({ length: tbDi.count }, (_, i) => (i >= 16 ? TB_COLORS.blue : TB_COLORS.gray));
@@ -688,7 +901,15 @@ function CabinetInterior({ runtime }: Pick<SceneViewProps<TrainerState>, 'runtim
       <WireDuct length={BP.w - 0.12} position={[0, DUCT_MID, 0]} width={DUCT_W} height={0.05} wires={ductWires} />
       <WireDuct length={BP.w - 0.12} position={[0, DUCT_LOW, 0]} width={DUCT_W} height={0.05} wires={ductWires} />
       <WireDuct length={BP.w - 0.12} position={[0, DUCT_BOT, 0]} width={DUCT_W} height={0.05} wires={ductWires} />
-      <WireDuct length={BP.h - 0.12} vertical position={[BP.w / 2 - 0.03, -0.02, 0]} width={DUCT_W} height={0.05} cover={false} wires={['#1f4fd1', '#1f4fd1', '#c62828', '#1f4fd1', '#111111']} />
+      <WireDuct
+        length={BP.h - 0.12}
+        vertical
+        position={[BP.w / 2 - 0.03, -0.02, 0]}
+        width={DUCT_W}
+        height={0.05}
+        cover={false}
+        wires={['#1f4fd1', '#1f4fd1', '#c62828', '#1f4fd1', '#111111']}
+      />
       <DinRail length={BP.w - 0.06} position={[0, R1_Y, 0]}>
         <CircuitBreaker1489 poles={2} rating="C6" position={[-0.256, 0, 0]} getOn={() => true} />
         <CircuitBreaker1489 poles={1} rating="C2" position={[-0.2175, 0, 0]} getOn={() => true} />
@@ -698,9 +919,24 @@ function CabinetInterior({ runtime }: Pick<SceneViewProps<TrainerState>, 'runtim
       </DinRail>
       <ControlLogixRack hardware={hardware} live={live} wired position={[RACK_X, RACK_Y, 0]} />
       <DinRail length={BP.w - 0.06} position={[0, R2_Y, 0]}>
-        <TerminalBlocks1492 count={tbDi.count} colors={diColors} position={[tbDi.x, 0, 0]} labels={Array.from({ length: tbDi.count }, (_, i) => (i < 16 ? `I${i}` : 'C'))} />
-        <TerminalBlocks1492 count={tbDo.count} colors={doColors} position={[tbDo.x, 0, 0]} labels={Array.from({ length: tbDo.count }, (_, i) => (i < 9 ? `O${i}` : '0V'))} />
-        <TerminalBlocks1492 count={tbAi.count} colors={aiColors} position={[tbAi.x, 0, 0]} labels={['A0+', 'A0-', 'A1+', 'A1-', 'Q0+', 'Q0-', 'Q1+', 'Q1-', 'SH', 'SH']} />
+        <TerminalBlocks1492
+          count={tbDi.count}
+          colors={diColors}
+          position={[tbDi.x, 0, 0]}
+          labels={Array.from({ length: tbDi.count }, (_, i) => (i < 16 ? `I${i}` : 'C'))}
+        />
+        <TerminalBlocks1492
+          count={tbDo.count}
+          colors={doColors}
+          position={[tbDo.x, 0, 0]}
+          labels={Array.from({ length: tbDo.count }, (_, i) => (i < 9 ? `O${i}` : '0V'))}
+        />
+        <TerminalBlocks1492
+          count={tbAi.count}
+          colors={aiColors}
+          position={[tbAi.x, 0, 0]}
+          labels={['A0+', 'A0-', 'A1+', 'A1-', 'Q0+', 'Q0-', 'Q1+', 'Q1-', 'SH', 'SH']}
+        />
       </DinRail>
       <Wires wires={wiring} />
       {/* bottom duct -> glands: field harness to the console (middle), 120 V supply (left), Ethernet (right) */}
@@ -762,7 +998,14 @@ const LED_XS = [...Array.from({ length: 8 }, (_, i) => SW_X(i)), ...PB.map((b) =
 
 function InputLeds({ state }: { state: TrainerState }) {
   const lens = useRef<THREE.InstancedMesh>(null);
-  const bezels = useMemo(() => LED_XS.map((x) => ({ p: [x, LED_Y, DZ + 0.0008] as Vec3, r: [Math.PI / 2, 0, 0] as Vec3 })), []);
+  const bezels = useMemo(
+    () =>
+      LED_XS.map((x) => ({
+        p: [x, LED_Y, DZ + 0.0008] as Vec3,
+        r: [Math.PI / 2, 0, 0] as Vec3,
+      })),
+    [],
+  );
   const on = useMemo(() => new THREE.Color('#2dff5a').multiplyScalar(3.2), []);
   const off = useMemo(() => new THREE.Color('#0f2a16'), []);
   const last = useRef<number>(-1);
@@ -798,8 +1041,20 @@ function InputLeds({ state }: { state: TrainerState }) {
   });
   return (
     <group>
-      <Instances geometry={kgeo('trainer-led-bezel', () => new THREE.CylinderGeometry(0.0045, 0.0048, 0.0016, 20))} material={km.plastic('#16181b', 0.4)} items={bezels} castShadow={false} />
-      <instancedMesh ref={lens} args={[kgeo('trainer-led-dome', () => new THREE.SphereGeometry(0.0029, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2).rotateX(Math.PI / 2)), kmat('trainer-led-mat', () => new THREE.MeshBasicMaterial({ toneMapped: false })), LED_XS.length]} />
+      <Instances
+        geometry={kgeo('trainer-led-bezel', () => new THREE.CylinderGeometry(0.0045, 0.0048, 0.0016, 20))}
+        material={km.plastic('#16181b', 0.4)}
+        items={bezels}
+        castShadow={false}
+      />
+      <instancedMesh
+        ref={lens}
+        args={[
+          kgeo('trainer-led-dome', () => new THREE.SphereGeometry(0.0029, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2).rotateX(Math.PI / 2)),
+          kmat('trainer-led-mat', () => new THREE.MeshBasicMaterial({ toneMapped: false })),
+          LED_XS.length,
+        ]}
+      />
     </group>
   );
 }
@@ -881,12 +1136,22 @@ export function TrainerView({ state, runtime }: SceneViewProps<TrainerState>) {
       <LabRoom />
       <WindowLight />
       <pointLight position={[0.0, 2.6, 1.6]} intensity={4} distance={6} decay={1.8} color="#fff1dd" />
-      <Bench />
-      <PegboardTools />
+      <MergeStatic>
+        <Bench />
+        <PegboardTools />
+        <Laptop position={[0.72, TOP, -0.22]} rotation={[0, -0.3, 0]} />
+        {/* printed lab manual */}
+        <group position={[0.97, TOP + 0.004, -0.02]} rotation={[0, 0.25, 0]}>
+          <mesh geometry={KBOX()} material={km.paint('#f4f1e8', 0.8)} scale={[0.21, 0.008, 0.28]} castShadow />
+          <mesh geometry={KBOX()} material={km.paint('#c62828', 0.6)} scale={[0.21, 0.001, 0.05]} position={[0, 0.0045, -0.1]} />
+        </group>
+      </MergeStatic>
 
       {/* ---- cabinet with the live rack ---- */}
       <Enclosure size={CAB.size} position={CAB.pos} doorAngle={2.0} nameplate={'TR-1756 PLC TRAINER\n1756-A7 CONTROLLOGIX'} glands={3}>
-        <CabinetInterior runtime={runtime} />
+        <NoCastShadow>
+          <CabinetInterior runtime={runtime} />
+        </NoCastShadow>
       </Enclosure>
       {/* field harness from the middle gland down behind the console */}
       <Tube
@@ -929,71 +1194,145 @@ export function TrainerView({ state, runtime }: SceneViewProps<TrainerState>) {
         bend={0.05}
         material={km.plastic('#1f8f5a', 0.45)}
       />
-      <Laptop position={[0.72, TOP, -0.22]} rotation={[0, -0.3, 0]} />
-      {/* printed lab manual */}
-      <group position={[0.97, TOP + 0.004, -0.02]} rotation={[0, 0.25, 0]}>
-        <mesh geometry={KBOX()} material={km.paint('#f4f1e8', 0.8)} scale={[0.21, 0.008, 0.28]} castShadow />
-        <mesh geometry={KBOX()} material={km.paint('#c62828', 0.6)} scale={[0.21, 0.001, 0.05]} position={[0, 0.0045, -0.1]} />
-      </group>
 
       {/* ---- output panel on the upright ---- */}
-      <group position={OUT.c}>
-        {[
-          [-1, -1],
-          [1, -1],
-          [-1, 1],
-          [1, 1],
-        ].map(([sx, sy], i) => (
-          <mesh key={i} geometry={KCYL()} material={km.metal('#bfc4c8', 0.3)} rotation={[Math.PI / 2, 0, 0]} scale={[0.012, 0.025, 0.012]} position={[sx! * (OUT.w / 2 - 0.02), sy! * (OUT.h / 2 - 0.02), -0.0125]} />
-        ))}
-        <mesh geometry={KBOX()} material={km.paint('#2b3440', 0.45, 0.35)} scale={[OUT.w, OUT.h, 0.003]} position={[0, 0, 0.0015]} castShadow receiveShadow />
-        <mesh geometry={KPLANE()} material={km.label(outTex, 0.5)} scale={[OUT.w - 0.004, OUT.h - 0.004, 1]} position={[0, 0, 0.0031]} />
-        {LIGHT_COLORS.map((c, i) => (
-          <IoTag key={i} {...PANEL} group={G.light} position={[LIGHT_X(i), LIGHT_Y, DZ]} size={[0.034, 0.058, 0.04]} center={[0, 0.008, 0.02]} anchor={[0, 0.045, 0.02]} title={`Pilot light ${i} · 800F ${c} LED`} lines={lines.light[i]!}>
-            <LampBoost color={c} getLit={lit[i]!}>
-              <PilotLight800F color={c} legend={`L${i}`} getLit={lit[i]!} rear={false} />
-            </LampBoost>
+      <NoCastShadow>
+        <group position={OUT.c}>
+          {[
+            [-1, -1],
+            [1, -1],
+            [-1, 1],
+            [1, 1],
+          ].map(([sx, sy], i) => (
+            <mesh
+              key={i}
+              geometry={KCYL()}
+              material={km.metal('#bfc4c8', 0.3)}
+              rotation={[Math.PI / 2, 0, 0]}
+              scale={[0.012, 0.025, 0.012]}
+              position={[sx! * (OUT.w / 2 - 0.02), sy! * (OUT.h / 2 - 0.02), -0.0125]}
+            />
+          ))}
+          <mesh geometry={KBOX()} material={km.paint('#2b3440', 0.45, 0.35)} scale={[OUT.w, OUT.h, 0.003]} position={[0, 0, 0.0015]} castShadow receiveShadow />
+          <mesh geometry={KPLANE()} material={km.label(outTex, 0.5)} scale={[OUT.w - 0.004, OUT.h - 0.004, 1]} position={[0, 0, 0.0031]} />
+          {LIGHT_COLORS.map((c, i) => (
+            <IoTag
+              key={i}
+              {...PANEL}
+              group={G.light}
+              position={[LIGHT_X(i), LIGHT_Y, DZ]}
+              size={[0.034, 0.058, 0.04]}
+              center={[0, 0.008, 0.02]}
+              anchor={[0, 0.045, 0.02]}
+              title={`Pilot light ${i} · 800F ${c} LED`}
+              lines={lines.light[i]!}
+            >
+              <LampBoost color={c} getLit={lit[i]!}>
+                <PilotLight800F color={c} legend={`L${i}`} getLit={lit[i]!} rear={false} />
+              </LampBoost>
+            </IoTag>
+          ))}
+          <IoTag
+            {...PANEL}
+            group={G.aout}
+            position={METER_P}
+            size={[0.078, 0.078, 0.03]}
+            center={[0, 0, 0.015]}
+            anchor={[0, 0.045, 0.012]}
+            title="Analog panel meter · 4-20 mA"
+            lines={lines.meter1}
+          >
+            <AnalogMeter getValue={() => state.meter1} legend="METER 1" units="%" scaleLabels={['0', '100']} redFrom={90} rear={false} />
           </IoTag>
-        ))}
-        <IoTag {...PANEL} group={G.aout} position={METER_P} size={[0.078, 0.078, 0.03]} center={[0, 0, 0.015]} anchor={[0, 0.045, 0.012]} title="Analog panel meter · 4-20 mA" lines={lines.meter1}>
-          <AnalogMeter getValue={() => state.meter1} legend="METER 1" units="%" scaleLabels={['0', '100']} redFrom={90} rear={false} />
-        </IoTag>
-        <IoTag {...PANEL} group={G.aout} position={BAR_P} size={[0.036, 0.124, 0.03]} center={[0, 0, 0.015]} anchor={[0, 0.068, 0.012]} title="10-segment LED bar graph · 4-20 mA" lines={lines.meter2}>
-          <LedBarGraph getValue={() => state.meter2} legend="METER 2" rear={false} />
-        </IoTag>
-        <IoTag {...PANEL} group={G.aout} position={BUZ_P} size={[0.05, 0.05, 0.035]} center={[0, 0, 0.0175]} anchor={[0, 0.05, 0.016]} title="Panel buzzer · 24 V DC" lines={lines.buzzer}>
-          <PanelBuzzer position={[0, 0, 0]} getOn={buzOn} getPhase={() => state.buzzerPhase} />
-        </IoTag>
-      </group>
+          <IoTag
+            {...PANEL}
+            group={G.aout}
+            position={BAR_P}
+            size={[0.036, 0.124, 0.03]}
+            center={[0, 0, 0.015]}
+            anchor={[0, 0.068, 0.012]}
+            title="10-segment LED bar graph · 4-20 mA"
+            lines={lines.meter2}
+          >
+            <LedBarGraph getValue={() => state.meter2} legend="METER 2" rear={false} />
+          </IoTag>
+          <IoTag
+            {...PANEL}
+            group={G.aout}
+            position={BUZ_P}
+            size={[0.05, 0.05, 0.035]}
+            center={[0, 0, 0.0175]}
+            anchor={[0, 0.05, 0.016]}
+            title="Panel buzzer · 24 V DC"
+            lines={lines.buzzer}
+          >
+            <PanelBuzzer position={[0, 0, 0]} getOn={buzOn} getPhase={() => state.buzzerPhase} />
+          </IoTag>
+        </group>
+      </NoCastShadow>
 
       {/* ---- sloped input console ---- */}
-      <group position={FACE_POS} rotation={FACE_ROT}>
-        <mesh geometry={KBOX()} material={km.paint('#2b3440', 0.45, 0.35)} scale={[CON.w - 0.01, CON_LEN - 0.01, 0.003]} position={[0, 0, 0.0015]} receiveShadow />
-        <mesh geometry={KPLANE()} material={km.label(faceTex, 0.5)} scale={[CON.w - 0.014, CON_LEN - 0.014, 1]} position={[0, 0, 0.0031]} />
-        <InputLeds state={state} />
-        {Array.from({ length: 8 }, (_, i) => (
-          // The whole hover box is the click target (one click = one toggle); the lever's own click handler is
-          // left off so a click on the lever cannot toggle a second time.
-          <IoTag key={i} {...PANEL} group={G.sw} position={[SW_X(i), SW_Y, DZ]} size={[0.034, 0.06, 0.045]} center={[0, 0.008, 0.0225]} anchor={[0, 0.042, 0.03]} title={`SW${i} · maintained toggle (N.O.) · click`} lines={lines.sw[i]!} onPress={ctl.toggle(`sw${i}`)}>
-            <ToggleSwitch legend={`SW ${i}`} getOn={() => Boolean(state.controls[`sw${i}` as 'sw0'])} rear={false} />
-          </IoTag>
-        ))}
-        {PB.map((b, i) => (
-          <IoTag key={b.id} {...PANEL} group={G.pb} position={[b.x, PB_Y, DZ]} size={[0.034, 0.058, 0.045]} center={[0, 0.008, 0.0225]} anchor={[0, 0.045, 0.03]} title={`800F ${b.color} ${b.style} push button (${b.contact})`} lines={lines.pb[i]!} momentary={ctl.momentary(b.id)}>
-            <PushButton800F color={b.color} style={b.style} legend={b.legend} contact={b.contact} getPressed={() => Boolean(state.controls[b.id])} rear={false} />
-          </IoTag>
-        ))}
-        {POT_X.map((x, i) => (
-          <IoTag key={x} {...PANEL} group={G.pot} position={[x, POT_Y, DZ]} size={[0.05, 0.06, 0.045]} center={[0, 0, 0.0225]} anchor={[0, 0.04, 0.03]} title={`Potentiometer ${i + 1} · drag or scroll`} lines={lines.pot[i]!}>
-            <Potentiometer
-              legend={`POT ${i + 1}`}
-              getValue={() => (i === 0 ? state.controls.pot1 : state.controls.pot2)}
-              onChange={(v) => runtime.setControl(i === 0 ? 'pot1' : 'pot2', Math.round(v * 10) / 10)}
-              rear={false}
-            />
-          </IoTag>
-        ))}
-      </group>
+      <NoCastShadow>
+        <group position={FACE_POS} rotation={FACE_ROT}>
+          <mesh geometry={KBOX()} material={km.paint('#2b3440', 0.45, 0.35)} scale={[CON.w - 0.01, CON_LEN - 0.01, 0.003]} position={[0, 0, 0.0015]} receiveShadow />
+          <mesh geometry={KPLANE()} material={km.label(faceTex, 0.5)} scale={[CON.w - 0.014, CON_LEN - 0.014, 1]} position={[0, 0, 0.0031]} />
+          <InputLeds state={state} />
+          {Array.from({ length: 8 }, (_, i) => (
+            // The whole hover box is the click target (one click = one toggle); the lever's own click handler is
+            // left off so a click on the lever cannot toggle a second time.
+            <IoTag
+              key={i}
+              {...PANEL}
+              group={G.sw}
+              position={[SW_X(i), SW_Y, DZ]}
+              size={[0.034, 0.06, 0.045]}
+              center={[0, 0.008, 0.0225]}
+              anchor={[0, 0.042, 0.03]}
+              title={`SW${i} · maintained toggle (N.O.) · click`}
+              lines={lines.sw[i]!}
+              onPress={ctl.toggle(`sw${i}`)}
+            >
+              <ToggleSwitch legend={`SW ${i}`} getOn={() => Boolean(state.controls[`sw${i}` as 'sw0'])} rear={false} />
+            </IoTag>
+          ))}
+          {PB.map((b, i) => (
+            <IoTag
+              key={b.id}
+              {...PANEL}
+              group={G.pb}
+              position={[b.x, PB_Y, DZ]}
+              size={[0.034, 0.058, 0.045]}
+              center={[0, 0.008, 0.0225]}
+              anchor={[0, 0.045, 0.03]}
+              title={`800F ${b.color} ${b.style} push button (${b.contact})`}
+              lines={lines.pb[i]!}
+              momentary={ctl.momentary(b.id)}
+            >
+              <PushButton800F color={b.color} style={b.style} legend={b.legend} contact={b.contact} getPressed={() => Boolean(state.controls[b.id])} rear={false} />
+            </IoTag>
+          ))}
+          {POT_X.map((x, i) => (
+            <IoTag
+              key={x}
+              {...PANEL}
+              group={G.pot}
+              position={[x, POT_Y, DZ]}
+              size={[0.05, 0.06, 0.045]}
+              center={[0, 0, 0.0225]}
+              anchor={[0, 0.04, 0.03]}
+              title={`Potentiometer ${i + 1} · drag or scroll`}
+              lines={lines.pot[i]!}
+            >
+              <Potentiometer
+                legend={`POT ${i + 1}`}
+                getValue={() => (i === 0 ? state.controls.pot1 : state.controls.pot2)}
+                onChange={(v) => runtime.setControl(i === 0 ? 'pot1' : 'pot2', Math.round(v * 10) / 10)}
+                rear={false}
+              />
+            </IoTag>
+          ))}
+        </group>
+      </NoCastShadow>
     </TagLayer>
   );
 }

@@ -10,7 +10,7 @@ import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Vec3 } from '../../../twin/contracts';
-import { FieldCable } from '../../../twin/devices';
+import { FieldCable, FieldMerge } from '../../../twin/devices';
 import { cylX, cylY, fm, latheY, rbox, roundRect, TAU, useDisplayTexture } from '../../../twin/devices/field/shared';
 
 export interface ControlValveProps {
@@ -95,6 +95,8 @@ export function ControlValve({ getOpening, getDisplay, tag = 'FCV-101', pipeDiam
   const yA = 0.36; // diaphragm casing parting line
   return (
     <group position={position} rotation={rotation}>
+      {/* static parts are batched per material (bolts, flanges, yoke …); the stem group moves and is excluded */}
+      <FieldMerge>
       {/* globe body with flanged ends */}
       <mesh geometry={latheY('cvGlobe', [[0, -0.07], [0.05, -0.066], [0.075, -0.035], [0.08, 0], [0.075, 0.035], [0.05, 0.062], [0.042, 0.075], [0, 0.075]], 40)} material={body} castShadow />
       <mesh geometry={cylX(R + 0.004, 0.2, 28)} material={body} castShadow />
@@ -122,7 +124,7 @@ export function ControlValve({ getOpening, getDisplay, tag = 'FCV-101', pipeDiam
         <meshStandardMaterial map={scaleTex} roughness={0.5} />
       </mesh>
       {/* moving stem + indicator pointer + stem connector */}
-      <group ref={stem}>
+      <group ref={stem} userData={{ noMerge: true }}>
         <mesh geometry={cylY(0.006, 0.2, 14)} material={fm.chrome()} position={[0, 0.25, 0]} />
         <mesh geometry={rbox(0.03, 0.022, 0.03, 0.004, 2)} material={fm.zinc()} position={[0, 0.215, 0]} />
         <mesh geometry={rbox(0.03, 0.004, 0.012, 0.001, 1)} material={fm.plastic('#d8261c', 0.4)} position={[0.012, 0.2, 0.052]} />
@@ -165,6 +167,7 @@ export function ControlValve({ getOpening, getDisplay, tag = 'FCV-101', pipeDiam
         <planeGeometry args={[0.07, 0.022]} />
         <meshStandardMaterial map={tagPlate(tag)} metalness={0.5} roughness={0.35} />
       </mesh>
+      </FieldMerge>
     </group>
   );
 }

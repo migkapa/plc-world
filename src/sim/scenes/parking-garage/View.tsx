@@ -17,7 +17,6 @@ import {
   BarrierGate,
   BARRIER_COLORS,
   CarFleet,
-  ClearanceBar,
   InductiveLoopMarking,
   ParkingStatusSign,
   PhotoEye42EF,
@@ -26,8 +25,9 @@ import {
   type CarInstance,
 } from '../../../twin/devices';
 import type { SceneViewProps, SimRuntime } from '../../types';
-import { audioAllowed, canvasTexture, FONT, hazardTexture, infoLine, IoTag, ioLine, kgeo, kmat, TagLayer, useSfxLoops } from '../trainer/kit';
-import { useDisposeOnUnmount, useHoverCursor } from '../traffic-light/cityKit';
+import { audioAllowed, canvasTexture, FONT, hazardTexture, infoLine, IoTag, ioLine, kgeo, kmat, TagLayer, textLine, useSfxLoops, type TagGroup } from '../trainer/kit';
+import { useDisposeOnUnmount, useHoverCursor, useNoCastShadow, useQuietPaint } from '../traffic-light/cityKit';
+import { PARKING_DEMO_COUNT_TAG } from './demo';
 import { Booth } from './booth';
 import { GARAGE_LAYOUT as Y, type GarageCar, type ParkingGarageState } from './logic';
 import { CURB, GarageSite, SITE, SITE_OCCLUDERS } from './site';
@@ -48,7 +48,16 @@ const PE_ENTRY_X = SITE.westIsland.x1 - 0.12;
 const PE_EXIT_X = SITE.eastIsland.x0 + 0.12;
 const PE_BEAM = PE_ENTRY_X * -1 - (SITE.centerIsland.x1 - 0.12);
 const TICKET: Vec3 = [-5.12, CURB, Y.entryWaitZ - 0.35];
-const DISPATCH: Vec3 = [-13.7, CURB, 13.35];
+/** Instructor console: on the booth pad, beside the booth's east wall, facing the plaza (in the overview). */
+const DISPATCH: Vec3 = [10.25, CURB, 9.3];
+
+/** Pinned-overlay groups: far away, each lane collapses into one summary chip. */
+const TG: Record<string, TagGroup> = {
+  entry: { id: 'entry', label: 'Entry lane: loop · ticket · eye · gate', mode: 'rows', collapseBelow: 22 },
+  exit: { id: 'exit', label: 'Exit lane: loop · eye · gate', mode: 'rows', collapseBelow: 22 },
+  signs: { id: 'signs', label: 'FULL / SPACES signs', mode: 'rows', collapseBelow: 20 },
+  booth: { id: 'booth', label: 'Attendant booth', mode: 'rows', collapseBelow: 16 },
+};
 
 // ---------------------------------------------------------------------------
 // Gates, eyes, loops, ticket column, signs
@@ -87,42 +96,41 @@ function GatesAndSensors({ state, runtime }: P) {
       exitLoop: () => state.sensors.exitLoop,
       full: () => state.fullSign,
       open: () => state.openSign,
-      swing: () => {
-        const b = state.entryGate.bounceMs / 1000;
-        return b < 2 ? Math.sin(b * 9) * 0.12 * Math.exp(-b * 2) : 0;
-      },
     }),
     [state],
   );
   const L = (a: string) => ioLine(runtime, a);
+  const eyes = useRef<THREE.Group>(null);
+  useNoCastShadow(eyes);
   return (
     <group>
       {/* barrier gates */}
       <BarrierGate position={ENTRY_GATE} armLength={ARM_LEN} side="right" housingColor={BARRIER_COLORS.orange} getPosition={g.entryPos} getArmLights={g.entryArm} />
       <BarrierGate position={EXIT_GATE} rotation={[0, Math.PI, 0]} armLength={ARM_LEN} side="right" housingColor={BARRIER_COLORS.orange} getPosition={g.exitPos} getArmLights={g.exitArm} />
-      <IoTag position={[ENTRY_GATE[0], CURB + 0.6, ENTRY_GATE[2]]} size={[0.6, 1.25, 0.5]} anchor={[0, 0.95, 0]} title="Entry barrier gate operator" lines={[L('Entry_Gate_Up')]} />
-      <IoTag position={[EXIT_GATE[0], CURB + 0.6, EXIT_GATE[2]]} size={[0.6, 1.25, 0.5]} anchor={[0, 0.95, 0]} title="Exit barrier gate operator" lines={[L('Exit_Gate_Up')]} />
+      <IoTag position={[ENTRY_GATE[0], CURB + 0.6, ENTRY_GATE[2]]} size={[0.6, 1.25, 0.5]} anchor={[0, 0.95, 0]} title="Entry barrier gate operator (motor + arm)" lines={[L('Entry_Gate_Up')]} group={TG.entry} />
+      <IoTag position={[EXIT_GATE[0], CURB + 0.6, EXIT_GATE[2]]} size={[0.6, 1.25, 0.5]} anchor={[0, 0.95, 0]} title="Exit barrier gate operator (motor + arm)" lines={[L('Exit_Gate_Up')]} group={TG.exit} />
       {/* photo-eyes under the arms: sensor in a bollard on the gate island, reflector on the centre island */}
-      <EyeBollard position={[PE_ENTRY_X, CURB, Y.gateZ]} rotationY={Math.PI / 2} />
-      <EyeBollard position={[SITE.centerIsland.x0 + 0.12, CURB, Y.gateZ]} rotationY={-Math.PI / 2} />
-      <EyeBollard position={[PE_EXIT_X, CURB, Y.gateZ]} rotationY={-Math.PI / 2} />
-      <EyeBollard position={[SITE.centerIsland.x1 - 0.12, CURB, Y.gateZ]} rotationY={Math.PI / 2} />
-      <PhotoEye42EF position={[PE_ENTRY_X + 0.03, PE_Y, Y.gateZ]} rotation={[0, Math.PI / 2, 0]} mount="none" beamLength={PE_BEAM - 0.06} getBlocked={g.entryPE} getOutput={g.entryPE} getBlockDistance={() => 1.05} />
-      <PhotoEye42EF position={[PE_EXIT_X - 0.03, PE_Y, Y.gateZ]} rotation={[0, -Math.PI / 2, 0]} mount="none" beamLength={PE_BEAM - 0.06} getBlocked={g.exitPE} getOutput={g.exitPE} getBlockDistance={() => 1.05} />
-      <IoTag position={[PE_ENTRY_X, CURB + 0.4, Y.gateZ]} size={[0.25, 0.85, 0.25]} anchor={[0, 0.55, 0]} title="Entry photo-eye (retro-reflective)" lines={[L('Entry_PE')]} />
-      <IoTag position={[PE_EXIT_X, CURB + 0.4, Y.gateZ]} size={[0.25, 0.85, 0.25]} anchor={[0, 0.55, 0]} title="Exit photo-eye (retro-reflective)" lines={[L('Exit_PE')]} />
+      <group ref={eyes}>
+        <EyeBollard position={[PE_ENTRY_X, CURB, Y.gateZ]} rotationY={Math.PI / 2} />
+        <EyeBollard position={[SITE.centerIsland.x0 + 0.12, CURB, Y.gateZ]} rotationY={-Math.PI / 2} />
+        <EyeBollard position={[PE_EXIT_X, CURB, Y.gateZ]} rotationY={-Math.PI / 2} />
+        <EyeBollard position={[SITE.centerIsland.x1 - 0.12, CURB, Y.gateZ]} rotationY={Math.PI / 2} />
+        <PhotoEye42EF position={[PE_ENTRY_X + 0.03, PE_Y, Y.gateZ]} rotation={[0, Math.PI / 2, 0]} mount="none" beamLength={PE_BEAM - 0.06} getBlocked={g.entryPE} getOutput={g.entryPE} getBlockDistance={() => 1.05} />
+        <PhotoEye42EF position={[PE_EXIT_X - 0.03, PE_Y, Y.gateZ]} rotation={[0, -Math.PI / 2, 0]} mount="none" beamLength={PE_BEAM - 0.06} getBlocked={g.exitPE} getOutput={g.exitPE} getBlockDistance={() => 1.05} />
+      </group>
+      <IoTag position={[PE_ENTRY_X, CURB + 0.4, Y.gateZ]} size={[0.25, 0.85, 0.25]} anchor={[0, 0.55, 0]} title="Entry photo-eye (retro-reflective, under the arm)" lines={[L('Entry_PE')]} group={TG.entry} />
+      <IoTag position={[PE_EXIT_X, CURB + 0.4, Y.gateZ]} size={[0.25, 0.85, 0.25]} anchor={[0, 0.55, 0]} title="Exit photo-eye (retro-reflective, under the arm)" lines={[L('Exit_PE')]} group={TG.exit} />
       {/* detector loops (lead-ins run to the islands) */}
       <InductiveLoopMarking position={[Y.entryLaneX, 0, (Y.entryLoop.z0 + Y.entryLoop.z1) / 2]} rotation={[0, -Math.PI / 2, 0]} length={Y.entryLoop.z1 - Y.entryLoop.z0} width={2 * Y.loopHalfWidth} leadIn={0.5} getActive={g.entryLoop} hint="strong" />
       <InductiveLoopMarking position={[Y.exitLaneX, 0, (Y.exitLoop.z0 + Y.exitLoop.z1) / 2]} rotation={[0, Math.PI / 2, 0]} length={Y.exitLoop.z1 - Y.exitLoop.z0} width={2 * Y.loopHalfWidth} leadIn={0.5} getActive={g.exitLoop} hint="strong" />
-      <IoTag position={[Y.entryLaneX, 0.1, (Y.entryLoop.z0 + Y.entryLoop.z1) / 2]} size={[3, 0.25, 3]} anchor={[0, 0.35, 0]} title="Entry detector loop" lines={[L('Entry_Loop')]} />
-      <IoTag position={[Y.exitLaneX, 0.1, (Y.exitLoop.z0 + Y.exitLoop.z1) / 2]} size={[3, 0.25, 3]} anchor={[0, 0.35, 0]} title="Exit detector loop" lines={[L('Exit_Loop')]} />
+      <IoTag position={[Y.entryLaneX, 0.1, (Y.entryLoop.z0 + Y.entryLoop.z1) / 2]} size={[3, 0.25, 3]} anchor={[0, 0.35, 0]} title="Entry loop → detector amplifier in the booth → Local:1:I.Pt00" lines={[L('Entry_Loop')]} group={TG.entry} />
+      <IoTag position={[Y.exitLaneX, 0.1, (Y.exitLoop.z0 + Y.exitLoop.z1) / 2]} size={[3, 0.25, 3]} anchor={[0, 0.35, 0]} title="Exit loop → detector amplifier in the booth → Local:1:I.Pt02" lines={[L('Exit_Loop')]} group={TG.exit} />
       <TicketColumn state={state} runtime={runtime} />
       {/* FULL / SPACES: under the canopy over the entry lane and on a post at the plaza entrance */}
       <ParkingStatusSign position={[Y.entryLaneX, SITE.canopy.y, SITE.canopy.z1 - 0.2]} mount="ceiling" mountLength={0.2} getFull={g.full} getOpen={g.open} />
       <ParkingStatusSign position={[-7.7, CURB, SITE.portal.z0 - 2.2]} mount="post" mountLength={2.0} getFull={g.full} getOpen={g.open} />
-      <IoTag position={[Y.entryLaneX, SITE.canopy.y - 0.55, SITE.canopy.z1 - 0.12]} size={[1.0, 0.7, 0.2]} anchor={[0, 0.45, 0.1]} title="FULL / SPACES sign" lines={[L('Full_Sign'), L('Open_Sign')]} />
-      <IoTag position={[-7.7, CURB + 2.4, SITE.portal.z0 - 2.1]} size={[1.0, 0.8, 0.25]} anchor={[0, 0.5, 0]} title="FULL / SPACES sign (plaza)" lines={[L('Full_Sign'), L('Open_Sign')]} />
-      <ClearanceBar position={[Y.entryLaneX, 0, SITE.canopy.z1 - 0.9]} width={Y.laneWidth - 0.2} mountHeight={SITE.canopy.y} getSwing={g.swing} />
+      <IoTag position={[Y.entryLaneX, SITE.canopy.y - 0.55, SITE.canopy.z1 - 0.12]} size={[1.0, 0.7, 0.2]} anchor={[0, 0.45, 0.1]} title="FULL / SPACES sign (canopy)" lines={[L('Full_Sign'), L('Open_Sign')]} pin={false} />
+      <IoTag position={[-7.7, CURB + 2.4, SITE.portal.z0 - 2.1]} size={[1.0, 0.8, 0.25]} anchor={[0, 0.5, 0]} title="FULL / SPACES sign (plaza entrance, same outputs)" lines={[L('Full_Sign'), L('Open_Sign')]} group={TG.signs} />
     </group>
   );
 }
@@ -133,9 +141,15 @@ function armLights(pos: number): boolean | 'flash' {
 }
 
 function TicketColumn({ state, runtime }: P) {
-  const t = useRef({ lastPressEndMs: -1e9, prev: false });
+  const t = useRef({ lastPressEndMs: -1e9, prev: false, prevNow: 0 });
   useFrame(() => {
     const k = t.current;
+    if (state.timeMs < k.prevNow) {
+      // plant reset: time restarted at 0, the old timestamps mean nothing
+      k.lastPressEndMs = -1e9;
+      k.prev = false;
+    }
+    k.prevNow = state.timeMs;
     const p = state.sensors.ticket;
     if (k.prev && !p) k.lastPressEndMs = state.timeMs;
     k.prev = p;
@@ -157,7 +171,7 @@ function TicketColumn({ state, runtime }: P) {
     [state],
   );
   return (
-    <IoTag position={TICKET} rotation={[0, Math.PI / 2, 0]} size={[0.5, 1.5, 0.45]} center={[0, 0.75, 0]} anchor={[0, 1.62, 0]} title="Ticket dispenser push button (N.O.) — pressed by drivers" lines={[ioLine(runtime, 'Ticket_PB')]}>
+    <IoTag position={TICKET} rotation={[0, Math.PI / 2, 0]} size={[0.5, 1.5, 0.45]} center={[0, 0.75, 0]} anchor={[0, 1.62, 0]} title="Ticket dispenser push button (N.O.) — pressed by drivers" lines={[ioLine(runtime, 'Ticket_PB')]} group={TG.entry}>
       <TicketDispenser getPressed={g.pressed} getTicketOut={g.ticketOut} getMessage={g.message} getButtonLit={g.lit} />
     </IoTag>
   );
@@ -230,15 +244,40 @@ function DispatchConsole({ state, runtime }: P) {
     return new THREE.MeshStandardMaterial({ map: t, roughness: 0.6 });
   }, []);
   useDisposeOnUnmount(useMemo(() => [hazard.map, hazard], [hazard]));
-  const lines = useMemo(
-    () => [
-      infoLine('Cars inside', () => state.carsInside, ` / ${Y.capacity}`),
+  const lines = useMemo(() => {
+    const plcCount = () => {
+      try {
+        return runtime.controller.tags.readNumber(`${PARKING_DEMO_COUNT_TAG}.ACC`);
+      } catch {
+        return NaN;
+      }
+    };
+    return [
+      infoLine('Cars inside (real)', () => state.carsInside, ` / ${Y.capacity}`),
+      textLine('PLC count Cars.ACC', () => {
+        const n = plcCount();
+        if (Number.isNaN(n)) return '— (no Cars tag)';
+        return n === state.carsInside ? `${n}  ✓` : `${n}  ≠ ${state.carsInside}!`;
+      }),
       infoLine('Waiting at entry', () => state.entryOrder.length),
       infoLine('Waiting at exit', () => state.exitOrder.length),
       infoLine('Turned away', () => state.carsTurnedAway),
-    ],
-    [state],
-  );
+    ];
+  }, [state, runtime]);
+  // count-mismatch lamp on the console (cars parked at start never passed a gate: the PLC cannot know them)
+  const warn = useRef<THREE.Mesh>(null);
+  const warnMat = useMemo(() => new THREE.MeshStandardMaterial({ color: '#3a1d0a', emissive: '#ff8a00', emissiveIntensity: 0, roughness: 0.3, toneMapped: false }), []);
+  useDisposeOnUnmount(useMemo(() => [warnMat], [warnMat]));
+  useFrame(({ clock }) => {
+    let n = NaN;
+    try {
+      n = runtime.controller.tags.readNumber(`${PARKING_DEMO_COUNT_TAG}.ACC`);
+    } catch {
+      n = NaN;
+    }
+    const bad = !Number.isNaN(n) && n !== state.carsInside;
+    warnMat.emissiveIntensity = bad ? (Math.sin(clock.elapsedTime * 6) > 0 ? 3 : 0.4) : 0;
+  });
   return (
     <group position={DISPATCH} rotation={[0, Math.PI / 2, 0]}>
       <mesh position={[0, 0.45, 0]} material={hazard} castShadow receiveShadow>
@@ -260,7 +299,11 @@ function DispatchConsole({ state, runtime }: P) {
       <mesh position={[0, 1.78, -0.17]} material={signMat} castShadow>
         <boxGeometry args={[0.96, 0.48, 0.03]} />
       </mesh>
-      <IoTag position={[0, 1.0, 0]} size={[0.9, 2.0, 0.5]} anchor={[0, 1.15, 0]} title="Simulation dispatcher (instructor tool, not wired to the PLC)" lines={lines} />
+      {/* amber "PLC count ≠ cars inside" lamp */}
+      <mesh ref={warn} position={[0.21, 0.955, 0.19]} material={warnMat}>
+        <sphereGeometry args={[0.025, 16, 8]} />
+      </mesh>
+      <IoTag position={[0, 1.0, 0]} size={[0.9, 2.0, 0.5]} anchor={[0, 2.15, 0]} title="Simulation dispatcher (instructor tool, not wired to the PLC) — amber lamp: PLC count ≠ cars inside" lines={lines} pin={false} />
     </group>
   );
 }
@@ -303,8 +346,11 @@ function blinkerOf(c: GarageCar): Blinker {
 /** Per-car odometer, steering and brake state (runs before the fleet in the frame). */
 function CarKinematics({ state, kin }: { state: ParkingGarageState; kin: Map<number, Kin> }) {
   const sweep = useRef(0);
+  const prevNow = useRef(0);
   useFrame((_, dtRaw) => {
     const dt = Math.min(dtRaw, 0.1);
+    if (state.timeMs < prevNow.current) kin.clear(); // plant reset: car ids restart
+    prevNow.current = state.timeMs;
     sweep.current += dt;
     for (const c of state.cars) {
       let k = kin.get(c.id);
@@ -415,6 +461,7 @@ function useGarageSound(state: ParkingGarageState) {
 
 export const ParkingGarageView = memo(function ParkingGarageView({ state, runtime }: P) {
   useGarageSound(state);
+  useQuietPaint();
   const B = SITE.booth;
   const occluders: Array<[Vec3, Vec3]> = [
     ...SITE_OCCLUDERS,
@@ -426,9 +473,9 @@ export const ParkingGarageView = memo(function ParkingGarageView({ state, runtim
   return (
     <group>
       <GarageSite />
-      <TagLayer occluders={occluders}>
+      <TagLayer occluders={occluders} pinStyle="pill">
         <GatesAndSensors state={state} runtime={runtime} />
-        <Booth runtime={runtime} />
+        <Booth runtime={runtime} tagGroup={TG.booth} />
         <DispatchConsole state={state} runtime={runtime} />
       </TagLayer>
       <Cars state={state} />

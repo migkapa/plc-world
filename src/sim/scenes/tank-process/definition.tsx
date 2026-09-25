@@ -1,47 +1,22 @@
 /**
- * Scene definition for `tank-process` (auto-registered by ../views.tsx).
- *
- * Demo program (neutral text, I/O aliases only): an automatic batch that cycles forever —
- *   fill (XV-101 fast fill below 60 %, then FCV-101 trims proportionally to the remaining level up to LSH),
- *   mix once the blades are covered, heat to 62–66 °C with hysteresis (never dry), BATCH DONE when full & hot,
- *   discharge on the push button or automatically at the hold temperature, drain to empty, repeat.
- *   LSHH (N.C.) blocks filling and sounds the horn; E-stop drops everything and closes the drain.
- * Verified headless: a batch every ~110 s, 0 spills, 0 dry heating, no agitator dry run.
+ * Scene definition for `tank-process` (auto-registered by ../views.tsx). The demo program lives in ./demo.ts:
+ * it does NOT start by itself — press START (a preview harness taps TANK_DEMO_START after loading).
  */
 import type { SceneDefinition } from '../../types';
+import { TANK_DEMO_RUNGS } from './demo';
 import { tankProcessLogic, type TankProcessState } from './logic';
 import { TankProcessView } from './View';
 
-export const TANK_DEMO_RUNGS: string[] = [
-  // Running (amber pilot): auto-start on power-up for the showroom, Start / N.C. Stop / N.C. E-stop
-  '[XIC(Start_PB),XIC(S:FS),XIC(Running_Light)]XIC(Stop_PB)XIC(EStop_OK)OTE(Running_Light);',
-  // fast fill through XV-101 while below 60 %
-  'XIC(Running_Light)XIO(Drain_Valve)XIO(Batch_Done_Light)XIC(LSHH_101)LES(LT_101,60.0)OTE(Fill_Valve);',
-  // FCV-101 trims the rest: opening proportional to the remaining level, closed at LSH
-  'XIC(Running_Light)XIO(Drain_Valve)XIO(Batch_Done_Light)XIC(LSHH_101)XIO(LSH_101)CPT(FCV_101,(92.0-LT_101)*4.0);',
-  '[XIO(Running_Light),XIC(Drain_Valve),XIC(Batch_Done_Light),XIO(LSHH_101),XIC(LSH_101)]MOV(0.0,FCV_101);',
-  // agitator only with the blades covered
-  'XIC(Running_Light)XIC(LSL_101)GEQ(LT_101,12.0)OTE(Mixer);',
-  // heater 62..66 C (seal-in hysteresis), never below LSL, off while discharging
-  'XIC(Running_Light)XIC(LSL_101)XIO(Drain_Valve)[LES(TT_101,62.0),XIC(Heater)LES(TT_101,66.0)]OTE(Heater);',
-  // batch done: full and hot
-  'XIC(LSH_101)GEQ(TT_101,60.0)OTL(Batch_Done_Light);',
-  // discharge: push button, or automatically at the hold temperature
-  'XIC(Batch_Done_Light)[XIC(Discharge_PB),GEQ(TT_101,65.0)]OTL(Drain_Valve);',
-  'LES(LT_101,1.0)[OTU(Drain_Valve),OTU(Batch_Done_Light)];',
-  'XIO(EStop_OK)OTU(Drain_Valve);',
-  // high-high alarm
-  'XIO(LSHH_101)OTE(Alarm_Horn);',
-];
+export { TANK_DEMO_RUNGS, TANK_DEMO_START } from './demo';
 
 export const definition: SceneDefinition<TankProcessState> = {
   logic: tankProcessLogic,
   View: TankProcessView,
   cameras: [
-    { id: 'overview', label: 'Overview', position: [5.1, 3.8, 6.0], target: [-0.35, 1.1, -0.5] },
+    { id: 'overview', label: 'Overview', position: [5.3, 3.6, 6.3], target: [-0.35, 1.25, -0.5] },
     { id: 'cabinet', label: 'Control cabinet', position: [3.62, 1.45, -1.3], target: [3.0, 1.2, -2.95] },
-    { id: 'operator', label: 'Operator panel', position: [3.12, 1.62, 2.3], target: [2.6, 1.13, 1.1] },
-    { id: 'tank', label: 'Tank cut-away', position: [1.95, 2.55, 2.95], target: [0, 1.4, 0] },
+    { id: 'operator', label: 'Operator panel', position: [3.35, 1.55, 2.5], target: [2.78, 1.13, 1.35] },
+    { id: 'tank', label: 'Tank cut-away', position: [2.2, 2.75, 3.3], target: [0.05, 1.55, -0.1] },
     { id: 'valves', label: 'Valve station', position: [-0.85, 1.55, 1.75], target: [-1.9, 1.0, -0.14] },
   ],
   accent: '#38bdf8',

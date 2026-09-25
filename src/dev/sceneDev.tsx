@@ -55,7 +55,7 @@ function Harness({ id }: { id: string }) {
   const def = SCENES[id];
   const demo = useMemo(() => {
     if (!def) return null;
-    const d = createDemoRuntime(def.logic, def.demoRungs ?? [], { run: params.get('prog') !== '1' });
+    const d = createDemoRuntime(def.logic, def.demoRungs ?? [], { tags: def.demoTags, run: params.get('prog') !== '1' });
     for (const pair of (params.get('ctrl') ?? '').split(',').filter(Boolean)) {
       const [k, v] = pair.split(':');
       if (k) d.runtime.setControl(k, parseValue(v ?? 'true'));

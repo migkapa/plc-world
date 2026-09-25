@@ -12,7 +12,7 @@ import { INSTRUCTION_CATEGORIES, INSTRUCTIONS, instructionsByCategory } from '..
 import { cn } from '../../ui';
 import { useReducedMotion } from '../hud/prefs';
 import { Glossary } from '../reference/Glossary';
-import { GLOSSARY, glossaryHref, parseGlossaryParam } from '../reference/glossary';
+import { GLOSSARY, glossaryHref, parseGlossaryParam } from '../reference/glossaryData';
 import { InlineMd } from '../reference/InlineMd';
 import { ALL_MNEMONICS, CATEGORY_STYLE, InstructionList, MnemonicBadge, matchInstruction } from '../reference/InstructionList';
 import { Playground } from '../reference/Playground';

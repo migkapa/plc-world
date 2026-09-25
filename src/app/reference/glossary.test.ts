@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GLOSSARY, glossaryHref, parseGlossaryParam } from './glossary';
+import { GLOSSARY, glossaryHref, parseGlossaryParam } from './glossaryData';
 
 describe('glossary deep links', () => {
   it('round-trips every term', () => {

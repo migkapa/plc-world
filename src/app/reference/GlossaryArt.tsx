@@ -3,7 +3,7 @@
  */
 import type { ReactNode } from 'react';
 import { MiniLadder } from '../../editor';
-import type { GlossaryArtId } from './glossary';
+import type { GlossaryArtId } from './glossaryData';
 
 const INK = '#94a3b8';
 const DIM = '#475569';

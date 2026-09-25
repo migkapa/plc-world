@@ -9,7 +9,7 @@ import { cn } from '../../ui';
 import { getMission } from '../../game/missions';
 import { routes } from '../routes';
 import { getShowroomDevice } from '../showroom/catalog';
-import { GLOSSARY, glossaryHref, type GlossaryEntry } from './glossary';
+import { GLOSSARY, glossaryHref, type GlossaryEntry } from './glossaryData';
 import { GlossaryArt } from './GlossaryArt';
 import { InlineMd } from './InlineMd';
 import { MnemonicBadge } from './InstructionList';

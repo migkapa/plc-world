@@ -9,7 +9,7 @@ import type { InstructionInfo } from '../../plc/types';
 import { ProgressBar, cn } from '../../ui';
 import { routes } from '../routes';
 import { matchesQuery } from '../showroom/search';
-import { GLOSSARY, glossaryHref } from './glossary';
+import { GLOSSARY, glossaryHref } from './glossaryData';
 
 export type Category = InstructionInfo['category'];
 

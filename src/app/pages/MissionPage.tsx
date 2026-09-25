@@ -24,11 +24,11 @@ import { splitPadControls, useControlHotkeys } from '../workspace/ControlPad';
 import { recordGameEvent } from '../workspace/gameEvents';
 import { LeftDock, type DockTab } from '../workspace/Docks';
 import { LadderPanel } from '../workspace/LadderPanel';
-import { HintsModal, LockedMission, MissionBar, NotFoundMission, ReplayBanner } from '../workspace/MissionChrome';
+import { HintsModal, LockedMission, MissionBar, NotFoundMission } from '../workspace/MissionChrome';
 import { messagesToVerifyErrors, type ProgramSnapshot } from '../workspace/program';
 import { SpeedControl } from '../workspace/SpeedControl';
 import { controlsUsedByTests } from '../workspace/stepText';
-import { replayCamera } from '../workspace/replayCamera';
+import { useReplayUi } from '../workspace/replay/useReplayUi';
 import { TestPanel } from '../workspace/TestPanel';
 import { createTestProgressStore, startTestRun, type TestRunHandle, type TestStatus } from '../workspace/testRun';
 import { TwinPanel } from '../workspace/TwinPanel';
@@ -38,6 +38,14 @@ import { WorkspaceLayout } from '../workspace/WorkspaceLayout';
 import '../workspace/anim.css';
 import { PENDING_ROUTINES } from '../workspace/Docks';
 import { useDocumentTitle } from '../useDocumentTitle';
+import { useReducedMotion } from '../hud/prefs';
+import { useAssist } from '../workspace/onboarding/assistStore';
+import { HelpMenu } from '../workspace/onboarding/HelpMenu';
+import { LiveChip } from '../workspace/onboarding/LiveChip';
+import { programSig } from '../workspace/onboarding/liveObjectives';
+import { MissionAssist } from '../workspace/onboarding/MissionAssist';
+import type { TourPanel } from '../workspace/onboarding/firstRungTour';
+import { useLiveObjectives } from '../workspace/onboarding/useLiveObjectives';
 
 export default function MissionPage() {
   const params = useParams<{ id: string }>();
@@ -122,6 +130,19 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
 
   useEffect(() => () => runHandle.current?.cancel(), []);
 
+  // --- live objectives: the tests re-run quietly after edits (never graded) ----------------------
+  const liveOn = useAssist((s) => s.liveObjectives);
+  const reducedMotion = useReducedMotion();
+  const liveObj = useLiveObjectives({
+    mission,
+    ws,
+    buildProject: (s: ProgramSnapshot) => buildMissionProject(mission, s.rungs, s.comments, s.tags),
+    paused: running,
+    enabled: liveOn,
+    runOnMount: initial.fromSave && initial.rungs.some((r) => r.trim() !== ''),
+  });
+  const noteGraded = liveObj.noteGraded;
+
   const runningRef = useRef(false);
   runningRef.current = running;
   const stopReplay = replay.stop;
@@ -130,6 +151,7 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
     stopReplay();
     ws.flushSave();
     const snap = ws.snapshot();
+    const sig = programSig(snap);
     let project: Project;
     try {
       project = buildMissionProject(mission, snap.rungs, snap.comments, snap.tags);
@@ -168,6 +190,7 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
       .then((result) => {
         if (handle.cancelled) return;
         setRunning(false);
+        noteGraded(sig, result.tests, result.verifyErrors);
         if (result.verifyErrors.length > 0) {
           setVerifyErrors(result.verifyErrors);
           setStatuses(new Array<TestStatus>(n).fill('skipped'));
@@ -209,7 +232,7 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
         setRunning(false);
         toast({ tone: 'error', title: 'The test runner crashed', body: e instanceof Error ? e.message : String(e) });
       });
-  }, [stopReplay, ws, mission, n, testProgress]);
+  }, [stopReplay, ws, mission, n, testProgress, noteGraded]);
 
   // Ctrl+Enter anywhere on the page
   const runRef = useRef(runTests);
@@ -230,10 +253,13 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
   }, []);
 
   const startReplay = replay.start;
+  const resultsRef = useRef(results);
+  resultsRef.current = results;
   const watch = useCallback(
     (i: number): void => {
       if (!lastProject.current) return;
-      startReplay(mission, lastProject.current, i);
+      // the replay re-runs the tested program: this run's result saves it a pass (tests are deterministic)
+      startReplay(mission, lastProject.current, i, resultsRef.current[i]);
       setMobileTab('twin');
     },
     [startReplay, mission],
@@ -284,28 +310,10 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
   const viewRuntime = useMemo(() => (rep ? readOnlyRuntime(rep.runner.runtime, replayBlockedToast) : ws.runtime), [rep, ws.runtime]);
   const hintsRevealed = useMemo(() => mission.hints.slice(0, hintsUsed), [mission, hintsUsed]);
   const speedTools = useMemo(() => <SpeedControl runtime={ws.runtime} onResetPlant={ws.resetPlant} />, [ws.runtime, ws.resetPlant]);
-  const { speed: replaySpeed, paused: replayPaused, setSpeed: setReplaySpeed, setPaused: setReplayPaused, restart: restartReplay } = replay;
-  const banner = useMemo(
-    () =>
-      rep ? (
-        <ReplayBanner
-          index={rep.index}
-          mission={mission}
-          scene={scene}
-          runner={rep.runner}
-          speed={replaySpeed}
-          paused={replayPaused}
-          onSpeed={setReplaySpeed}
-          onPause={setReplayPaused}
-          onRestart={restartReplay}
-          onStop={stopReplay}
-        />
-      ) : undefined,
-    [rep, mission, scene, replaySpeed, replayPaused, setReplaySpeed, setReplayPaused, restartReplay, stopReplay],
-  );
+  // replay debugger: banner + step controls, camera that follows the test, trace & explanation, ladder highlight
+  const replayUi = useReplayUi({ replay, mission, scene, focus: definition?.focus, editorRef, onShowPanel: setMobileTab });
+  const { banner, focusCamera: replayFocus, onCameraPick: onReplayCameraPick, watchDetail, highlight: replayHighlight } = replayUi;
   const noFaults = useMemo(() => [], []);
-  // a replay looks at the device its (failing) check is about, not at whatever view the player left
-  const replayFocus = useMemo(() => (rep ? replayCamera(scene.id, mission, rep.index, results[rep.index]) : undefined), [rep, scene.id, mission, results]);
 
   const twin = useMemo(
     () => (
@@ -319,12 +327,13 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
         faults={live ? faultControls : noFaults}
         padDisabled={!live}
         focusCamera={replayFocus}
+        onCameraPick={onReplayCameraPick}
         ioHint="the Briefing tab"
         {...(live ? { tools: speedTools } : {})}
         {...(banner ? { banner } : {})}
       />
     ),
-    [scene, definition, viewRuntime, rep, pad, live, faultControls, noFaults, speedTools, banner, replayFocus],
+    [scene, definition, viewRuntime, rep, pad, live, faultControls, noFaults, speedTools, banner, replayFocus, onReplayCameraPick],
   );
 
   const resetAction = useMemo(
@@ -342,11 +351,22 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
         editorRef={editorRef}
         {...(mission.allowedInstructions ? { allowedInstructions: mission.allowedInstructions } : {})}
         {...(rep ? { replayController: rep.runner.controller } : { actions: resetAction })}
+        {...(replayHighlight ? { highlight: replayHighlight } : {})}
         onEvent={recordGameEvent}
       />
     ),
-    [ws, mission, rep, resetAction],
+    [ws, mission, rep, resetAction, replayHighlight],
   );
+
+  /** The program changed since the last Verify & Test: its results (and objective marks) describe an older program. */
+  const stale = !running && lastRunSig !== null && lastRunSig !== currentSig;
+
+  // soft "live" marks: only while the program in the editor has not been graded as it is
+  const liveMarks = useMemo(() => {
+    const o = liveObj.outcome;
+    if (!o || (o.graded && liveObj.fresh) || o.verifyErrors.length > 0) return null;
+    return { states: o.states, stale: !liveObj.fresh || liveObj.checking, allPassed: o.allPassed };
+  }, [liveObj]);
 
   const briefing = useMemo(
     () => (
@@ -359,9 +379,11 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
         completed={completed}
         hintsRevealed={hintsRevealed}
         onShowHints={openHints}
+        live={liveMarks}
+        gradedStale={stale}
       />
     ),
-    [mission, scene, activeRuntime, results, completed, hintsRevealed, openHints],
+    [mission, scene, activeRuntime, results, completed, hintsRevealed, openHints, liveMarks, stale],
   );
 
   const errorsPending = ws.pendingReason === 'errors';
@@ -381,7 +403,6 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
     [briefing, ws.controller, ws.reverify, errorsPending, dockTab],
   );
 
-  const stale = !running && lastRunSig !== null && lastRunSig !== currentSig;
   const tests = useMemo(
     () => (
       <TestPanel
@@ -395,6 +416,7 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
         onRun={runTests}
         onWatch={watch}
         watching={rep?.index ?? null}
+        watchDetail={watchDetail}
         {...(instructionCount !== undefined ? { instructionCount } : {})}
         hintsUsed={hintsUsed}
         notice={notice}
@@ -402,8 +424,21 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
         onJumpToRung={jumpToRung}
       />
     ),
-    [mission, scene, statuses, testProgress, results, verifyErrors, running, runTests, watch, rep, instructionCount, hintsUsed, notice, stale, jumpToRung],
+    [mission, scene, statuses, testProgress, results, verifyErrors, running, runTests, watch, rep, watchDetail, instructionCount, hintsUsed, notice, stale, jumpToRung],
   );
+
+  const barExtra = useMemo(
+    () => (
+      <>
+        <LiveChip live={liveObj} running={running} onRun={runTests} reducedMotion={reducedMotion} />
+        <HelpMenu missionId={mission.id} />
+      </>
+    ),
+    [liveObj, running, runTests, reducedMotion, mission.id],
+  );
+  const showPanel = useCallback((p: TourPanel) => {
+    if (p === 'twin' || p === 'ladder') setMobileTab(p);
+  }, []);
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="mission-page">
@@ -412,16 +447,19 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
         bestStars={bestStars}
         objectivesMet={objectivesMet}
         testsRun={testsRun}
+        stale={stale}
         hintsUsed={hintsUsed}
         running={running}
         onHints={openHints}
         onRun={runTests}
+        extra={barExtra}
       />
       <WorkspaceLayout
         id="mission"
         className="min-h-0 flex-1"
         left={left}
         twin={twin}
+        twinWanted={!!rep}
         ladder={ladder}
         right={tests}
         mobileTabs={[
@@ -467,6 +505,8 @@ function MissionWorkspace({ mission }: { mission: MissionDef }) {
       >
         <p className="text-sm text-slate-300">Your rungs and the tags you created are replaced by the mission’s starter program. This cannot be undone.</p>
       </Modal>
+
+      <MissionAssist mission={mission} scene={scene} ws={ws} editorRef={editorRef} running={running} replaying={!!rep} onRun={runTests} onShowPanel={showPanel} />
 
       {celebration && (
         <CelebrationModal

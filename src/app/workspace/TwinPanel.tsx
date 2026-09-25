@@ -12,6 +12,9 @@ import type { ControlDef, SceneDefinition, SceneLogic, SimRuntime } from '../../
 import { SceneCanvas, useStageCamera } from '../../twin/Stage';
 import { cn, hasWebGL } from '../../ui';
 import { ControlPad, FaultList } from './ControlPad';
+import { DeviceCamera, ShowDeviceButton } from './highlight/DeviceCamera';
+import { TwinLayoutButton, useTwinLayout } from './TwinLayout';
+import { useReducedMotion } from '../hud/prefs';
 import { modalOpen, useControllerTick, useRuntimeValue } from './hooks';
 
 // ---------------------------------------------------------------------------
@@ -38,7 +41,7 @@ class ViewBoundary extends Component<{ fallback: (error: Error) => ReactNode; ch
 // Overlay pieces
 // ---------------------------------------------------------------------------
 
-function CameraBar() {
+function CameraBar({ onPick }: { onPick?: ((id: string) => void) | undefined }) {
   const cam = useStageCamera();
   if (cam.presets.length < 2) return null;
   return (
@@ -48,7 +51,10 @@ function CameraBar() {
         <button
           key={p.id}
           type="button"
-          onClick={() => cam.goTo(p.id)}
+          onClick={() => {
+            cam.goTo(p.id);
+            onPick?.(p.id);
+          }}
           className={cn(
             'h-6 cursor-pointer rounded-md px-2 text-[11px] font-semibold whitespace-nowrap',
             cam.current === p.id ? 'bg-white/90 text-slate-900' : 'text-slate-200 hover:bg-white/10',
@@ -62,22 +68,35 @@ function CameraBar() {
 }
 
 /**
- * Fly to a camera preset while `id` is set (e.g. the device a replayed test checks) and back to the player's own
- * view when it clears or the panel unmounts.
+ * Fly to a camera preset while `id` is set (e.g. the device a replayed test checks — it may change as the test runs)
+ * and back to the player's own view when it clears or the panel unmounts. `''` keeps the focus session open without
+ * moving (the player took the camera over). Reduced motion: cuts instead of flights.
  */
 function CameraFocus({ id }: { id?: string | undefined }) {
   const cam = useStageCamera();
   const camRef = useRef(cam);
   camRef.current = cam;
+  const reduced = useReducedMotion();
+  const reducedRef = useRef(reduced);
+  reducedRef.current = reduced;
+  /** The player's view before the focus session started (undefined: no session). */
+  const home = useRef<string | null | undefined>(undefined);
+  const active = id !== undefined;
   useEffect(() => {
     const api = camRef.current;
     if (!id || !api.presets.some((p) => p.id === id)) return;
-    const prev = api.current;
-    if (prev !== id) api.goTo(id);
-    return () => {
-      if (prev && prev !== id) camRef.current.goTo(prev);
-    };
+    if (home.current === undefined) home.current = api.current;
+    if (api.current !== id) api.goTo(id, !reducedRef.current);
   }, [id]);
+  useEffect(() => {
+    if (!active) return;
+    return () => {
+      const prev = home.current;
+      home.current = undefined;
+      const api = camRef.current;
+      if (prev && prev !== api.current) api.goTo(prev, !reducedRef.current);
+    };
+  }, [active]);
   return null;
 }
 
@@ -184,8 +203,13 @@ export interface TwinPanelProps {
   banner?: ReactNode;
   /** Disable the pad (replays). */
   padDisabled?: boolean;
-  /** Camera preset to show while set (a replay looks at the device its test checks); cleared → the player's view. */
+  /**
+   * Camera preset to show while set (a replay looks at the device its test checks, and follows the test as it runs);
+   * `''` keeps the focus session without moving; cleared → back to the player's view.
+   */
   focusCamera?: string | undefined;
+  /** The player picked a camera preset (e.g. to stop a replay's automatic camera). */
+  onCameraPick?(id: string): void;
   /** Where the live I/O table is shown, for the fallback text (e.g. "the Briefing tab"). */
   ioHint?: string;
   className?: string;
@@ -216,7 +240,7 @@ function Loading() {
   );
 }
 
-function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, moreControls, faults = [], tools, banner, padDisabled, focusCamera, ioHint = 'the left panel', className }: TwinPanelProps) {
+function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, moreControls, faults = [], tools, banner, padDisabled, focusCamera, onCameraPick, ioHint = 'the left panel', className }: TwinPanelProps) {
   const quality = useGame((s) => s.profile.settings.quality);
   const [webgl] = useState(() => hasWebGL());
   const rootRef = useRef<HTMLDivElement>(null);
@@ -235,6 +259,13 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, moreCont
   }, []);
   // Expanded view: the panel covers the whole window (same DOM node, so the 3D scene is not remounted).
   const [expanded, setExpanded] = useState(false);
+  // picture-in-picture (desktop workspace layout): no HUD in the small view, no full view from it
+  const pip = useTwinLayout()?.pip === true;
+  const pipRef = useRef(pip);
+  pipRef.current = pip;
+  useEffect(() => {
+    if (pip) setExpanded(false);
+  }, [pip]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // an open dialog (hints, celebration, reset…) owns Escape, and F is not ours then either
@@ -246,7 +277,7 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, moreCont
         setExpanded(false);
       } else if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
         const inTwin = !!t && !!rootRef.current?.contains(t);
-        if (inTwin || t === document.body) setExpanded((v) => !v);
+        if ((inTwin || t === document.body) && !pipRef.current) setExpanded((v) => !v);
       }
     };
     window.addEventListener('keydown', onKey, true);
@@ -260,6 +291,19 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, moreCont
       document.body.style.overflow = prev;
     };
   }, [expanded]);
+  // a fly-to the player asked for (alias chip, I/O row) during a replay: the replay's automatic camera stops following
+  // the test, or it would take the view straight back at the next step
+  const cameraPickRef = useRef(onCameraPick);
+  cameraPickRef.current = onCameraPick;
+  const focusRef = useRef(focusCamera);
+  focusRef.current = focusCamera;
+  useEffect(
+    () =>
+      useSceneOverlay.subscribe((s, prev) => {
+        if (s.showSeq !== prev.showSeq && s.showAlias && focusRef.current) cameraPickRef.current?.(`device:${s.showAlias}`);
+      }),
+    [],
+  );
   const expandButton = (
     <button
       type="button"
@@ -274,21 +318,25 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, moreCont
     </button>
   );
   const overlay = (withCamera: boolean) => (
-    <div className="pointer-events-none absolute inset-0 flex flex-col justify-between gap-2 p-2">
+    <div className={cn('pointer-events-none absolute inset-0 flex flex-col justify-between gap-2 p-2', pip && 'hidden')}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {withCamera && <CameraFocus id={focusCamera} />}
-          {withCamera && <CameraBar />}
+          {withCamera && <CameraBar onPick={onCameraPick} />}
           {withCamera && <ShowTagsToggle />}
         </div>
         <div className="pointer-events-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5">
           <ControllerChip runtime={runtime} />
           {tools}
           <InstructorMenu runtime={runtime} controls={faults} />
+          <TwinLayoutButton />
           {expandButton}
         </div>
       </div>
       {banner && <div className="pointer-events-auto mx-auto -mt-1 max-w-[92%]">{banner}</div>}
+      {/* not during a replay: its banner covers the view's middle (the button would sit on the explanation card) and the
+          replay's camera owns the view — alias chips still fly there (and turn the automatic camera off, below) */}
+      {withCamera && !banner && <ShowDeviceButton sceneId={scene.id} focus={definition?.focus} />}
       <div className="flex-1" />
       <div className="flex items-end justify-start">
         <ControlPad runtime={runtime} controls={controls} {...(moreControls ? { moreControls } : {})} disabled={!!padDisabled} compact={padMode !== 'full'} singleRow={padMode === 'row' || (!!padDisabled && padMode === 'compact')} className="max-w-[min(100%,56rem)]" />
@@ -315,6 +363,7 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, moreCont
             <Suspense fallback={null}>
               <View key={viewKey} state={runtime.state} runtime={runtime} />
             </Suspense>
+            <DeviceCamera sceneId={scene.id} focus={definition.focus} />
           </SceneCanvas>
         </ViewBoundary>
       ),

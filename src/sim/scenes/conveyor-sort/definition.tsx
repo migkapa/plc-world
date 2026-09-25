@@ -19,6 +19,17 @@ export const definition: SceneDefinition<ConveyorSortState> = {
     { id: 'pusher', label: 'Pusher & divert', position: [2.15, 2.05, 1.4], target: [0.72, 0.8, -0.72] },
     { id: 'feeder', label: 'Box feeder', position: [-2.2, 1.95, 2.3], target: [-2.95, 1.25, 0.1] },
   ],
+  // automatic camera moves (test replays): device → camera preset that shows it best
+  focus: {
+    start: 'operator', stop: 'operator', estop: 'operator', Start_PB: 'operator', Stop_PB: 'operator', EStop_OK: 'operator',
+    feeder_mode: 'feeder', box_pattern: 'feeder', pe_infeed_fail: 'feeder', boxesFed: 'feeder', PE_Infeed: 'feeder', Feeder_Release: 'feeder',
+    pusherPosition: 'pusher', boxesRejected: 'pusher', missorted: 'pusher',
+    PE_Tall: 'pusher', PE_Divert: 'pusher', Pusher_Extend: 'pusher', Pusher_Extended: 'pusher', Pusher_Retracted: 'pusher',
+    conveyorRunning: 'overview', beltSpeed: 'overview', boxesOnBelt: 'overview', boxesGood: 'overview', jams: 'overview',
+    Conveyor_Run: 'overview', PE_Exit: 'overview',
+    // the 855T stack light stands at the discharge end: the overview shows it with the whole line
+    lightGreen: 'overview', lightAmber: 'overview', lightRed: 'overview', Light_Green: 'overview', Light_Amber: 'overview', Light_Red: 'overview',
+  },
   accent: '#e8b90c',
   environment: 'hall',
   demoRungs: CONVEYOR_DEMO_RUNGS,

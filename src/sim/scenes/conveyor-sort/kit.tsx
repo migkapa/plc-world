@@ -29,7 +29,8 @@ import { sfx, type LoopName, type SfxName } from '../../../audio/sfx';
 import type { Vec3 } from '../../../twin/contracts';
 import { hudRects } from '../../../twin/hud';
 import type { IoPointDef, SimRuntime } from '../../types';
-import { useSceneOverlay } from '../overlay';
+import { matchesHighlight, useSceneOverlay } from '../overlay';
+import { createRing, deviceOnScreen, hideRing, placeRing, projectBox, targetOf, type HighlightRing, type ScreenBox } from '../highlight';
 import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 // ---------------------------------------------------------------------------
@@ -179,6 +180,13 @@ interface ChipEntry {
   info: string[];
   group?: string;
   hovered: boolean;
+  /** Lower-case aliases + operands of the points (device highlight matching). */
+  names: string[];
+  /** Highlighted this frame (useSceneOverlay().highlight names one of its points). */
+  hl: boolean;
+  /** hovered || hl: shows the full chip, laid out first. */
+  hot: boolean;
+  ring: HighlightRing | null;
   // DOM
   el: HTMLDivElement;
   titleEl: HTMLDivElement | null;
@@ -277,6 +285,7 @@ class ChipRegistry {
     e.el.remove();
     e.line.remove();
     e.dot.remove();
+    e.ring?.el.remove();
     if (e.group) {
       const g = this.groups.get(e.group);
       if (g) {
@@ -421,7 +430,8 @@ function collectOccluders(scene: THREE.Scene): THREE.Mesh[] {
   return out;
 }
 
-const byHoverThenY = (a: ChipEntry, b: ChipEntry) => (a.hovered === b.hovered ? a.ay - b.ay : a.hovered ? -1 : 1);
+const byHoverThenY = (a: ChipEntry, b: ChipEntry) => (a.hot === b.hot ? a.ay - b.ay : a.hot ? -1 : 1);
+const _sb: ScreenBox = { x0: 0, y0: 0, x1: 0, y1: 0, cx: 0, cy: 0, front: false, inside: false };
 
 function overlaps(a: Rect, b: Rect) {
   return a.x0 < b.x1 + PAD && a.x1 + PAD > b.x0 && a.y0 < b.y1 + PAD && a.y1 + PAD > b.y0;
@@ -511,6 +521,8 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
   const timers = useRef({ scan: -1e9, text: 0, measure: 0, cursor: 0 });
   const placed = useMemo<Rect[]>(() => [], []);
   const order = useMemo<ChipEntry[]>(() => [], []);
+  /** Highlight bookkeeping: some ring shown last frame; primary alias of the last target report. */
+  const hlState = useRef<{ rings: boolean; reported: string | null }>({ rings: false, reported: null });
 
   useFrame(({ camera: cam, clock, size }) => {
     if (!reg.container) return;
@@ -528,11 +540,17 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
     const doMeasure = t - T.measure > 0.5;
     if (doMeasure) T.measure = t;
     cam.getWorldPosition(_cam);
+    // device highlight (I/O table row, briefing alias chip, objective…): full chip + outline
+    const overlay = useSceneOverlay.getState();
+    const hlList = overlay.highlight;
+    const anyHl = hlList.length > 0;
 
     // 1. visibility, projection, mode
     order.length = 0;
     for (const e of reg.entries) {
-      const want = e.hovered || (pinned && e.points.length + e.info.length > 0);
+      e.hl = anyHl && matchesHighlight(e.names, hlList);
+      e.hot = e.hovered || e.hl;
+      const want = e.hot || (pinned && e.points.length + e.info.length > 0);
       if (!want) {
         if (e.mode !== 'hidden') applyMode(e, 'hidden');
         e.collapsed = false;
@@ -553,6 +571,38 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
       e.ay = (-_v.y * 0.5 + 0.5) * H;
       e.right = e.ax >= e.tx - 2;
       order.push(e);
+    }
+
+    // highlight outlines + where the primary highlighted device is (for the view's "Show" button)
+    const hs = hlState.current;
+    if (anyHl || hs.rings) {
+      const primary = anyHl ? overlay.highlightAlias : null;
+      const hud = hudRects(gl.domElement);
+      let best: ChipEntry | null = null;
+      let bestOn = false;
+      hs.rings = false;
+      for (const e of reg.entries) {
+        if (!e.hl) {
+          if (e.ring) hideRing(e.ring);
+          continue;
+        }
+        if (!e.ring) e.ring = createRing(reg.container);
+        projectBox(e.target, cam, W, H, _sb);
+        placeRing(e.ring, _sb, e.occluded);
+        hs.rings = true;
+        if (primary && matchesHighlight(e.names, [primary])) {
+          const on = deviceOnScreen(_sb, e.occluded, hud);
+          if (!best || (on && !bestOn)) {
+            best = e;
+            bestOn = on;
+          }
+        }
+      }
+      if (primary && (doText || hs.reported !== primary)) {
+        hs.reported = primary;
+        overlay.reportTarget(best ? targetOf(primary, best.target, bestOn, cam, best.ring) : null);
+      }
+      if (!primary) hs.reported = null;
     }
 
     if (order.length === 0) {
@@ -592,7 +642,7 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
       let count = 0;
       let hovered = false;
       for (const m of g.members) {
-        if (m.hovered) hovered = true;
+        if (m.hot) hovered = true;
         if (!order.includes(m)) continue;
         count++;
         minX = Math.min(minX, m.tx);
@@ -601,7 +651,7 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
         maxY = Math.max(maxY, m.ty);
       }
       const collapse = pinned && count > 1 && Math.max(maxX - minX, maxY - minY) < GROUP_SPAN_PX;
-      for (const m of g.members) m.collapsed = collapse && !m.hovered;
+      for (const m of g.members) m.collapsed = collapse && !m.hot;
       if (collapse !== g.shown) {
         g.shown = collapse;
         g.el.style.display = collapse ? 'block' : 'none';
@@ -621,8 +671,8 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
 
     // 4. modes + text
     for (const e of order) {
-      const occluded = e.occluded && !e.hovered;
-      let mode: ChipMode = e.hovered ? 'full' : e.dist > COMPACT_DISTANCE ? 'compact' : 'pinned';
+      const occluded = e.occluded && !e.hot;
+      let mode: ChipMode = e.hot ? 'full' : e.dist > COMPACT_DISTANCE ? 'compact' : 'pinned';
       // info-only chips (instructor controls, junction boxes …) are pinned only near the camera; far away: hover
       if (e.collapsed || occluded || (mode === 'compact' && e.points.length === 0)) mode = 'hidden';
       if (mode !== e.mode) applyMode(e, mode);
@@ -707,7 +757,7 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
         place(r);
       };
       put(e.right);
-      if (!e.hovered && collides(r)) {
+      if (!e.hot && collides(r)) {
         // no free slot on this side: try the other side of the device; a pinned chip that still lands on the HUD
         // or on another chip is not shown (hovering the device shows it)
         placed.pop();
@@ -739,7 +789,7 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
       e.dot.style.display = '';
       e.el.style.opacity = '1';
     };
-    for (const e of order) if (e.hovered && e.mode !== 'hidden') layout(e);
+    for (const e of order) if (e.hot && e.mode !== 'hidden') layout(e);
     for (const g of reg.groups.values()) {
       if (!g.shown) continue;
       if (!g.hasRect) {
@@ -755,7 +805,7 @@ export function TagLayer({ runtime, children }: { runtime: SimRuntime; children:
       g.el.style.display = 'block';
       g.el.style.transform = `translate(${Math.round(r.x0)}px,${Math.round(r.y0)}px)`;
     }
-    for (const e of order) if (!e.hovered && e.mode !== 'hidden') layout(e);
+    for (const e of order) if (!e.hot && e.mode !== 'hidden') layout(e);
     for (const e of order) {
       if (e.mode === 'hidden') {
         e.line.style.display = 'none';
@@ -836,6 +886,10 @@ export function IoHotspot({ runtime, device, aliases, size, position = [0, 0, 0]
       info: info ?? [],
       group,
       hovered: false,
+      names: points.flatMap((p) => [p.alias.toLowerCase(), p.operand.toLowerCase()]),
+      hl: false,
+      hot: false,
+      ring: null,
       el: dom.root,
       titleEl: dom.titleEl,
       rows: dom.rows,

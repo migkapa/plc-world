@@ -39,6 +39,8 @@ import {
   Minus,
   MessageSquareText,
   Moon,
+  Captions,
+  CaptionsOff,
   Pencil,
   Plus,
   Redo2,
@@ -164,6 +166,13 @@ export interface LadderEditorProps {
   /** Initial theme ('dark' default); the header toggle switches it (reported by onThemeChange). */
   theme?: LadderTheme;
   onThemeChange?(theme: LadderTheme): void;
+  /**
+   * Compact operand labels: contacts & coils show the tag name only — no description above it, no alias base tag
+   * under it (both are in the hover card, which then opens faster). The header toggle switches it (reported by
+   * onCompactLabelsChange). Default false.
+   */
+  compactLabels?: boolean;
+  onCompactLabelsChange?(compact: boolean): void;
   /** Show the instruction toolbar (default true unless readOnly). */
   showToolbar?: boolean;
   /** Show the header bar (default true). */
@@ -184,6 +193,11 @@ export interface LadderEditorProps {
   onToggleBit?(operand: string): void;
   /** A rung was accepted from the neutral-text rung editor ("Edit Rung as Text"). */
   onRungTextCommit?(rungIndex: number, text: string): void;
+  /**
+   * Tags to highlight (e.g. the tag behind a failing test in a replay): every instruction whose operand names one of
+   * them — or a member / bit of it — is marked. Case-insensitive; pass alias and address to match both spellings.
+   */
+  highlight?: string[];
   ref?: Ref<LadderEditorHandle>;
 }
 
@@ -423,10 +437,31 @@ const RungRow = memo(function RungRow({ overlay, observe, ...svg }: RungRowProps
 // Small chrome pieces
 // ---------------------------------------------------------------------------
 
-function ChromeButton({ label, onClick, disabled, children, active, className }: { label: string; onClick(): void; disabled?: boolean; children: ReactNode; active?: boolean; className?: string }) {
+function ChromeButton({
+  label,
+  onClick,
+  disabled,
+  children,
+  active,
+  pressed,
+  className,
+  testId,
+}: {
+  label: string;
+  onClick(): void;
+  disabled?: boolean;
+  children: ReactNode;
+  active?: boolean;
+  /** Toggle button state (aria-pressed). */
+  pressed?: boolean;
+  className?: string;
+  testId?: string;
+}) {
   return (
     <button
       type="button"
+      aria-pressed={pressed}
+      data-testid={testId}
       aria-label={label}
       title={label}
       disabled={disabled}
@@ -769,8 +804,16 @@ export function LadderEditor(props: LadderEditorProps) {
   } = props;
   const online = props.online === true && controller !== undefined;
   const showValues = online;
+  const highlightKey = (props.highlight ?? []).map((t) => t.toLowerCase()).join('|');
+  const highlight = useMemo(() => (highlightKey ? new Set(highlightKey.split('|')) : undefined), [highlightKey]);
 
   const [theme, setThemeState] = useState<LadderTheme>(props.theme ?? 'dark');
+  const [compactLabels, setCompactState] = useState(props.compactLabels === true);
+  useEffect(() => {
+    if (props.compactLabels !== undefined) setCompactState(props.compactLabels);
+  }, [props.compactLabels]);
+  const compactRef = useRef(compactLabels);
+  compactRef.current = compactLabels;
   useEffect(() => {
     if (props.theme) setThemeState(props.theme);
   }, [props.theme]);
@@ -875,15 +918,15 @@ export function LadderEditor(props: LadderEditorProps) {
     // every rung is laid out at the viewport width: long rungs wrap onto continuation lines (Studio
     // 5000 style) instead of widening the whole routine; only an element wider than the viewport widens
     // its own rung (the pinned margin keeps rung numbers visible then)
-    const key = `${baseW}|${showValues}|${tagVersion}`;
+    const key = `${baseW}|${showValues}|${tagVersion}|${compactLabels}`;
     return rungs.map((r) => {
       const c = cache.get(r);
       if (c && c.key === key) return c.layout;
-      const layout = layoutRung(r, { width: baseW, wrap: true, ...(tagMeta ? { tagMeta } : {}), showValues });
+      const layout = layoutRung(r, { width: baseW, wrap: true, ...(tagMeta ? { tagMeta } : {}), showValues, ...(compactLabels ? { showDescriptions: false, showAliases: false } : {}) });
       cache.set(r, { key, layout });
       return layout;
     });
-  }, [rungs, baseW, showValues, tagVersion, tagMeta]);
+  }, [rungs, baseW, showValues, tagVersion, tagMeta, compactLabels]);
   const contentW = layouts.reduce((w, l) => Math.max(w, l.width), baseW) * zoom;
   const layoutById = useMemo(() => {
     const m = new Map<string, { layout: RungLayout; index: number }>();
@@ -1795,7 +1838,7 @@ export function LadderEditor(props: LadderEditorProps) {
     hoverTimer.current = window.setTimeout(() => {
       const content = hoverContent(t);
       if (content) setHover({ x, y, content });
-    }, t.type === 'marker' ? 150 : 550);
+    }, t.type === 'marker' ? 150 : compactRef.current && (t.type === 'operand' || t.type === 'element') ? 250 : 550); // compact labels: descriptions are in the card, open it sooner
   };
 
   // HTML5 drag & drop from the toolbar
@@ -2427,6 +2470,21 @@ export function LadderEditor(props: LadderEditorProps) {
             </ChromeButton>
           </span>
           <div className="mx-0.5 h-5 w-px shrink-0 bg-[var(--ld-chrome-border)]" />
+          <ChromeButton
+            label={compactLabels ? 'Compact labels on: tag names only (hover a tag for its description) — click to show descriptions' : 'Compact labels: tag names only, descriptions on hover'}
+            onClick={() => {
+              const next = !compactLabels;
+              setCompactState(next);
+              props.onCompactLabelsChange?.(next);
+            }}
+            pressed={compactLabels}
+            active={compactLabels}
+            className="shrink-0"
+            testId="ld-compact-labels"
+          >
+            {compactLabels ? <CaptionsOff size={14} /> : <Captions size={14} />}
+            <span className="hidden text-[11px] @4xl:inline">{compactLabels ? 'Tags only' : 'Labels'}</span>
+          </ChromeButton>
           <ChromeButton label={theme === 'dark' ? 'Studio 5000 classic look' : 'Dark look'} onClick={() => setTheme(theme === 'dark' ? 'classic' : 'dark')} className="shrink-0">
             {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
             <span className="hidden text-[11px] @3xl:inline">{theme === 'dark' ? 'Classic' : 'Dark'}</span>
@@ -2475,6 +2533,7 @@ export function LadderEditor(props: LadderEditorProps) {
                 forcesVersion={forcesVersion}
                 {...(drop?.rungId === r.id ? { dropGap: drop.gap } : {})}
                 showValues={showValues}
+                {...(highlight ? { highlight } : {})}
                 register={register}
                 observe={observe}
                 overlay={overlayFor(r, layout)}

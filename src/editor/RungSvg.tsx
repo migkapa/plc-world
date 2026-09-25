@@ -164,6 +164,11 @@ export interface RungSvgProps {
   /** Hide the margin (mini renderings). */
   bare?: boolean;
   /**
+   * Operands to highlight (lower-case tag names / addresses, e.g. the tag behind a failing test): every operand that
+   * names one of them — or a member / bit of it — is marked, and so is its instruction.
+   */
+  highlight?: ReadonlySet<string>;
+  /**
    * The margin (rung number, verify marker) is rendered separately by the host with `<RungMargin>`
    * (the ladder editor pins it with position: sticky so it stays visible when scrolling sideways).
    */
@@ -223,20 +228,30 @@ function Glyph({ n }: { n: InstrLayout }) {
   );
 }
 
+/** Does operand text `t` name a highlighted tag (itself, or a member / bit / element of it)? */
+export function operandHighlighted(t: string, hl: ReadonlySet<string> | undefined): boolean {
+  if (!hl || hl.size === 0 || t === '?' || t === '') return false;
+  const l = t.toLowerCase();
+  return hl.has(l) || hl.has(l.replace(/[.[].*$/, ''));
+}
+
 function InstrView({
   n,
   sel,
   errs,
   forceOf,
   showValues,
+  highlight,
 }: {
   n: InstrLayout;
   sel: LadderSelection | undefined;
   errs: readonly VerifyError[] | undefined;
   forceOf: ((operand: string) => boolean | number | undefined) | undefined;
   showValues: boolean;
+  highlight?: ReadonlySet<string> | undefined;
 }) {
   const selected = sel?.elementId === n.id;
+  const hlOps = highlight && highlight.size > 0 ? n.operands.filter((o) => operandHighlighted(o.text, highlight)).map((o) => o.index) : [];
   const elErrs = errs?.filter((e) => e.elementId === n.id);
   const hasErr = elErrs?.some((e) => e.severity === 'error');
   const hasWarn = !hasErr && elErrs && elErrs.length > 0;
@@ -246,6 +261,7 @@ function InstrView({
     <g className="ld-i" data-el={n.id}>
       <rect className="ld-cell" x={cell.x} y={cell.y} width={cell.w} height={cell.h} rx={5} />
       {(hasErr || hasWarn) && <rect className={hasErr ? 'ld-errbox' : 'ld-warnbox'} x={cell.x} y={cell.y} width={cell.w} height={cell.h} />}
+      {hlOps.length > 0 && <rect className="ld-hlcell" x={cell.x - 1.5} y={cell.y - 1.5} width={cell.w + 3} height={cell.h + 3} data-highlight="" />}
       {selected && <rect className="ld-selbox" x={cell.x} y={cell.y} width={cell.w} height={cell.h} />}
       <g data-sym="">
         <Glyph n={n} />
@@ -258,6 +274,7 @@ function InstrView({
         const cls = cn(`ld-t-${o.cls}`, missing && 'ld-t-missing', forced !== undefined && 'ld-t-forced', o.inlineValue && 'ld-iv');
         return (
           <g key={`o${o.index}`}>
+            {hlOps.includes(o.index) && <rect className="ld-hlop" x={o.hit.x - 1} y={o.hit.y} width={o.hit.w + 2} height={o.hit.h} />}
             {opSel && <rect className="ld-opsel" x={o.hit.x} y={o.hit.y} width={o.hit.w} height={o.hit.h} />}
             {o.inlineValue && showValues ? (
               <text className={cls} x={o.x} y={o.y} textAnchor={o.anchor} data-iv={o.inlineValue} data-lit={o.shown} />
@@ -501,7 +518,7 @@ function RungSvgImpl(p: RungSvgProps) {
       {caret}
       {L.nodes.map((n) =>
         n.kind === 'instr' ? (
-          <InstrView key={n.id} n={n} sel={sel} errs={errors} forceOf={p.forceOf} showValues={showValues} />
+          <InstrView key={n.id} n={n} sel={sel} errs={errors} forceOf={p.forceOf} showValues={showValues} highlight={p.highlight} />
         ) : (
           <BranchView key={n.id} n={n} sel={sel} errs={errors} />
         ),

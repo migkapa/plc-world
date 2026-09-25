@@ -50,6 +50,16 @@ Demo programs & 3D views
   out of it with `hudRects(canvas)` (`src/twin/hud.ts`: the overlay's outermost `pointer-events: auto` boxes, in
   canvas pixels) — both TagLayers treat those boxes as obstacles. With `hudFraming` (the workspace twin panel) the
   projection centre moves into the band the HUD leaves free, so camera presets frame their target above the pad.
+- **Device highlight** ("where is this device?"): `useSceneOverlay().setHighlight(aliases, source)` /
+  `clearHighlight(source)` / `showDevice(alias)` (`src/sim/scenes/overlay.ts`). Both TagLayers match every `IoTag` /
+  `IoHotspot` whose lines / I/O points name a highlighted alias or its address (case-insensitive), show its full chip
+  (cyan border) and draw a pulsing cyan outline around the on-screen footprint of its hover box
+  (`src/sim/scenes/highlight.ts`: plain DOM in the chip layer; dashed when the device is behind a wall / panel back;
+  static for reduced motion). They report where the first highlighted alias is (`target`: world position, radius,
+  on screen or which side it is off to) for the twin's "Show" button and the fly-to camera
+  (`src/app/workspace/highlight/DeviceCamera.tsx`). New scene devices get all of this by carrying an `IoTag` /
+  `IoHotspot` with the right alias — nothing scene-specific to add; a hover box that fits the device keeps the
+  outline tight.
 
 ---
 

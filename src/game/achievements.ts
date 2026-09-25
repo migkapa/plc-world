@@ -41,7 +41,9 @@ export type GameEvent =
   | { type: 'showroomVisited'; device?: string }
   | { type: 'referenceViewed'; mnemonic?: string }
   | { type: 'profileRenamed' }
-  | { type: 'streakUpdated'; days: number };
+  | { type: 'streakUpdated'; days: number }
+  /** A guided tour ended (`skipped`: the player closed it before the last step). */
+  | { type: 'tutorialFinished'; tutorialId: string; skipped: boolean };
 
 export type GameEventType = GameEvent['type'];
 
@@ -61,6 +63,7 @@ export const STAT = {
   testRunsFailed: 'testRunsFailed',
   missionClears: 'missionClears',
   renamed: 'renamed',
+  tutorialsCompleted: 'tutorialsCompleted',
 } as const;
 
 /** New stats object with the event's counters applied (pure). */
@@ -111,6 +114,9 @@ export function applyEventToStats(stats: Readonly<Record<string, number>> | unde
       inc(STAT.renamed);
       break;
     case 'streakUpdated':
+      break;
+    case 'tutorialFinished':
+      if (!event.skipped) inc(STAT.tutorialsCompleted);
       break;
   }
   return out;

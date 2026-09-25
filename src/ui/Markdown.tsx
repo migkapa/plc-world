@@ -1,5 +1,18 @@
-import { Fragment, type ReactNode } from 'react';
+import { createContext, Fragment, useContext, type ReactNode } from 'react';
 import { cn } from './cn';
+
+/**
+ * Optional renderer for inline `code` spans of every <Markdown> below the provider (e.g. the mission workspace turns
+ * I/O alias tags into interactive chips). Return null / undefined to keep the default rendering.
+ */
+export const MarkdownCodeContext = createContext<((code: string) => ReactNode) | null>(null);
+
+function InlineCode({ text }: { text: string }) {
+  const render = useContext(MarkdownCodeContext);
+  const custom = render?.(text);
+  if (custom !== null && custom !== undefined) return <>{custom}</>;
+  return <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[0.85em] text-emerald-300">{text}</code>;
+}
 
 /**
  * Tiny, safe markdown renderer for mission briefings & instruction docs (no HTML injection).
@@ -157,12 +170,7 @@ function inline(text: string): ReactNode {
           {inline(p.slice(2, -2))}
         </strong>
       );
-    if (p.startsWith('`') && p.endsWith('`'))
-      return (
-        <code key={i} className="rounded bg-black/40 px-1 py-0.5 font-mono text-[0.85em] text-emerald-300">
-          {p.slice(1, -1)}
-        </code>
-      );
+    if (p.startsWith('`') && p.endsWith('`')) return <InlineCode key={i} text={p.slice(1, -1)} />;
     if (p.startsWith('*') && p.endsWith('*') && p.length > 2) return <em key={i}>{inline(p.slice(1, -1))}</em>;
     const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(p);
     if (link) {

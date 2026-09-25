@@ -359,6 +359,8 @@ export interface LayoutOptions {
   showValues?: boolean;
   /** Tag descriptions above contacts/coils (default true). */
   showDescriptions?: boolean;
+  /** Alias base tags `<Local:1:I.Data.0>` under the tag name of contacts/coils (default true). */
+  showAliases?: boolean;
   /** Rung comment box (default true). */
   showComment?: boolean;
   /** Left margin (default LD.margin). */
@@ -469,7 +471,7 @@ function measureContactCoil(el: InstructionNode, look: ReturnType<typeof glyphOf
   // the full operand is always drawn (Zone01 / Zone02 variants must stay distinguishable)
   const shown = operand;
   const meta = operand && isTagOperand(operand) ? opts.tagMeta?.(operand) : undefined;
-  const alias = meta?.aliasFor ? `<${meta.aliasFor}>` : undefined;
+  const alias = opts.showAliases !== false && meta?.aliasFor ? `<${meta.aliasFor}>` : undefined;
   const coil = look.display === 'coil';
   const multi = look.text !== undefined && look.text.length > 1;
   // half width of the glyph = where the lead wires attach (contact bars / coil arcs)

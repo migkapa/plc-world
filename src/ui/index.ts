@@ -4,7 +4,7 @@ export { Panel } from './Panel';
 export { Badge, Kbd, type BadgeTone } from './Badge';
 export { Modal } from './Modal';
 export { Toaster, toast, useToasts } from './toast';
-export { Markdown } from './Markdown';
+export { Markdown, MarkdownCodeContext } from './Markdown';
 export { Stars, ProgressBar, Tabs, LedDot, type TabDef } from './misc';
 export { GameIcon, gameIcon } from './GameIcon';
 export { useFocusTrap, tabbables, type FocusTrapOptions } from './focusTrap';

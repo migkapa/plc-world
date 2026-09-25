@@ -74,6 +74,47 @@ src/
 
 ★ = shared contract; change only with care (other modules compile against it).
 
+### Learning aids in the mission workspace (`src/app/workspace/onboarding/`)
+
+- **Guided first rung** (mission 1-1): coach marks (`TourCoachMarks.tsx`: spotlight + callout, `Alt+G` returns the
+  keyboard to the card) driven by the headless step judge `firstRungTour.ts` (plant → flip Switch 0 → click rung → XIC
+  → Switch_0 → OTE → Light_0 → applied online → flip again → Verify & Test). Starts by itself on the first visit
+  until finished or skipped (`profile.tutorials`, `useGame().finishTutorial()` → `tutorialFinished` game event), and
+  replays from the mission bar's **?** menu (`HelpMenu.tsx`).
+- **Live objectives** (`liveObjectives.ts`, `useLiveObjectives.ts`, `LiveChip.tsx`): ~800 ms after each accepted
+  online edit / tag change the mission's tests re-run in the background (`startTestRun` in idle-time slices of
+  4 ms, paused during Verify & Test) and `objectiveStates` marks what the current program already does — soft
+  dashed "live" marks, never graded; a "Looks good — press Verify & Test" nudge when everything passes.
+- **Try it now** (`tryIt.ts`, `TryItNow.tsx`): after an online edit, a callout at the operator control that
+  exercises the edited rung (control → input alias and its at-rest / operated value found by probing the headless
+  plant; tests give the order). Series contacts that are false at rest are all named — an AND needs every input
+  ("Flip Switch 2 and Switch 3…"); switches already in place are skipped. It waits while a ladder operand / value box
+  is open, and in picture-in-picture (no pad) offers **Show the controls** (`requestSplitView()` in `layoutPrefs.ts`).
+- Per-device switches for both (live checks, tips) live in `assistStore.ts` (the **?** menu).
+
+### Editing layout & "where is this device?" (`WorkspaceLayout.tsx`, `TwinLayout.tsx`, `workspace/highlight/`)
+
+- **Picture-in-picture twin** (desktop): the twin toolbar's PiP button (and its menu: Split / Picture-in-picture /
+  Auto) collapses the twin panel so the ladder gets the whole center column; the same twin node becomes a fixed,
+  still-live panel in a corner of the ladder's rung area (never remounted). Click / Enter restores the split, drag or
+  arrow keys move it to another corner, the inner-corner grip or +/- resizes it; dragging the splitter down also
+  restores. **Auto**: PiP after 2 s of keyboard focus inside the ladder, split again when the player clicks / tabs
+  out of it (dialogs opened from the ladder don't count). A test replay (`twinWanted`) always shows the split view.
+  Remembered per device in `layoutPrefs.ts` (`plcw-layout-prefs-v1`); the PiP / Auto choice per workspace page (the
+  `WorkspaceLayout` id: a mission PiP never hides the sandbox's operator pad), corner, size and the ladder's **compact
+  labels** (`LadderEditor compactLabels`: tag names only, descriptions / alias addresses in the hover card) for all.
+  A bottom-right PiP moves the ladder's "Edits applied online" chip beside it (`pipChipVars`).
+- **3D device highlight**: hovering (or focusing) an I/O table row, an alias chip in the briefing / objectives /
+  hints (`AliasChips.tsx`: I/O tags in Markdown code spans become buttons via `MarkdownCodeContext`) or an objective
+  (`objectiveDevices.ts`: the tags it names, else the devices its proving tests operate / check, ranked by its
+  words) sets `useSceneOverlay().setHighlight(...)`; the scene kits outline the devices (see docs/SCENES.md). When
+  the device is off-screen (outside the view, behind a wall, under the operator pad) the twin shows **Show
+  <alias>** at the edge it is beyond (not during a test replay: its banner owns that space, and a chip clicked
+  then also turns the replay's automatic camera off); clicking it — or a chip — flies the camera there (`DeviceCamera.tsx`: the
+  scene's `focus` preset if it really shows the device, else the preset showing it best, else a computed close-up;
+  every candidate checked for framing inside the HUD-free band and line of sight). Reduced motion: camera cuts,
+  static outline.
+
 ## Runtime data flow
 
 ```

@@ -27,7 +27,8 @@ import type { Vec3 } from '../../../twin/contracts';
 import { filletedPath } from '../../../twin/devices/panel/Wire';
 import { hitsHud, hudRects, type HudRect } from '../../../twin/hud';
 import type { SimRuntime } from '../../types';
-import { useSceneOverlay } from '../overlay';
+import { matchesHighlight, useSceneOverlay } from '../overlay';
+import { createRing, deviceOnScreen, hideRing, placeRing, projectBox, SightCheck, targetOf, type HighlightRing, type ScreenBox } from '../highlight';
 import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 // ---------------------------------------------------------------------------
@@ -945,6 +946,13 @@ interface TagEntry {
   /** Proxy-box center (for the projected device size / pill placement). */
   center: THREE.Object3D;
   anchor: THREE.Object3D;
+  /** The invisible hover box (unit box scaled to the device): its screen footprint is the highlight outline. */
+  proxy: THREE.Object3D;
+  /** Lower-case aliases + addresses of the lines (highlight matching). */
+  names: string[];
+  /** Highlighted this frame (useSceneOverlay().highlight names one of its lines). */
+  hl: boolean;
+  ring: HighlightRing | null;
   /** Half the proxy face size (m), for the projected size. */
   radius: number;
   /** Hide when the camera is behind the device's panel (its +Z). */
@@ -1037,6 +1045,12 @@ class TagRegistry {
   showTags = false;
   boxes: THREE.Box3[] = [];
   seq = 0;
+  /** Some highlight ring was shown last frame. */
+  ringsShown = false;
+  /** Primary highlight alias of the last target report. */
+  reported: string | null = null;
+  /** Line of sight to highlighted devices (real meshes: the occluder boxes are too coarse to say "hidden"). */
+  sight = new SightCheck();
 
   add(e: TagEntry) {
     this.entries.set(e.id, e);
@@ -1059,6 +1073,7 @@ class TagRegistry {
     if (!e) return;
     e.el.remove();
     e.pill.remove();
+    e.ring?.el.remove();
     this.entries.delete(id);
     if (e.group) {
       const gc = this.groups.get(e.group.id);
@@ -1096,6 +1111,9 @@ const _inv = new THREE.Matrix4();
 const _tmp = new THREE.Vector3();
 const _n = new THREE.Vector3();
 const _q = new THREE.Quaternion();
+const _sb: ScreenBox = { x0: 0, y0: 0, x1: 0, y1: 0, cx: 0, cy: 0, front: false, inside: false };
+/** Chip border of a highlighted device (matches the outline). */
+const HL_BORDER = 'rgba(103,232,249,0.9)';
 
 function formatValue(l: Line): string {
   if (l.format) return l.format();
@@ -1149,6 +1167,7 @@ const clamp = (v: number, lo: number, hi: number) => (hi < lo ? (lo + hi) / 2 : 
  */
 export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { children: ReactNode; occluders?: Array<[Vec3, Vec3]>; pinStyle?: 'chip' | 'pill' }) {
   const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
   const frame = useRef<THREE.Group>(null);
   const reg = useMemo(() => new TagRegistry(), []);
   const showTags = useSceneOverlay((s) => s.showTags);
@@ -1204,10 +1223,18 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
     const W = size.width;
     const H = size.height;
     const hud = hudRects(gl.domElement);
+    // device highlight (I/O table row, briefing alias chip, objective…): the device shows its full chip + an outline
+    const overlay = useSceneOverlay.getState();
+    const hlList = overlay.highlight;
+    const anyHl = hlList.length > 0;
+    const hot = (e: TagEntry) => reg.hovered === e.id || e.hl;
 
     for (const e of reg.entries.values()) {
-      const hovered = reg.hovered === e.id;
       const act = !e.active || e.active();
+      const wasHl = e.hl;
+      e.hl = anyHl && act && matchesHighlight(e.names, hlList);
+      if (e.hl !== wasHl) e.box.style.borderColor = e.hl ? HL_BORDER : 'rgba(148,163,184,0.35)';
+      const hovered = reg.hovered === e.id || e.hl;
       const pinned = reg.showTags && act && e.pin;
       let wantChip = act && (hovered || (reg.showTags && !pillMode));
       if (wantChip && !hovered) {
@@ -1339,8 +1366,42 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
       placed.push(e);
     }
 
+    // ---- highlight outlines + where the primary highlighted device is (for the view's "Show" button) ----
+    if (anyHl || reg.ringsShown) {
+      const primary = anyHl ? overlay.highlightAlias : null;
+      let best: TagEntry | null = null;
+      let bestOn = false;
+      reg.ringsShown = false;
+      for (const e of reg.entries.values()) {
+        if (!e.hl) {
+          if (e.ring) hideRing(e.ring);
+          continue;
+        }
+        if (!e.ring) e.ring = createRing(cont);
+        projectBox(e.proxy, camera, W, H, _sb);
+        const hidden = e.back || (_sb.front && reg.sight.blocked(scene, camera, e.proxy, state.clock.elapsedTime * 1000));
+        placeRing(e.ring, _sb, hidden);
+        reg.ringsShown = true;
+        if (primary && matchesHighlight(e.names, [primary])) {
+          const on = deviceOnScreen(_sb, hidden, hud);
+          if (!best || (on && !bestOn)) {
+            best = e;
+            bestOn = on;
+          }
+        }
+      }
+      if (primary && (doText || reg.reported !== primary)) {
+        reg.reported = primary;
+        overlay.reportTarget(best ? targetOf(primary, best.proxy, bestOn, camera, best.ring) : null);
+      }
+      if (!primary) {
+        reg.reported = null;
+        reg.sight.reset();
+      }
+    }
+
     // ---- full chips: hovered first, then near-to-far; (legacy pinned) push overlapping chips upward ----
-    placed.sort((a, b) => (a.id === reg.hovered ? -1 : b.id === reg.hovered ? 1 : a.depth - b.depth));
+    placed.sort((a, b) => (hot(a) ? (hot(b) ? a.depth - b.depth : -1) : hot(b) ? 1 : a.depth - b.depth));
     const GAP = 3;
     rects.length = 0;
     for (let i = 0; i < placed.length; i++) {
@@ -1366,7 +1427,7 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
       let x = clamp(e.x, e.w / 2 + EDGE, W - e.w / 2 - EDGE);
       let bottom = clamp(e.y - 6 - nudge, e.h + EDGE, H - EDGE);
       if (hud.length > 0 && hitsHud({ x: x - e.w / 2, y: bottom - e.h, w: e.w, h: e.h }, hud)) {
-        const alt = chipOutsideHud(e, x, bottom, hud, e.id === reg.hovered ? null : rects, W, H);
+        const alt = chipOutsideHud(e, x, bottom, hud, hot(e) ? null : rects, W, H);
         if (alt) {
           x = alt[0];
           bottom = alt[1];
@@ -1380,7 +1441,7 @@ export function TagLayer({ children, occluders = [], pinStyle = 'chip' }: { chil
         if (lead !== e.lnudge) e.leader.style.height = `${lead.toFixed(1)}px`;
         e.lnudge = lead;
         e.el.style.transform = `translate(${x.toFixed(1)}px,${(bottom + lead).toFixed(1)}px) translate(-50%,-100%)`;
-        e.el.style.zIndex = e.id === reg.hovered ? '10' : '1';
+        e.el.style.zIndex = hot(e) ? '10' : '1';
       }
     }
 
@@ -1647,7 +1708,7 @@ function buildGroupChip(g: TagGroup): GroupChip {
   return { g, el, body, members: [], text: '', shown: false, collapse: false, w: 0, h: 0, lx: -1e9, ly: -1e9 };
 }
 
-type ChipParts = Omit<TagEntry, 'anchor' | 'frame' | 'center' | 'radius' | 'facing' | 'pin' | 'group' | 'order' | 'active'>;
+type ChipParts = Omit<TagEntry, 'anchor' | 'frame' | 'center' | 'proxy' | 'radius' | 'facing' | 'pin' | 'group' | 'order' | 'active'>;
 
 function buildChip(id: string, title: string, lines: IoTagLine[]): ChipParts {
   const el = document.createElement('div');
@@ -1715,6 +1776,9 @@ function buildChip(id: string, title: string, lines: IoTagLine[]): ChipParts {
   return {
     id,
     lines,
+    names: lines.flatMap((l) => (l.address ? [l.alias, l.address] : [l.alias])).map((n) => n.toLowerCase()),
+    hl: false,
+    ring: null,
     el,
     box,
     title: t,
@@ -1856,6 +1920,7 @@ export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, ti
   const frameRef = useRef<THREE.Group>(null);
   const anchorRef = useRef<THREE.Group>(null);
   const centerRef = useRef<THREE.Group>(null);
+  const proxyRef = useRef<THREE.Mesh>(null);
   const id = useMemo(() => `tag${++tagSeq}`, []);
   const linesRef = useRef(lines);
   linesRef.current = lines;
@@ -1865,13 +1930,14 @@ export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, ti
   const radius = Math.max(size[0], size[1]) / 2;
   const groupKey = group ? `${group.id}|${group.label}|${group.mode ?? ''}` : '';
   useLayoutEffect(() => {
-    if (!reg || !anchorRef.current || !frameRef.current || !centerRef.current) return;
+    if (!reg || !anchorRef.current || !frameRef.current || !centerRef.current || !proxyRef.current) return;
     const e: TagEntry = {
       ...buildChip(id, title, linesRef.current),
       order: ++reg.seq,
       anchor: anchorRef.current,
       frame: frameRef.current,
       center: centerRef.current,
+      proxy: proxyRef.current,
       radius,
       facing,
       pin,
@@ -1948,6 +2014,7 @@ export function IoTag({ position, rotation, size, center = [0, 0, 0], anchor, ti
     <group ref={frameRef} position={position} rotation={rotation}>
       {children}
       <mesh
+        ref={proxyRef}
         visible={false}
         geometry={KBOX()}
         position={center}

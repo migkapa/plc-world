@@ -18,7 +18,7 @@ import { CHAPTERS, getChapter } from './chapters';
 import { MISSIONS, getMission, missionsByChapter } from './missions';
 import { levelForXp } from './ranks';
 import type { TagDef } from '../plc/types';
-import type { MissionDef, MissionProgress, MissionRunResult, PlayerProfile } from './types';
+import type { MissionDef, MissionProgress, MissionRunResult, PlayerProfile, TutorialRecord } from './types';
 
 export const PROFILE_STORAGE_KEY = 'plc-world-profile-v1';
 export const PROFILE_VERSION = 1;
@@ -100,6 +100,13 @@ export function normalizeProfile(raw: unknown): PlayerProfile {
     const stats: Record<string, number> = {};
     for (const [k, v] of Object.entries(raw.stats)) if (typeof v === 'number' && Number.isFinite(v)) stats[k] = v;
     p.stats = stats;
+  }
+  if (isObj(raw.tutorials)) {
+    const tutorials: Record<string, TutorialRecord> = {};
+    for (const [k, v] of Object.entries(raw.tutorials)) {
+      if (isObj(v) && (v.status === 'completed' || v.status === 'skipped')) tutorials[k] = { status: v.status, at: num(v.at, 0) };
+    }
+    p.tutorials = tutorials;
   }
   return p;
 }
@@ -307,6 +314,11 @@ export interface GameState {
   completeMission(id: string, result: MissionRunResult, durationMs?: number): CompletionOutcome;
   /** Record a game event; returns newly unlocked achievement ids. */
   recordEvent(event: GameEvent): string[];
+  /**
+   * A guided tour ended: remember it (so it does not start by itself again) and record a `tutorialFinished` event.
+   * A completed tour stays completed when a replay is skipped. Returns newly unlocked achievement ids.
+   */
+  finishTutorial(tutorialId: string, status: TutorialRecord['status']): string[];
   isUnlocked(missionId: string): boolean;
   isChapterUnlocked(chapterId: string): boolean;
   setSettings(settings: Partial<PlayerProfile['settings']>): void;
@@ -495,6 +507,14 @@ export const useGame = create<GameState>()(
         },
 
         recordEvent,
+
+        finishTutorial(tutorialId, status) {
+          const now = gameClock.now();
+          const prev = get().profile.tutorials?.[tutorialId];
+          const kept: TutorialRecord['status'] = prev?.status === 'completed' ? 'completed' : status;
+          set((s) => ({ profile: { ...s.profile, tutorials: { ...(s.profile.tutorials ?? {}), [tutorialId]: { status: kept, at: now } } } }));
+          return recordEvent({ type: 'tutorialFinished', tutorialId, skipped: status === 'skipped' });
+        },
 
         isUnlocked(missionId) {
           return isMissionUnlockedFor(get().profile, missionId);

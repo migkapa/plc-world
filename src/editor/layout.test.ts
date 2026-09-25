@@ -196,6 +196,20 @@ describe('layoutRung', () => {
     expect(grtOn.status).toEqual([]);
   });
 
+  it('compact labels: tag name only (no description, no alias target), a shorter rung', () => {
+    const r = parseRung('XIC(Start_PB)OTE(Motor);');
+    const tagMeta = (op: string) => (op === 'Start_PB' ? { description: 'Green start push button on the operator station', aliasFor: 'Local:1:I.Data.0' } : undefined);
+    const full = layoutRung(r, { width: 600, tagMeta });
+    const compact = layoutRung(r, { width: 600, tagMeta, showDescriptions: false, showAliases: false });
+    const x = instr(compact, r, 0);
+    expect(x.texts.filter((t) => t.cls === 'desc' || t.cls === 'alias')).toEqual([]);
+    expect(x.operands[0]!.text).toBe('Start_PB');
+    expect(compact.height).toBeLessThan(full.height);
+    // descriptions only: the alias target stays
+    const noDesc = layoutRung(r, { width: 600, tagMeta, showDescriptions: false });
+    expect(instr(noDesc, r, 0).texts.find((t) => t.cls === 'alias')?.text).toBe('<Local:1:I.Data.0>');
+  });
+
   it('shows descriptions and alias targets above contacts', () => {
     const r = parseRung('XIC(Start_PB)OTE(Motor);');
     const l = layoutRung(r, {

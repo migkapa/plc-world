@@ -3,7 +3,7 @@
  * instruction reference), revealed hints and the plant's I/O table with live values.
  */
 import { BookOpen, CheckCircle2, Circle, Cpu, Lightbulb, ListChecks, Plug, XCircle } from 'lucide-react';
-import { memo, type ReactNode } from 'react';
+import { memo, useMemo, type ReactNode } from 'react';
 import { Link } from 'wouter';
 import { objectiveStates } from '../../game/objectives';
 import type { MissionDef, TestResult } from '../../game/types';
@@ -12,6 +12,10 @@ import type { SceneLogic, SimRuntime } from '../../sim/types';
 import { Badge, Markdown, cn } from '../../ui';
 import { routes } from '../routes';
 import { IoTable } from './IoTable';
+import { LiveMark, LiveNote } from './onboarding/LiveChip';
+import { AliasChipScope, HighlightLi } from './highlight/AliasChips';
+import { objectiveDevices } from './highlight/objectiveDevices';
+import type { ObjectiveState } from '../../game/objectives';
 
 export { objectiveStates, type ObjectiveState } from '../../game/objectives';
 
@@ -73,6 +77,16 @@ export interface BriefingPanelProps {
   completed: boolean;
   hintsRevealed: ReadonlyArray<string>;
   onShowHints?(): void;
+  /**
+   * Live objectives (background checks of the current program, not graded): soft marks next to the objectives the
+   * program already satisfies. `stale` dims them while the program changed since the check.
+   */
+  live?: { states: ReadonlyArray<ObjectiveState>; stale: boolean; allPassed: boolean } | null;
+  /**
+   * The program changed since the graded run behind `results`: its ✓ / ✗ marks describe an older program, so they are
+   * shown greyed as "last run" (only the live marks read as current).
+   */
+  gradedStale?: boolean;
 }
 
 /** The briefing Markdown only depends on the mission (not re-parsed when results arrive). */
@@ -80,8 +94,12 @@ const BriefingText = memo(function BriefingText({ source }: { source: string }) 
   return <Markdown source={source} />;
 });
 
-function BriefingPanelImpl({ mission, scene, controller, runtime, results, completed, hintsRevealed, onShowHints }: BriefingPanelProps) {
+function BriefingPanelImpl({ mission, scene, controller, runtime, results, completed, hintsRevealed, onShowHints, live, gradedStale = false }: BriefingPanelProps) {
   const states = objectiveStates(mission, results, completed);
+  const ran = results.length > 0 && results.every((r) => r !== undefined);
+  const lastRun = gradedStale && ran;
+  // I/O tags in the texts are chips (hover: find the device in 3D, click: show it); an objective highlights its devices
+  const objectiveAliases = useMemo(() => mission.objectives.map((_, i) => objectiveDevices(mission, scene, i)), [mission, scene]);
   return (
     <div className="space-y-5 p-4" data-testid="briefing">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -102,15 +120,42 @@ function BriefingPanelImpl({ mission, scene, controller, runtime, results, compl
           {mission.objectives.map((o, i) => {
             const st = states[i] ?? 'pending';
             return (
-              <li key={i} className="flex items-start gap-2 text-[13px]">
-                <span className="mt-0.5 shrink-0">
-                  {st === 'passed' ? <CheckCircle2 size={15} className="text-emerald-400" /> : st === 'failed' ? <XCircle size={15} className="text-red-400" /> : <Circle size={15} className="text-slate-600" />}
+              <HighlightLi key={i} aliases={objectiveAliases[i] ?? []} className="flex items-start gap-2 text-[13px]">
+                <span
+                  className="mt-0.5 shrink-0"
+                  {...(lastRun && st !== 'pending'
+                    ? { title: `Last Verify & Test: ${st === 'passed' ? 'met' : 'failed'} — your program changed since`, 'data-last-run': '' }
+                    : {})}
+                  data-state={st}
+                >
+                  {lastRun ? (
+                    st === 'passed' ? (
+                      <CheckCircle2 size={15} className="text-slate-500" aria-label="met in the last run" />
+                    ) : st === 'failed' ? (
+                      <XCircle size={15} className="text-slate-500" aria-label="failed in the last run" />
+                    ) : (
+                      <Circle size={15} className="text-slate-600" />
+                    )
+                  ) : st === 'passed' ? (
+                    <CheckCircle2 size={15} className="text-emerald-400" />
+                  ) : st === 'failed' ? (
+                    <XCircle size={15} className="text-red-400" />
+                  ) : (
+                    <Circle size={15} className="text-slate-600" />
+                  )}
                 </span>
-                <Markdown source={o} className={cn('text-[13px]', st === 'passed' ? 'text-slate-400' : 'text-slate-200')} />
-              </li>
+                <Markdown source={o} className={cn('text-[13px]', st === 'passed' && !lastRun ? 'text-slate-400' : 'text-slate-200')} />
+                {live && <LiveMark state={live.states[i]} stale={live.stale} />}
+              </HighlightLi>
             );
           })}
         </ul>
+        {lastRun && states.some((s) => s !== 'pending') && (
+          <p className="text-[11px] leading-snug text-slate-500" data-testid="last-run-note">
+            Grey ✓ / ✗: the last Verify &amp; Test, before your latest edits.
+          </p>
+        )}
+        {live && <LiveNote allPassed={live.allPassed && !live.stale} />}
       </Section>
 
       {mission.concepts.length > 0 && (
@@ -149,4 +194,10 @@ function BriefingPanelImpl({ mission, scene, controller, runtime, results, compl
   );
 }
 
-export const BriefingPanel = memo(BriefingPanelImpl);
+export const BriefingPanel = memo(function BriefingPanel(props: BriefingPanelProps) {
+  return (
+    <AliasChipScope io={props.scene.io}>
+      <BriefingPanelImpl {...props} />
+    </AliasChipScope>
+  );
+});

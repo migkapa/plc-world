@@ -1,13 +1,25 @@
 /**
  * The plant's wired I/O points with LIVE values: alias, module operand, field device, N.O. / N.C.
- * wiring note and the current tag value (forces flagged).
+ * wiring note and the current tag value (forces flagged). Hovering a row (or focusing its alias) highlights the
+ * physical device in the 3D view; clicking the alias flies the camera to it (see highlight/AliasChips.tsx).
  */
 import { ArrowDownToLine, ArrowUpFromLine, Zap } from 'lucide-react';
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from 'react';
 import type { PlcController } from '../../plc/types';
 import type { IoPointDef, SimRuntime } from '../../sim/types';
 import { Badge, LedDot, cn } from '../../ui';
 import { useRuntimeValue } from './hooks';
+import { AliasChip, useHighlightHandlers } from './highlight/AliasChips';
+
+/** A table row that highlights its device in the 3D view while hovered / focused within. */
+function IoRow({ alias, children, ...rest }: { alias: string; children: ReactNode } & HTMLAttributes<HTMLTableRowElement>) {
+  const h = useHighlightHandlers([alias], 'io');
+  return (
+    <tr {...rest} {...h}>
+      {children}
+    </tr>
+  );
+}
 
 /** N.O. / N.C. wiring of a point from its device / description text. */
 export function contactKind(p: Pick<IoPointDef, 'device' | 'description'>): 'NO' | 'NC' | undefined {
@@ -140,23 +152,29 @@ function IoTableImpl({ io, controller, runtime, className, compact: compactProp 
             // narrow docks: one text column (alias · operand · badges, then the device on one line);
             // the full device text and wiring note are in the hover title
             return (
-              <tr key={p.operand} className="border-t border-edge/60 align-top hover:bg-white/[0.03]" data-io={p.alias} title={`${p.alias} (${p.operand}) — ${p.device}${p.description ? `\n${p.description}` : ''}`}>
+              <IoRow key={p.operand} alias={p.alias} className="border-t border-edge/60 align-top hover:bg-cyan-400/[0.05]" data-io={p.alias} title={`${p.alias} (${p.operand}) — ${p.device}${p.description ? `\n${p.description}` : ''}`}>
                 <td className="min-w-0 px-2 py-1.5">
                   <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                    <span className="font-mono text-[12px] font-semibold text-slate-100">{p.alias}</span>
+                    <AliasChip alias={p.alias} className="font-mono text-[12px] font-semibold text-slate-100">
+                      {p.alias}
+                    </AliasChip>
                     <span className="font-mono text-[10.5px] text-slate-500">{p.operand}</span>
                     {badges}
                   </div>
                   <div className="line-clamp-1 text-[11px] leading-snug text-slate-400">{p.device}</div>
                 </td>
                 {value}
-              </tr>
+              </IoRow>
             );
           }
           return (
-            <tr key={p.operand} className="border-t border-edge/60 align-top hover:bg-white/[0.03]" data-io={p.alias}>
+            <IoRow key={p.operand} alias={p.alias} className="border-t border-edge/60 align-top hover:bg-cyan-400/[0.05]" data-io={p.alias}>
               <td className="px-2 py-1.5">
-                <div className="font-mono text-[12px] font-semibold text-slate-100">{p.alias}</div>
+                <div>
+                  <AliasChip alias={p.alias} className="font-mono text-[12px] font-semibold text-slate-100">
+                    {p.alias}
+                  </AliasChip>
+                </div>
                 <div className="font-mono text-[10.5px] text-slate-500">{p.operand}</div>
               </td>
               <td className="px-2 py-1.5 text-[11.5px] text-slate-300">
@@ -167,7 +185,7 @@ function IoTableImpl({ io, controller, runtime, className, compact: compactProp 
                 {p.description && <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">{p.description}</div>}
               </td>
               {value}
-            </tr>
+            </IoRow>
           );
         })}
       </>

@@ -1,20 +1,17 @@
 /**
- * Mission chrome: the top mission bar, the hints dialog, the test-replay banner, the locked screen.
+ * Mission chrome: the top mission bar, the hints dialog, the locked screen (the test-replay banner lives in
+ * replay/ReplayBar.tsx).
  */
-import { ArrowLeft, Eye, Lightbulb, Loader2, Lock, Map as MapIcon, Play, RotateCcw, Square, TriangleAlert } from 'lucide-react';
-import { memo, useEffect, useState, type ReactNode } from 'react';
+import { ArrowLeft, Lightbulb, Loader2, Lock, Map as MapIcon, Play, TriangleAlert } from 'lucide-react';
+import { memo, useState, type ReactNode } from 'react';
 import { Link } from 'wouter';
 import { CHAPTERS, getChapter } from '../../game/chapters';
 import { chapterBoss, getMission, missionsByChapter } from '../../game/missions';
 import { CHAPTER_UNLOCK_SHARE, isChapterUnlockedFor, isMissionUnlockedFor, useGame } from '../../game/store';
 import type { PlayerProfile } from '../../game/types';
 import type { MissionDef } from '../../game/types';
-import type { MissionTestRunner } from '../../game/validation';
 import { Button, Kbd, Markdown, Modal, ProgressBar, Stars, cn } from '../../ui';
 import { routes } from '../routes';
-import { SpeedSegments } from './SpeedControl';
-import { describeStep, fmtSeconds, humanizeMessage } from './stepText';
-import type { SceneLogic } from '../../sim/types';
 
 export function ChapterChip({ chapterId, className }: { chapterId: string; className?: string }) {
   const ch = getChapter(chapterId);
@@ -37,6 +34,8 @@ export interface MissionBarProps {
   /** Objectives met (from the last test run). */
   objectivesMet: number;
   testsRun: boolean;
+  /** The program changed since that run: the count is dimmed (it describes the older program). */
+  stale?: boolean;
   hintsUsed: number;
   running: boolean;
   onHints(): void;
@@ -44,7 +43,7 @@ export interface MissionBarProps {
   extra?: ReactNode;
 }
 
-function MissionBarImpl({ mission, bestStars, objectivesMet, testsRun, hintsUsed, running, onHints, onRun, extra }: MissionBarProps) {
+function MissionBarImpl({ mission, bestStars, objectivesMet, testsRun, stale = false, hintsUsed, running, onHints, onRun, extra }: MissionBarProps) {
   const total = mission.objectives.length;
   const hintsLeft = mission.hints.length - hintsUsed;
   return (
@@ -66,10 +65,15 @@ function MissionBarImpl({ mission, bestStars, objectivesMet, testsRun, hintsUsed
       <div className="hidden items-center gap-1 sm:flex" title={bestStars > 0 ? `Best: ${bestStars} of 3 stars` : 'Not completed yet'}>
         <Stars value={bestStars} size={15} />
       </div>
-      <div className="hidden w-32 shrink-0 flex-col gap-1 xl:flex" title="Objectives met in the last test run" data-testid="objectives-progress">
+      <div
+        className={cn('hidden w-32 shrink-0 flex-col gap-1 xl:flex', stale && 'opacity-55')}
+        title={stale ? 'Objectives met in the last test run — your program changed since (Verify & Test again to update)' : 'Objectives met in the last test run'}
+        data-testid="objectives-progress"
+        data-stale={stale ? '' : undefined}
+      >
         <div className="flex justify-between text-[10.5px] text-slate-400">
-          <span>Objectives</span>
-          <span className={cn('font-mono', objectivesMet === total ? 'text-emerald-300' : 'text-slate-300')}>
+          <span>{stale ? 'Last run' : 'Objectives'}</span>
+          <span className={cn('font-mono', stale ? 'text-slate-400' : objectivesMet === total ? 'text-emerald-300' : 'text-slate-300')}>
             {testsRun || objectivesMet > 0 ? objectivesMet : '–'}/{total}
           </span>
         </div>
@@ -183,84 +187,6 @@ export function HintsModal({
         {left === 0 && <p className="text-xs text-slate-500">That was the last hint — the next step is yours!</p>}
       </div>
     </Modal>
-  );
-}
-
-export function ReplayBanner({
-  index,
-  mission,
-  scene,
-  runner,
-  speed,
-  paused,
-  onSpeed,
-  onPause,
-  onRestart,
-  onStop,
-}: {
-  index: number;
-  mission: MissionDef;
-  scene: SceneLogic<unknown>;
-  runner: MissionTestRunner;
-  speed: number;
-  paused: boolean;
-  onSpeed(s: number): void;
-  onPause(p: boolean): void;
-  onRestart(): void;
-  onStop(): void;
-}) {
-  // the banner refreshes itself (the page does not re-render while a replay plays)
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const h = window.setInterval(() => setTick((n) => (n + 1) % 1_000_000), 150);
-    return () => window.clearInterval(h);
-  }, []);
-  const test = mission.tests[index]!;
-  const step = test.steps[Math.min(runner.stepIndex, test.steps.length - 1)];
-  const done = runner.done;
-  const res = runner.result;
-  return (
-    <div className="w-[min(40rem,100%)] rounded-xl border border-sky-400/40 bg-slate-950/85 px-3 py-2 shadow-2xl backdrop-blur-md" data-testid="replay-banner">
-      <div className="flex items-center gap-2">
-        <Eye size={14} className="shrink-0 text-sky-300" />
-        <div className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-slate-100">
-          Test {index + 1}/{mission.tests.length}: {test.name}
-        </div>
-        <span className="font-mono text-[11px] text-slate-400">t = {fmtSeconds(runner.runtime.timeMs)}</span>
-        <SpeedSegments speed={speed} paused={paused} onSpeed={onSpeed} onPause={onPause} speeds={[0.5, 1, 2, 4, 8, 16]} />
-        <button type="button" onClick={onRestart} title="Replay from the start" className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg text-slate-300 hover:bg-white/10">
-          <RotateCcw size={13} />
-        </button>
-        <button
-          type="button"
-          onClick={onStop}
-          title="Stop and return to the live plant"
-          className="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-white/15 bg-white/10 px-2 text-[11px] font-semibold text-white hover:bg-white/20"
-          data-testid="replay-stop"
-        >
-          <Square size={11} /> Stop
-        </button>
-      </div>
-      <div className="mt-1 flex items-start gap-2 text-[12px]">
-        {done ? (
-          res.passed ? (
-            <span className="text-emerald-300">✓ Test passed — every check held.</span>
-          ) : (
-            <span className="text-red-200">
-              ✗ {humanizeMessage(res.failure ?? 'Failed', scene)}
-              {res.failedAtMs !== undefined && <span className="text-red-300/70"> (at {fmtSeconds(res.failedAtMs)})</span>}
-            </span>
-          )
-        ) : (
-          <>
-            <span className="shrink-0 rounded bg-sky-500/20 px-1.5 font-mono text-[10.5px] text-sky-200">
-              step {Math.min(runner.stepIndex + 1, test.steps.length)}/{test.steps.length}
-            </span>
-            <span className="min-w-0 text-slate-300">{step ? describeStep(step, scene) : ''}</span>
-          </>
-        )}
-      </div>
-    </div>
   );
 }
 

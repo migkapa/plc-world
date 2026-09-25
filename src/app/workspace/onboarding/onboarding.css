@@ -1,0 +1,98 @@
+/* Onboarding & live objectives (coach marks, live nudge, try-it callout). Every animation is dropped for reduced
+   motion (player setting → html.reduce-motion, or the OS preference). */
+@keyframes pw-coach-ring {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 9999px rgba(3, 7, 12, 0.62),
+      0 0 0 2px rgba(56, 189, 248, 0.95),
+      0 0 0 6px rgba(56, 189, 248, 0.25);
+  }
+  50% {
+    box-shadow:
+      0 0 0 9999px rgba(3, 7, 12, 0.62),
+      0 0 0 2px rgba(56, 189, 248, 0.95),
+      0 0 0 11px rgba(56, 189, 248, 0.08);
+  }
+}
+
+@keyframes pw-coach-in {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pw-try-ring {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px rgba(245, 196, 0, 0.9),
+      0 0 0 5px rgba(245, 196, 0, 0.25);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(245, 196, 0, 0.9),
+      0 0 0 10px rgba(245, 196, 0, 0.05);
+  }
+}
+
+@keyframes pw-live-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
+  }
+  50% {
+    box-shadow: 0 0 14px 1px rgba(52, 211, 153, 0.35);
+  }
+}
+
+.pw-coach-hole {
+  box-shadow:
+    0 0 0 9999px rgba(3, 7, 12, 0.62),
+    0 0 0 2px rgba(56, 189, 248, 0.95),
+    0 0 0 6px rgba(56, 189, 248, 0.25);
+  transition:
+    left 220ms ease,
+    top 220ms ease,
+    width 220ms ease,
+    height 220ms ease;
+}
+.pw-coach-hole[data-animate] {
+  animation: pw-coach-ring 1.8s ease-in-out infinite;
+}
+.pw-coach-card[data-animate] {
+  animation: pw-coach-in 220ms ease-out;
+}
+.pw-try-ring {
+  box-shadow:
+    0 0 0 2px rgba(245, 196, 0, 0.9),
+    0 0 0 5px rgba(245, 196, 0, 0.25);
+}
+.pw-try-ring[data-animate] {
+  animation: pw-try-ring 1.4s ease-in-out infinite;
+}
+.pw-live-nudge[data-animate] {
+  animation: pw-live-glow 2.4s ease-in-out infinite;
+}
+
+.reduce-motion .pw-coach-hole,
+.reduce-motion .pw-coach-card,
+.reduce-motion .pw-try-ring,
+.reduce-motion .pw-live-nudge {
+  animation: none !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pw-coach-hole,
+  .pw-coach-card,
+  .pw-try-ring,
+  .pw-live-nudge {
+    animation: none !important;
+    transition: none !important;
+  }
+}

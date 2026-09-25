@@ -99,6 +99,12 @@ export interface SceneDefinition<S = unknown> {
   View: ComponentType<SceneViewProps<S>>;
   /** Camera presets for the view switcher. First is the default. */
   cameras: Array<{ id: string; label: string; position: [number, number, number]; target: [number, number, number] }>;
+  /**
+   * Optional "where is this device" map for automatic camera moves (test replays look at the device a step
+   * operates or checks): control id / observable id / I/O alias tag → the id of the camera preset (in `cameras`)
+   * that shows that device best. Ids not listed fall back to the scene rules in src/app/workspace/replayCamera.ts.
+   */
+  focus?: Record<string, string>;
   /** Thumbnail accent colour for cards. */
   accent?: string;
   /** Stage lighting preset (see src/twin/Stage.tsx); default 'hall'. */

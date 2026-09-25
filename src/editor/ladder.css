@@ -430,6 +430,24 @@
   fill: var(--ld-force) !important;
 }
 
+/* highlighted operands (e.g. the tag behind a failing test in a replay) */
+.ld-hlcell {
+  fill: rgba(245, 196, 0, 0.1);
+  stroke: #f5c400;
+  stroke-width: 1.5;
+  stroke-dasharray: 4 2;
+  rx: 6;
+  pointer-events: none;
+}
+.ld-hlop {
+  fill: rgba(245, 196, 0, 0.28);
+  rx: 3;
+  pointer-events: none;
+}
+.ld-theme-classic .ld-hlcell {
+  stroke: #b58900;
+}
+
 /* selection & errors */
 .ld-selbox {
   fill: var(--ld-sel-fill);

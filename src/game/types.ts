@@ -213,4 +213,16 @@ export interface PlayerProfile {
   settings: { sound: boolean; reducedMotion: boolean; quality: 'low' | 'medium' | 'high' };
   /** Cumulative counters for achievements (e.g. sandboxMs, forcesUsed, rungEdits). */
   stats?: Record<string, number>;
+  /**
+   * Guided tours (tour id → how it ended). A finished or skipped tour does not start by itself again; the
+   * player can replay it from the workspace '?' menu. A completed tour is never downgraded to skipped.
+   */
+  tutorials?: Record<string, TutorialRecord>;
+}
+
+/** How a guided tour ended (see `PlayerProfile.tutorials`). */
+export interface TutorialRecord {
+  status: 'completed' | 'skipped';
+  /** Timestamp of the (last) completion or skip. */
+  at: number;
 }

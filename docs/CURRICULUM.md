@@ -243,6 +243,17 @@ const runner = createMissionTestRunner(mission, project, i);                // "
 //   runner.stepIndex, runner.done, runner.result;  runner.dispose()
 ```
 
+"Watch this test" is a debugging session (`src/app/workspace/replay/`): `new ReplaySession(mission, project, i)` runs
+the test off-screen first to record an expected-vs-actual trace (`session.trace`: every control / observable / tag the
+test touches, expected-value bands, step start times, the failure moment) and to explain the failure
+(`session.explanation`: what the test did, expected, saw, and where to look — the rung that writes the failing
+output and the contact that broke its power flow, from the controller's live rung state). The on-screen replay then
+plays / steps / seeks (`advance`, `stepForward`, `stepBack`, `seekStep`, `jumpToFailure`) and pauses by itself at
+the failure. The camera follows the steps through `SceneDefinition.focus` (device id → camera preset, in each scene's
+definition.tsx; `stepCameras()` in replayCamera.ts), and the ladder highlights the failing tag
+(`LadderEditor highlight`). Write test `message`s as requirements — they are shown as the author's words under
+"Expected".
+
 Store (`useGame`): `startMission(id)` when a mission opens · `useHint(id)` / `revealHint(id)` → index of the
 revealed hint (−1 when none left) · `saveProgram(id, rungs, comments, tags)` · `completeMission(id, result,
 durationMs)` after every full test run (failed runs are counted, passed runs return `{ xpGained,

@@ -17,6 +17,7 @@ import type { PlcController, Rung, VerifyError } from '../../plc/types';
 import { MAIN_PROGRAM, MAIN_ROUTINE } from '../../sim/project';
 import { Button, cn } from '../../ui';
 import { usePersistentState } from './hooks';
+import { useLayoutPrefs } from './layoutPrefs';
 import { exampleEntryFor, friendlyVerifyError, mainRungs } from './program';
 import type { WorkspaceRuntime } from './useWorkspaceRuntime';
 
@@ -26,6 +27,8 @@ export interface LadderPanelProps {
   allowedInstructions?: string[];
   /** Replay: show this controller (and its program) read-only instead of the live one. */
   replayController?: PlcController;
+  /** Tags to highlight in the ladder (e.g. the tag behind a failing replayed test). */
+  highlight?: string[];
   onEvent?(e: GameEvent): void;
   allowKeySwitch?: boolean;
   /** Extra buttons next to Download (Reset program…). */
@@ -69,7 +72,7 @@ function AppliedIndicator({ visible }: { visible: boolean }) {
       </span>
       <span
         className={cn(
-          'pointer-events-none absolute right-4 bottom-9 z-10 flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-950/90 px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap text-emerald-300 shadow-lg transition-opacity duration-700 @2xl:px-2',
+          'pointer-events-none absolute right-[var(--pip-chip-right,1rem)] bottom-[var(--pip-chip-bottom,2.25rem)] z-10 flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-950/90 px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap text-emerald-300 shadow-lg transition-opacity duration-700 @2xl:px-2',
           visible ? 'opacity-100' : 'opacity-0',
         )}
         aria-hidden="true"
@@ -353,7 +356,7 @@ function ScrollFade({ children, className }: { children: ReactNode; className?: 
 // Panel
 // ---------------------------------------------------------------------------
 
-function LadderPanelImpl({ ws, editorRef, allowedInstructions, replayController, onEvent, allowKeySwitch, actions, className }: LadderPanelProps) {
+function LadderPanelImpl({ ws, editorRef, allowedInstructions, replayController, highlight, onEvent, allowKeySwitch, actions, className }: LadderPanelProps) {
   const localRef = useRef<LadderEditorHandle>(null);
   const ref = editorRef ?? localRef;
   const rootRef = useRef<HTMLDivElement>(null);
@@ -373,6 +376,9 @@ function LadderPanelImpl({ ws, editorRef, allowedInstructions, replayController,
     return () => ro.disconnect();
   }, []);
   const compactPalette = short && !fullPalette && !replay;
+  // compact operand labels (tag names only), remembered
+  const compactLabels = useLayoutPrefs((s) => s.compactLabels);
+  const setCompactLabels = useLayoutPrefs((s) => s.setCompactLabels);
 
   const editorErrors = useMemo(() => {
     const own = (e: VerifyError) =>
@@ -475,6 +481,9 @@ function LadderPanelImpl({ ws, editorRef, allowedInstructions, replayController,
           onToggleBit={onToggleBit}
           onRungTextCommit={onRungTextCommit}
           exampleEntry={exampleEntry}
+          compactLabels={compactLabels}
+          onCompactLabelsChange={setCompactLabels}
+          {...(highlight?.length ? { highlight } : {})}
           className="min-h-0 flex-1"
         />
         {!replay && <AppliedIndicator visible={justApplied} />}

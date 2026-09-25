@@ -25,6 +25,8 @@ export interface TestPanelProps {
   onWatch(index: number): void;
   /** Index of the test being replayed. */
   watching?: number | null;
+  /** Shown under the watched test (the replay debugger: steps, trace, explanation). */
+  watchDetail?: ReactNode;
   instructionCount?: number;
   hintsUsed: number;
   /** Message under the header (encouragement after a failed run…). */
@@ -82,6 +84,7 @@ function TestPanelImpl({
   onRun,
   onWatch,
   watching,
+  watchDetail,
   instructionCount,
   hintsUsed,
   notice,
@@ -178,7 +181,7 @@ function TestPanelImpl({
                     <div className="text-[12.5px] leading-snug font-medium text-slate-100">{t.name}</div>
                     {t.description && <div className="text-[11px] leading-snug text-slate-500">{t.description}</div>}
                     {st === 'running' && <TestProgress store={progress} index={i} />}
-                    {f && (
+                    {f && !(watching === i && watchDetail) && (
                       <div className="mt-1.5 text-[11.5px] leading-snug text-red-100">
                         {f.message}
                         {f.at && <span className="text-red-300/70"> — {f.at}</span>}
@@ -201,6 +204,7 @@ function TestPanelImpl({
                     </button>
                   )}
                 </div>
+                {watching === i && watchDetail}
               </li>
             );
           })}

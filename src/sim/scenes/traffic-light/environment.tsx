@@ -1,8 +1,10 @@
 /**
  * Static surroundings of the `traffic-light` intersection: the road network (from the traffic kit's
- * <Intersection/>), a city block around it (low-poly shops, offices, a brick corner building), street
- * trees, street lights, pull boxes over the underground signal conduits, a bus stop and small street
- * furniture. Everything here is static (no per-frame work except the street-light lenses).
+ * <Intersection/>, downtown corners paved to the building faces), a city block around it (low-poly shops,
+ * offices, a brick corner building), street trees in tree pits and a small pocket park, photocell street
+ * lights (dark in daylight — not powered by the signal controller), pull boxes over the underground signal
+ * conduits, R9-3 "no pedestrian crossing / use crosswalk" signs on the three unmarked legs, a bus stop and
+ * small street furniture. Everything here is static.
  */
 import { memo, useEffect, useMemo } from 'react';
 import * as THREE from 'three';

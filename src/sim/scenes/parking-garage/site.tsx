@@ -2,13 +2,15 @@
  * Static site of the `parking-garage` scene (plan frame of GARAGE_LAYOUT: x = east, z = south):
  *
  *  - the open-air parking deck (concrete slab, precast perimeter parapets, 12 numbered stalls with wheel
- *    stops, aisle markings, a stair / elevator tower, light poles),
- *  - the entrance canopy over the gate lanes (steel columns, roof, fascia sign) and the lane islands
- *    (entry island with the ticket column + entry gate, centre island with the photo-eye reflectors,
- *    exit island with the exit gate) and the pad of the attendant booth,
- *  - the entry / exit plaza (asphalt, painted lane arrows, stop bars, hatched median) and the mixed-use
- *    building in front of it whose vehicle passage leads to the street (cars appear / leave there),
- *  - the street beyond, neighbouring buildings, trees and street lights.
+ *    stops, aisle markings, a stair / elevator tower, light poles) with a precast upper level on columns
+ *    over the north stall row,
+ *  - the entrance canopy over the gate lanes (steel columns, roof, fascia signs on both faces), a small
+ *    canopy over the ticket island, the over-height ("headache") bar on its own gantry upstream of the
+ *    ticket column, and the lane islands (entry island with the ticket column + entry gate, centre island
+ *    with the photo-eye reflectors, exit island with the exit gate) and the pad of the attendant booth,
+ *  - the entry / exit plaza (asphalt, matte painted lane arrows, stop bars, hatched median) and the
+ *    mixed-use building in front of it whose vehicle passage leads to the street (cars appear / leave there),
+ *  - the street beyond, neighbouring buildings, trees and street lights (kept out of the camera sight lines).
  */
 import { memo, useMemo, useRef } from 'react';
 import * as THREE from 'three';
@@ -448,14 +450,16 @@ function HeadacheGantry() {
   const x1 = Y.entryLaneX + Y.laneWidth / 2 + 0.35;
   const h = 3.0;
   const items: InstXf[] = [
-    { p: [x0, h / 2, z], s: [0.16, h, 0.16] },
-    { p: [x1, h / 2, z], s: [0.16, h, 0.16] },
-    { p: [(x0 + x1) / 2, h + 0.1, z], s: [x1 - x0 + 0.3, 0.2, 0.18] },
+    { p: [x0, h / 2, z], s: [0.12, h, 0.12] },
+    { p: [x1, h / 2, z], s: [0.12, h, 0.12] },
+    { p: [(x0 + x1) / 2, h + 0.07, z], s: [x1 - x0 + 0.2, 0.14, 0.12] },
   ];
-  const hazard = kmat('pg:gantryPaint', () => new THREE.MeshStandardMaterial({ color: '#e7b416', roughness: 0.55 }));
+  // galvanized/dark steel frame; only the hanging bar is striped (it is what drivers must see)
+  const bands: InstXf[] = [0.4, 0.9, 1.4].flatMap((y) => [x0, x1].map((x) => ({ p: [x, y, z] as Vec3, s: [0.125, 0.18, 0.125] as Vec3 })));
   return (
     <group>
-      <StaticInstances geometry={unitBox()} material={hazard} items={items} />
+      <StaticInstances geometry={unitBox()} material={steelMat()} items={items} />
+      <StaticInstances geometry={unitBox()} material={kmat('pg:gantryBand', () => new THREE.MeshStandardMaterial({ color: '#e7b416', roughness: 0.55 }))} items={bands} castShadow={false} />
       <ClearanceBar position={[Y.entryLaneX, 0, z]} width={Y.laneWidth - 0.1} mountHeight={h} />
     </group>
   );
@@ -561,7 +565,7 @@ export const GarageSite = memo(function GarageSite() {
           { x: 17.3, z: -8, angle: Math.PI, height: 7 },
           { x: 0, z: -17.0, angle: -Math.PI / 2, height: 7 },
           { x: -14.4, z: 17.6, y: CURB, angle: 0, height: 7 },
-          { x: 14.4, z: 17.6, y: CURB, angle: Math.PI, height: 7 },
+          { x: 15.0, z: 7.4, y: CURB, angle: Math.PI, height: 7 },
         ]}
       />
       <PullBoxes

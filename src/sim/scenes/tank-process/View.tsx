@@ -523,7 +523,8 @@ export const TankProcessView = memo(function TankProcessView({ state, runtime }:
       <Bollards at={[[-1.62, 1.4], [CAB.x - 0.75, WALL_Z + 1.0], [CAB.x + 0.75, WALL_Z + 1.0]]} />
       <FloorDrain position={[-1.32, 0, 1.12]} size={0.26} />
       <FloorDrain position={[1.55, 0, 1.12]} size={0.26} />
-      <WallSign lines={['MIXING', 'AREA 3']} position={[-2.3, 2.62, WALL_Z + 0.02]} size={[1.4, 0.6]} bg="#1d4f91" color="#ffffff" />
+      {/* area sign hung on the front of the pipe rack (the back wall is hidden behind the rack from the aisle) */}
+      <WallSign lines={['MIXING', 'AREA 3']} position={[-2.9, RACK.y + 0.66, RACK.z + 0.43]} size={[1.3, 0.55]} bg="#1d4f91" color="#ffffff" />
       <WallSign lines={['CAUTION', 'HOT SURFACES', 'HOT LIQUID']} kind="warning" position={[-2.3, 1.62, WALL_Z + 0.02]} size={[0.5, 0.7]} />
       <WallSign lines={['WEAR', 'EYE PROTECTION']} kind="mandatory" position={[-1.7, 1.62, WALL_Z + 0.02]} size={[0.5, 0.7]} />
       <WallSign lines={['EMERGENCY', 'EYE WASH']} kind="info" position={[-5.3, 1.9, WALL_Z + 0.02]} size={[0.5, 0.7]} />

@@ -8,7 +8,9 @@
  *  - <Trees/>, <StreetLights/>, <PullBoxes/>, <Bollards/>   instanced street furniture (1–4 draw calls each)
  *  - <KeySwitch800F/>                      22.5 mm key-operated selector (maintained or spring-return) built from
  *                                          the 800F bezel + legend plate (the operator kit has no key operator)
- *  - small hooks: useHoverCursor, useLatest
+ *  - small hooks: useHoverCursor, useLatest, useNoCastShadow; <ClickBlocker/> (invisible event sink for walls /
+ *    roofs / closed doors); useMaterialOverride / useSubtreeMaterialPatch / useQuietPaint (scene-local matte
+ *    road paint so only lamps bloom)
  *
  * Coordinates: meters, Y up, plan x = east, z = south (both scene logics use this frame).
  */

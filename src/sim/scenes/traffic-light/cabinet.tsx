@@ -16,7 +16,7 @@
  * Far away, the interior swaps to a 3-mesh impostor; walls, roof and the closed door block clicks.
  */
 import { useFrame } from '@react-three/fiber';
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { sfx } from '../../../audio/sfx';
 import type { Vec3 } from '../../../twin/contracts';
@@ -121,6 +121,7 @@ export function TrafficCabinet({
         }}
         getLoadSwitchLed={getLoadSwitchLed}
         policePanel={
+          // the tag proxy is the click target (the door group behind it has its own pointer-down handler)
           <IoTag
             position={[0, -0.035, 0]}
             size={[0.07, 0.1, 0.07]}
@@ -129,9 +130,10 @@ export function TrafficCabinet({
             title="Police panel AUTO / FLASH key switch (maintained) — Night_Mode"
             lines={[ioLine(runtime, 'Night_Mode')]}
             group={tagGroup}
+            onPress={toggleNight}
             facing
           >
-            <KeySwitch800F legend={['SIGNALS']} positions={['AUTO', 'FLASH']} getOn={() => runtime.getControl('night') === true} onToggle={toggleNight} scale={1.25} />
+            <KeySwitch800F legend={['SIGNALS']} positions={['AUTO', 'FLASH']} getOn={() => runtime.getControl('night') === true} scale={1.25} />
           </IoTag>
         }
       >
@@ -338,28 +340,36 @@ function ShelfIndicators({ state, runtime }: { state: TrafficLightState; runtime
   const led = kgeo('tl:shelfLed', () => new THREE.CylinderGeometry(0.0032, 0.0032, 0.003, 12).rotateX(Math.PI / 2));
   const legend = useMemo(() => {
     const c = document.createElement('canvas');
-    c.width = 256;
-    c.height = 64;
+    c.width = 160;
+    c.height = 96;
     const ctx = c.getContext('2d')!;
     ctx.fillStyle = '#111416';
-    ctx.fillRect(0, 0, 256, 64);
+    ctx.fillRect(0, 0, 160, 96);
     ctx.fillStyle = '#e5e7eb';
-    ctx.font = '700 22px Arial, Helvetica, sans-serif';
+    ctx.font = '700 26px Arial, Helvetica, sans-serif';
     ctx.textBaseline = 'middle';
-    ctx.fillText('POWER', 34, 18);
-    ctx.fillText('CONFLICT', 34, 46);
-    ctx.fillText('DET 1', 178, 18);
+    ctx.fillText('POWER', 8, 26);
+    ctx.fillText('CONFLICT', 8, 70);
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     return new THREE.MeshBasicMaterial({ map: t, toneMapped: false });
   }, []);
+  useEffect(
+    () => () => {
+      legend.map?.dispose();
+      legend.dispose();
+      for (const m of Object.values(mats)) m.dispose();
+    },
+    [legend, mats],
+  );
   return (
     <group>
       {/* MMU front: POWER + CONFLICT */}
-      <mesh geometry={led} material={mats.mmuPwr} position={[MMU.x - 0.09, MMU.y + 0.035, MMU.z]} />
-      <mesh geometry={led} material={mats.mmuConflict} position={[MMU.x - 0.09, MMU.y + 0.015, MMU.z]} />
-      <mesh position={[MMU.x - 0.055, MMU.y + 0.025, MMU.z - 0.001]} material={legend}>
-        <planeGeometry args={[0.05, 0.03]} />
+      {/* below the kit's MMU-16 legend plate */}
+      <mesh geometry={led} material={mats.mmuPwr} position={[MMU.x - 0.09, MMU.y - 0.02, MMU.z]} />
+      <mesh geometry={led} material={mats.mmuConflict} position={[MMU.x - 0.09, MMU.y - 0.042, MMU.z]} />
+      <mesh position={[MMU.x - 0.052, MMU.y - 0.031, MMU.z + 0.0005]} material={legend}>
+        <planeGeometry args={[0.056, 0.034]} />
       </mesh>
       <IoTag
         position={[MMU.x, MMU.y, MMU.z]}

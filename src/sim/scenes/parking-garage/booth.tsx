@@ -2,9 +2,13 @@
  * Attendant booth of the `parking-garage` scene: a small prefab kiosk (insulated panels, ribbon windows,
  * flat roof with a lit fascia, door ajar) on the island between the exit lane and the plaza. Inside:
  * the attendant's desk with the COUNT RESET key switch (Reset_Key, spring return — hold the key) and,
- * on the back wall, the gate control panel (wall-mount enclosure, door open) with the live CompactLogix
- * 5380 rack, breakers, a 24 V supply, terminal strips and ducts; conduit drops into the floor toward the
- * gates, loops and photo-eyes.
+ * on the east wall, the gate control panel GCP-1 (wall-mount enclosure, door open — click it to close) with
+ * the live CompactLogix 5380 rack, breakers, a 24 V supply, terminal strips, open wire ducts and the wiring
+ * between them (feeder → breakers → PSU → MOD / SA power, rack duct → riser → I/O terminals → gland plate →
+ * conduit into the floor toward the gates, loops and photo-eyes).
+ *
+ * Far away the panel interior swaps to an impostor; roof, walls, glass and the closed panel door block
+ * clicks, so hidden devices can only be operated from where they can be seen.
  */
 import { useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
@@ -38,6 +42,15 @@ const SILL = FLOOR + 1.0;
 const HEAD = FLOOR + 2.3;
 const TOP = FLOOR + 2.72;
 const DOOR = { x0: 7.25, x1: 8.1 };
+
+/** Booth shell as thin occluder slabs for the tag chips (walls + roof; devices inside are hidden from outside). */
+export const BOOTH_OCCLUDERS: Array<[Vec3, Vec3]> = [
+  [[B.x0, CURB, B.z0], [B.x0 + 0.08, CURB + 2.72, B.z1]],
+  [[B.x1 - 0.08, CURB, B.z0], [B.x1, CURB + 2.72, B.z1]],
+  [[B.x0, CURB, B.z0], [B.x1, CURB + 2.72, B.z0 + 0.08]],
+  [[B.x0, CURB, B.z1 - 0.08], [B.x1, CURB + 2.72, B.z1]],
+  [[B.x0 - 0.35, CURB + 2.72, B.z0 - 0.35], [B.x1 + 0.35, CURB + 2.95, B.z1 + 0.35]],
+];
 
 /** Enclosure placement (back face on the east wall, facing west). */
 export const BOOTH_PANEL = { x: B.x1 - 0.09, y: FLOOR + 0.95, z: 9.25, size: [0.6, 0.76, 0.25] as Vec3 };
@@ -119,8 +132,8 @@ function BoothShell() {
       <mesh position={[B.x0 - 0.36, TOP + 0.1, (B.z0 + B.z1) / 2]} rotation={[0, -Math.PI / 2, 0]} material={fascia}>
         <boxGeometry args={[B.z1 - B.z0 + 0.6, 0.18, 0.02]} />
       </mesh>
-      {/* door leaf, ajar (hinged on its east jamb) */}
-      <group position={[DOOR.x1, FLOOR, B.z1 - 0.02]} rotation={[0, -1.25, 0]}>
+      {/* door leaf, ajar (hinged on its east jamb, opens outward) */}
+      <group position={[DOOR.x1, FLOOR, B.z1 - 0.02]} rotation={[0, 1.25, 0]}>
         <mesh position={[-(DOOR.x1 - DOOR.x0) / 2, 0.5, 0]} material={panelMat()} castShadow>
           <boxGeometry args={[DOOR.x1 - DOOR.x0 - 0.02, 1.0, 0.04]} />
         </mesh>
@@ -173,7 +186,8 @@ function ControlPanel({ runtime }: { runtime: SimRuntime }) {
         size={P.size}
         position={[P.x, P.y, P.z]}
         rotation={[0, -Math.PI / 2, 0]}
-        doorAngle={open ? 1.95 : 0}
+        // opened flat against the wall (158°): the leaf stays out of the attendant's view of the panel
+      doorAngle={open ? 2.75 : 0}
         onDoorToggle={() => {
           setOpen((o) => !o);
           sfx.play('click');
@@ -331,6 +345,16 @@ export function Booth({ runtime, tagGroup }: { runtime: SimRuntime; tagGroup?: T
         runtime.setControl('reset_key', false);
         sfx.play('release');
       },
+      momentary: {
+        onPress: () => {
+          runtime.setControl('reset_key', true);
+          sfx.play('toggle');
+        },
+        onRelease: () => {
+          runtime.setControl('reset_key', false);
+          sfx.play('release');
+        },
+      },
     }),
     [runtime],
   );
@@ -363,22 +387,24 @@ export function Booth({ runtime, tagGroup }: { runtime: SimRuntime; tagGroup?: T
               title="Attendant COUNT RESET key (spring return) — loads Count_Adjust in the reference program"
               lines={[ioLine(runtime, 'Reset_Key')]}
               group={tagGroup}
+              momentary={key.momentary}
             >
-              <KeySwitch800F legend={['COUNT RESET']} positions={['RUN', 'RESET']} getOn={key.get} onPress={key.press} onRelease={key.release} scale={1.3} />
+              <KeySwitch800F legend={['COUNT RESET']} positions={['RUN', 'RESET']} getOn={key.get} scale={1.3} />
             </IoTag>
           </group>
         </group>
       </group>
       {/* the attendant, turning to the key when it is used */}
       <Pedestrian variant={5} position={[8.1, FLOOR, 8.75]} rotation={[0, Math.PI - 0.2, 0]} getWalking={() => false} getReach={() => (key.get() ? 1 : 0)} />
-      {/* click blockers: roof, east wall, window walls (glass) — only the open door lets a click in */}
+      {/* click blockers: roof, east / west / north walls (incl. their glass), the solid parts of the south wall.
+          Only the open door and the south service window (the attendant's pass-through) let a click in. */}
       <ClickBlocker position={[(B.x0 + B.x1) / 2, TOP + 0.1, (B.z0 + B.z1) / 2]} size={[B.x1 - B.x0 + 0.7, 0.24, B.z1 - B.z0 + 0.7]} />
       <ClickBlocker position={[B.x1 - t / 2, (FLOOR + TOP) / 2, (B.z0 + B.z1) / 2]} size={[t, TOP - FLOOR, B.z1 - B.z0]} />
       <ClickBlocker position={[B.x0 + t / 2, (FLOOR + TOP) / 2, (B.z0 + B.z1) / 2]} size={[t, TOP - FLOOR, B.z1 - B.z0]} />
       <ClickBlocker position={[(B.x0 + B.x1) / 2, (FLOOR + TOP) / 2, B.z0 + t / 2]} size={[B.x1 - B.x0, TOP - FLOOR, t]} />
-      <ClickBlocker position={[(DOOR.x1 + B.x1) / 2, (FLOOR + TOP) / 2, B.z1 - t / 2]} size={[B.x1 - DOOR.x1, TOP - FLOOR, t]} />
+      <ClickBlocker position={[(DOOR.x1 + B.x1) / 2, (FLOOR + SILL) / 2, B.z1 - t / 2]} size={[B.x1 - DOOR.x1, SILL - FLOOR, t]} />
+      <ClickBlocker position={[(DOOR.x0 + B.x1) / 2, (HEAD + TOP) / 2, B.z1 - t / 2]} size={[B.x1 - DOOR.x0, TOP - HEAD, t]} />
       <ClickBlocker position={[(B.x0 + DOOR.x0) / 2, (FLOOR + TOP) / 2, B.z1 - t / 2]} size={[DOOR.x0 - B.x0, TOP - FLOOR, t]} />
-      <ClickBlocker position={[(DOOR.x0 + DOOR.x1) / 2, (HEAD + TOP) / 2, B.z1 - t / 2]} size={[DOOR.x1 - DOOR.x0, TOP - HEAD, t]} />
     </group>
   );
 }

@@ -1,11 +1,14 @@
 /**
- * `parking-garage` 3D view — the entry / exit plaza of an open-air parking deck: entry and exit barrier
- * gates (arms follow the scene state), photo-eyes across both lanes under the arms (red beams, blocked by
- * the cars), detector loops (glow while occupied), the ticket column pressed by the drivers (Ticket_PB),
- * FULL / SPACES signs, 12 numbered stalls, cars (instanced fleet: wheels, steering, brake lights,
- * blinkers), the attendant booth with the live CompactLogix gate control panel and the COUNT RESET key
- * (reset_key), and an instructor "SIM DISPATCH" console that sends cars in / out (spawn_entry / spawn_exit).
+ * `parking-garage` 3D view — the entry / exit plaza of a parking deck: entry and exit barrier gates (arms
+ * follow the scene state), photo-eyes across both lanes under the arms (red beams, blocked by the cars),
+ * detector loops (glow while occupied), the ticket column pressed by the drivers (Ticket_PB) under its own
+ * small canopy, the over-height bar on a gantry upstream of it, FULL / SPACES signs, 12 numbered stalls (one
+ * row under a precast upper level), cars (instanced fleet: wheels, steering, brake lights, blinkers), the
+ * attendant booth with the live CompactLogix gate control panel and the COUNT RESET key (reset_key), and an
+ * instructor "SIM DISPATCH" console on the booth pad that sends cars in / out (spawn_entry / spawn_exit) and
+ * flags when the PLC's count (Cars.ACC of the reference program) differs from the cars really inside.
  *
+ * Learning overlay: pinned pills per device; far away each lane collapses into one summary chip.
  * The view never ticks the runtime: it reads `state` in useFrame and writes controls via runtime.setControl.
  */
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
@@ -25,10 +28,10 @@ import {
   type CarInstance,
 } from '../../../twin/devices';
 import type { SceneViewProps, SimRuntime } from '../../types';
-import { audioAllowed, canvasTexture, FONT, hazardTexture, infoLine, IoTag, ioLine, kgeo, kmat, TagLayer, textLine, useSfxLoops, type TagGroup } from '../trainer/kit';
+import { audioAllowed, canvasTexture, fitFont, hazardTexture, infoLine, IoTag, ioLine, kgeo, kmat, TagLayer, textLine, useSfxLoops, type TagGroup } from '../trainer/kit';
 import { useDisposeOnUnmount, useHoverCursor, useNoCastShadow, useQuietPaint } from '../traffic-light/cityKit';
 import { PARKING_DEMO_COUNT_TAG } from './demo';
-import { Booth } from './booth';
+import { Booth, BOOTH_OCCLUDERS } from './booth';
 import { GARAGE_LAYOUT as Y, type GarageCar, type ParkingGarageState } from './logic';
 import { CURB, GarageSite, SITE, SITE_OCCLUDERS } from './site';
 
@@ -53,10 +56,11 @@ const DISPATCH: Vec3 = [10.25, CURB, 9.3];
 
 /** Pinned-overlay groups: far away, each lane collapses into one summary chip. */
 const TG: Record<string, TagGroup> = {
-  entry: { id: 'entry', label: 'Entry lane: loop · ticket · eye · gate', mode: 'rows', collapseBelow: 22 },
-  exit: { id: 'exit', label: 'Exit lane: loop · eye · gate', mode: 'rows', collapseBelow: 22 },
+  entry: { id: 'entry', label: 'Entry lane: loop · ticket · eye · gate', mode: 'rows', collapseBelow: 36 },
+  exit: { id: 'exit', label: 'Exit lane: loop · eye · gate', mode: 'rows', collapseBelow: 36 },
   signs: { id: 'signs', label: 'FULL / SPACES signs', mode: 'rows', collapseBelow: 20 },
   booth: { id: 'booth', label: 'Attendant booth', mode: 'rows', collapseBelow: 16 },
+  dispatch: { id: 'dispatch', label: 'SIM DISPATCH (instructor, not PLC I/O)', mode: 'rows', collapseBelow: 9999 },
 };
 
 // ---------------------------------------------------------------------------
@@ -191,12 +195,13 @@ function dispatchSignTexture() {
     ctx.fillStyle = '#ede9fe';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `800 58px ${FONT}`;
+    fitFont(ctx, 'SIM DISPATCH', w - 60, 58, 800);
     ctx.fillText('SIM DISPATCH', w / 2, h * 0.3);
-    ctx.font = `600 30px ${FONT}`;
     ctx.fillStyle = '#c4b5fd';
+    fitFont(ctx, 'instructor console · not wired to the PLC', w - 50, 30, 600);
     ctx.fillText('instructor console · not wired to the PLC', w / 2, h * 0.55);
     ctx.fillStyle = '#86efac';
+    fitFont(ctx, '▲ car arrives', w * 0.42, 30, 700);
     ctx.fillText('▲ car arrives', w * 0.28, h * 0.8);
     ctx.fillStyle = '#93c5fd';
     ctx.fillText('▼ car leaves', w * 0.72, h * 0.8);
@@ -303,7 +308,7 @@ function DispatchConsole({ state, runtime }: P) {
       <mesh ref={warn} position={[0.21, 0.955, 0.19]} material={warnMat}>
         <sphereGeometry args={[0.025, 16, 8]} />
       </mesh>
-      <IoTag position={[0, 1.0, 0]} size={[0.9, 2.0, 0.5]} anchor={[0, 2.15, 0]} title="Simulation dispatcher (instructor tool, not wired to the PLC) — amber lamp: PLC count ≠ cars inside" lines={lines} pin={false} />
+      <IoTag position={[0, 1.0, 0]} size={[0.9, 2.0, 0.5]} anchor={[0, 2.15, 0]} title="Simulation dispatcher (instructor tool, not wired to the PLC) — amber lamp: PLC count ≠ cars inside" lines={lines} group={TG.dispatch} />
     </group>
   );
 }
@@ -462,14 +467,7 @@ function useGarageSound(state: ParkingGarageState) {
 export const ParkingGarageView = memo(function ParkingGarageView({ state, runtime }: P) {
   useGarageSound(state);
   useQuietPaint();
-  const B = SITE.booth;
-  const occluders: Array<[Vec3, Vec3]> = [
-    ...SITE_OCCLUDERS,
-    [
-      [B.x0, CURB, B.z0],
-      [B.x1, CURB + 2.9, B.z1],
-    ],
-  ];
+  const occluders: Array<[Vec3, Vec3]> = [...SITE_OCCLUDERS, ...BOOTH_OCCLUDERS];
   return (
     <group>
       <GarageSite />

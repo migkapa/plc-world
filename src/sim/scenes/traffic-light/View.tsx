@@ -76,7 +76,7 @@ function loopOccupied(state: TrafficLightState, approach: Approach): boolean {
 const TG: Record<string, TagGroup> = {
   ns: { id: 'ns', label: 'Main-street heads (NS)', mode: 'rows', collapseBelow: 34 },
   ew: { id: 'ew', label: 'Side-street heads (EW)', mode: 'rows', collapseBelow: 34 },
-  ped: { id: 'ped', label: 'North crosswalk: ped signal + button', mode: 'rows', collapseBelow: 22 },
+  ped: { id: 'ped', label: 'North crosswalk: ped signal + button', mode: 'rows', collapseBelow: 40 },
   cab: { id: 'cab', label: 'Controller cabinet CAB 07', mode: 'rows', collapseBelow: 16 },
 };
 

@@ -52,7 +52,7 @@ function fixNormals(g: THREE.BufferGeometry) {
 const TEMP_STOPS: [number, string][] = [
   [15, '#2f86c4'],
   [35, '#2ba3b5'],
-  [50, '#86b24c'],
+  [50, '#98ad5a'],
   [60, '#dfae33'],
   [75, '#e57b2a'],
   [100, '#d63f28'],

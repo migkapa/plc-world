@@ -1,11 +1,12 @@
 /**
- * Simulation speed control: pause / 0.5x / 1x / 2x / 4x (segmented), and a plant reset button.
+ * Simulation speed control: pause / 0.5x / 1x / 2x / 4x, and a plant reset button.
  */
 import { Pause, Play, RotateCcw } from 'lucide-react';
 import { useState } from 'react';
 import type { SimRuntime } from '../../sim/types';
 import { cn } from '../../ui';
 import { useRuntimeValue } from './hooks';
+import { HudIconButton, HudMenu } from './OverlayMenu';
 
 export const SPEEDS = [0.5, 1, 2, 4] as const;
 
@@ -62,34 +63,42 @@ export function SpeedSegments({
   );
 }
 
-/** Speed control bound to a SimRuntime (+ optional Reset plant). */
+/** Speed control bound to a SimRuntime (+ optional Reset plant): pause · speed menu · reset, one compact HUD group. */
 export function SpeedControl({ runtime, onResetPlant, className }: { runtime: SimRuntime; onResetPlant?: () => void; className?: string }) {
   // re-render only when speed / pause really change (not on every plant notification)
   useRuntimeValue(runtime, () => `${runtime.speed}|${runtime.paused ? 1 : 0}`);
   const [, force] = useState(0);
+  const paused = runtime.paused;
   return (
-    <div className={cn('flex items-center gap-1.5', className)}>
-      <SpeedSegments
-        speed={runtime.speed}
-        paused={runtime.paused}
-        onSpeed={(s) => {
-          runtime.speed = s;
+    <div className={cn('flex items-center gap-1', className)} role="group" aria-label="Simulation speed">
+      <HudIconButton
+        label={paused ? 'Resume simulation' : 'Pause simulation'}
+        active={paused}
+        tone="amber"
+        onClick={() => {
+          runtime.paused = !paused;
           force((n) => n + 1);
         }}
-        onPause={(p) => {
-          runtime.paused = p;
+      >
+        {paused ? <Play size={13} /> : <Pause size={13} />}
+      </HudIconButton>
+      <HudMenu
+        label="Simulation speed"
+        value={paused ? 'Paused' : speedLabel(runtime.speed)}
+        header="Simulation speed"
+        align="right"
+        items={SPEEDS.map((sp) => ({ id: String(sp), label: <span className="font-mono">{speedLabel(sp)}</span>, hint: sp === 1 ? 'real time' : sp < 1 ? 'slow motion' : 'fast' }))}
+        selected={paused ? null : String(runtime.speed)}
+        onPick={(id) => {
+          runtime.speed = Number(id);
+          runtime.paused = false;
           force((n) => n + 1);
         }}
       />
       {onResetPlant && (
-        <button
-          type="button"
-          onClick={onResetPlant}
-          title="Reset plant (machine state back to the start; the program keeps running)"
-          className="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-white/10 bg-black/50 px-2 text-[11px] font-semibold text-slate-200 backdrop-blur hover:bg-white/10"
-        >
-          <RotateCcw size={12} /> Reset plant
-        </button>
+        <HudIconButton label="Reset plant — machine back to its start state; the program keeps running" onClick={onResetPlant}>
+          <RotateCcw size={13} />
+        </HudIconButton>
       )}
     </div>
   );

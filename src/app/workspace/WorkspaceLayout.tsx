@@ -16,6 +16,7 @@ import { cn, Tabs, type TabDef } from '../../ui';
 import { useReducedMotion } from '../hud/prefs';
 import { useMediaQuery } from './hooks';
 import { AUTO_PIP_DELAY_MS, clampPipWidth, onSplitViewRequest, pipOf, useLayoutPrefs, type PipCorner } from './layoutPrefs';
+import { useDocks } from './dockToggles';
 import { PipChrome, TwinLayoutContext, type TwinLayoutApi } from './TwinLayout';
 
 export interface WorkspaceLayoutProps {
@@ -151,6 +152,41 @@ function DesktopLayout({ id, left, twin, ladder, right, twinWanted = false }: Pi
   const h = useDefaultLayout({ id: `plcw-${id}-v2-h${right ? '3' : '2'}`, panelIds: hIds, storage: store, onlySaveAfterUserInteractions: true });
   const v = useDefaultLayout({ id: `plcw-${id}-v2-v`, panelIds: ['twin', 'ladder'], storage: store, onlySaveAfterUserInteractions: true });
   const [twinShare] = useState(() => defaultTwinShare(typeof window !== 'undefined' ? window.innerHeight : 1000));
+
+  // --- side docks (hidden from the header toggles, or dragged shut) -------------------------------
+  const leftPanel = usePanelRef();
+  const rightPanel = usePanelRef();
+  const leftHidden = useDocks((st) => st.hidden[id]?.left === true);
+  const rightHidden = useDocks((st) => st.hidden[id]?.right === true);
+  const wide = typeof window === 'undefined' || window.innerWidth >= 1700;
+  useLayoutEffect(() => {
+    let raf = 0;
+    let tries = 0;
+    const apply = (): void => {
+      let pending = false;
+      for (const [ref, hide] of [
+        [leftPanel, leftHidden],
+        [rightPanel, rightHidden],
+      ] as const) {
+        const p = ref.current;
+        if (!p) {
+          pending = pending || (ref === leftPanel || !!right);
+          continue;
+        }
+        if (hide && !p.isCollapsed()) p.collapse();
+        else if (!hide && p.isCollapsed()) p.expand();
+      }
+      if (pending && ++tries < 20) raf = requestAnimationFrame(apply);
+    };
+    apply();
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- panel refs are stable
+  }, [leftHidden, rightHidden, !!right]);
+  const onDockResize = (side: 'left' | 'right') => (size: PanelSize, _id: string | number | undefined, prev: PanelSize | undefined) => {
+    if (!prev) return;
+    const closed = size.inPixels < 1;
+    if (closed !== prev.inPixels < 1) useDocks.getState().setHidden(id, side, closed);
+  };
 
   // --- picture-in-picture ------------------------------------------------------------------------
   // the PiP choice is per page (a sandbox must not open with its operator pad hidden by a mission's choice)
@@ -372,11 +408,20 @@ function DesktopLayout({ id, left, twin, ladder, right, twinWanted = false }: Pi
   return (
     <TwinLayoutContext.Provider value={api}>
       <Group orientation="horizontal" className="h-full min-h-0 w-full" defaultLayout={h.defaultLayout} onLayoutChanged={h.onLayoutChanged}>
-        <Panel id="left" defaultSize={right ? '23%' : '26%'} minSize={220} collapsible collapsedSize={0} className="min-w-0">
+        <Panel
+          id="left"
+          panelRef={leftPanel}
+          defaultSize={right ? (wide ? '22%' : '20%') : wide ? '24%' : '22%'}
+          minSize={220}
+          collapsible
+          collapsedSize={0}
+          onResize={onDockResize('left')}
+          className="min-w-0"
+        >
           <div className="h-full min-h-0 overflow-hidden">{left}</div>
         </Panel>
         <HSeparator />
-        <Panel id="center" defaultSize={right ? '53%' : '74%'} minSize={360} className="min-w-0">
+        <Panel id="center" defaultSize={right ? (wide ? '56%' : '60%') : wide ? '76%' : '78%'} minSize={360} className="min-w-0">
           <div ref={centerRef} className="h-full min-h-0">
             <Group orientation="vertical" className="h-full min-h-0" defaultLayout={v.defaultLayout} onLayoutChanged={v.onLayoutChanged}>
               <Panel id="twin" panelRef={twinPanel} defaultSize={`${twinShare}%`} minSize={120} collapsible collapsedSize={0} onResize={onTwinResize}>
@@ -402,7 +447,7 @@ function DesktopLayout({ id, left, twin, ladder, right, twinWanted = false }: Pi
         {right && (
           <>
             <HSeparator />
-            <Panel id="right" defaultSize="24%" minSize={240} collapsible collapsedSize={0} className="min-w-0">
+            <Panel id="right" panelRef={rightPanel} defaultSize={wide ? '22%' : '20%'} minSize={240} collapsible collapsedSize={0} onResize={onDockResize('right')} className="min-w-0">
               <div className="h-full min-h-0 overflow-hidden">{right}</div>
             </Panel>
           </>

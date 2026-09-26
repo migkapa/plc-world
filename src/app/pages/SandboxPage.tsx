@@ -19,6 +19,7 @@ import { routes } from '../routes';
 import { PlantHardware } from '../workspace/BriefingPanel';
 import { useControlHotkeys } from '../workspace/ControlPad';
 import { LeftDock } from '../workspace/Docks';
+import { DockToggles } from '../workspace/dockToggles';
 import { recordGameEvent } from '../workspace/gameEvents';
 import { IoTable } from '../workspace/IoTable';
 import { LadderPanel } from '../workspace/LadderPanel';
@@ -357,11 +358,12 @@ function SandboxWorkspace({ scene, start, onLoadSlot }: { scene: SceneLogic<unkn
       </Button>
       <span className="mx-0.5 h-6 w-px shrink-0 bg-edge" />
       <Button size="sm" variant="ghost" icon={<Download size={14} />} onClick={onExport} title="Export as neutral text (.txt)" data-testid="export">
-        <span className="hidden xl:inline">Export</span>
+        <span className="hidden 2xl:inline">Export</span>
       </Button>
       <Button size="sm" variant="ghost" icon={<Upload size={14} />} onClick={() => setImportOpen(true)} title="Import neutral text" data-testid="import">
-        <span className="hidden xl:inline">Import</span>
+        <span className="hidden 2xl:inline">Import</span>
       </Button>
+      <DockToggles page="sandbox" left="the plant panel" right="the plant monitor" className="mx-1" />
       <Button size="sm" variant="primary" icon={<Share2 size={14} />} onClick={() => void onShare()} title="Copy a link to this program" data-testid="share">
         <span className="hidden sm:inline">Share</span>
       </Button>

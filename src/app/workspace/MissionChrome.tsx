@@ -11,6 +11,7 @@ import { CHAPTER_UNLOCK_SHARE, isChapterUnlockedFor, isMissionUnlockedFor, useGa
 import type { PlayerProfile } from '../../game/types';
 import type { MissionDef } from '../../game/types';
 import { Button, Kbd, Markdown, Modal, ProgressBar, Stars, cn } from '../../ui';
+import { DockToggles } from './dockToggles';
 import { routes } from '../routes';
 
 export function ChapterChip({ chapterId, className }: { chapterId: string; className?: string }) {
@@ -80,6 +81,7 @@ function MissionBarImpl({ mission, bestStars, objectivesMet, testsRun, stale = f
         <ProgressBar value={objectivesMet / Math.max(1, total)} className="h-1.5" />
       </div>
       {extra}
+      <DockToggles page="mission" left="the briefing panel" right="the tests panel" />
       <Button
         size="sm"
         variant="secondary"

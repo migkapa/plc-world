@@ -4,7 +4,7 @@
  * control pad). Falls back to a clean panel when the scene has no 3D view yet or WebGL fails — the
  * simulation keeps running either way (it is ticked by the page, not by the view).
  */
-import { Box, Cctv, Eye, EyeOff, Loader2, Maximize2, Minimize2, Wrench } from 'lucide-react';
+import { Box, Cctv, Loader2, Maximize2, Minimize2, Tag, Wrench } from 'lucide-react';
 import { Component, memo, Suspense, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { useGame } from '../../game/store';
 import { useSceneOverlay } from '../../sim/scenes/overlay';
@@ -12,6 +12,7 @@ import type { ControlDef, SceneDefinition, SceneLogic, SimRuntime } from '../../
 import { SceneCanvas, useStageCamera } from '../../twin/Stage';
 import { cn, hasWebGL } from '../../ui';
 import { ControlPad, FaultList } from './ControlPad';
+import { HudIconButton, HudMenu } from './OverlayMenu';
 import { DeviceCamera, ShowDeviceButton } from './highlight/DeviceCamera';
 import { TwinLayoutButton, useTwinLayout } from './TwinLayout';
 import { useReducedMotion } from '../hud/prefs';
@@ -44,26 +45,20 @@ class ViewBoundary extends Component<{ fallback: (error: Error) => ReactNode; ch
 function CameraBar({ onPick }: { onPick?: ((id: string) => void) | undefined }) {
   const cam = useStageCamera();
   if (cam.presets.length < 2) return null;
+  const current = cam.presets.find((p) => p.id === cam.current);
   return (
-    <div className="pointer-events-auto flex flex-wrap items-center gap-1 rounded-lg border border-white/10 bg-black/50 p-0.5 backdrop-blur" role="group" aria-label="Camera presets">
-      <Cctv size={13} className="mx-1 text-slate-400" />
-      {cam.presets.map((p) => (
-        <button
-          key={p.id}
-          type="button"
-          onClick={() => {
-            cam.goTo(p.id);
-            onPick?.(p.id);
-          }}
-          className={cn(
-            'h-6 cursor-pointer rounded-md px-2 text-[11px] font-semibold whitespace-nowrap',
-            cam.current === p.id ? 'bg-white/90 text-slate-900' : 'text-slate-200 hover:bg-white/10',
-          )}
-        >
-          {p.label}
-        </button>
-      ))}
-    </div>
+    <HudMenu
+      icon={<Cctv size={13} className="text-slate-400" />}
+      value={current?.label ?? 'Camera'}
+      label="Camera view"
+      header="Camera view"
+      items={cam.presets.map((p) => ({ id: p.id, label: p.label }))}
+      selected={cam.current}
+      onPick={(id) => {
+        cam.goTo(id);
+        onPick?.(id);
+      }}
+    />
   );
 }
 
@@ -104,23 +99,15 @@ function ShowTagsToggle() {
   const show = useSceneOverlay((s) => s.showTags);
   const toggle = useSceneOverlay((s) => s.toggleShowTags);
   return (
-    <button
-      type="button"
+    <HudIconButton
+      label={show ? 'Hide I/O tags (show them on hover only)' : 'Show I/O tags on every device (alias · address · live value)'}
+      active={show}
+      tone="emerald"
       onClick={toggle}
-      aria-pressed={show}
-      aria-label="Show I/O tags"
-      title={show ? 'Showing the I/O tag chips (alias · address · live value) on every device — click to show them on hover only' : 'Show I/O tags: pin the tag chips (alias · address · live value) on every device'}
-      className={cn(
-        'pointer-events-auto flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border px-2 text-[11px] font-semibold whitespace-nowrap backdrop-blur',
-        show ? 'border-emerald-400/50 bg-emerald-500/25 text-emerald-100' : 'border-white/10 bg-black/50 text-slate-200 hover:bg-white/10',
-      )}
-      data-testid="show-io-tags"
+      testId="show-io-tags"
     >
-      {show ? <Eye size={13} /> : <EyeOff size={13} />}
-      <span>
-        <span className="hidden sm:inline">Show </span>I/O tags
-      </span>
-    </button>
+      <Tag size={13} />
+    </HudIconButton>
   );
 }
 
@@ -139,18 +126,15 @@ function InstructorMenu({ runtime, controls }: { runtime: SimRuntime; controls: 
   if (controls.length === 0) return null;
   return (
     <div ref={ref} className="pointer-events-auto relative">
-      <button
-        type="button"
+      <HudIconButton
+        label={active > 0 ? `Instructor: ${active} field fault${active === 1 ? '' : 's'} injected` : 'Instructor: inject field faults (failed sensors, overloads…)'}
+        active={open || active > 0}
+        tone="amber"
+        badge={active > 0 ? active : undefined}
         onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        title="Instructor: inject field faults (failed sensors, overloads…)"
-        className={cn(
-          'flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border px-2 text-[11px] font-semibold backdrop-blur',
-          active > 0 ? 'border-amber-400/60 bg-amber-500/25 text-amber-100' : 'border-white/10 bg-black/50 text-slate-200 hover:bg-white/10',
-        )}
       >
-        <Wrench size={13} /> Instructor{active > 0 ? ` · ${active} fault${active === 1 ? '' : 's'}` : ''}
-      </button>
+        <Wrench size={13} />
+      </HudIconButton>
       {open && (
         <div className="absolute top-8 right-0 z-20 w-72 rounded-xl border border-edge bg-panel-2/95 p-3 shadow-2xl backdrop-blur">
           <div className="mb-2 text-[11px] font-semibold tracking-wide text-slate-400 uppercase">Fault injection</div>
@@ -169,7 +153,7 @@ function ControllerChip({ runtime }: { runtime: SimRuntime }) {
   return (
     <span
       className={cn(
-        'pointer-events-auto flex h-6 items-center gap-1.5 rounded-md border px-2 font-mono text-[10.5px] font-bold backdrop-blur',
+        'pointer-events-auto flex h-7 items-center gap-1.5 rounded-lg border px-2 font-mono text-[10.5px] font-bold backdrop-blur',
         faulted ? 'border-red-400/60 bg-red-600/40 text-red-100' : st.running ? 'border-emerald-400/40 bg-emerald-600/25 text-emerald-100' : 'border-sky-400/40 bg-sky-700/30 text-sky-100',
       )}
       title={st.displayText}
@@ -305,27 +289,19 @@ function TwinPanelImpl({ scene, definition, runtime, viewKey, controls, moreCont
     [],
   );
   const expandButton = (
-    <button
-      type="button"
-      onClick={() => setExpanded((v) => !v)}
-      aria-pressed={expanded}
-      aria-label={expanded ? 'Exit full view (Esc)' : 'Full view (F)'}
-      title={expanded ? 'Exit full view (Esc)' : 'Full view (F)'}
-      className="pointer-events-auto flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-white/10 bg-black/50 px-2 text-xs font-medium text-slate-200 backdrop-blur transition-colors hover:bg-black/70 hover:text-white"
-    >
-      {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-      <span className="hidden sm:inline">{expanded ? 'Exit' : 'Full view'}</span>
-    </button>
+    <HudIconButton label={expanded ? 'Exit full view (Esc)' : 'Full view (F)'} active={expanded} onClick={() => setExpanded((v) => !v)}>
+      {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+    </HudIconButton>
   );
   const overlay = (withCamera: boolean) => (
     <div className={cn('pointer-events-none absolute inset-0 flex flex-col justify-between gap-2 p-2', pip && 'hidden')}>
       <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+        <div className="flex min-w-0 items-center gap-1">
           {withCamera && <CameraFocus id={focusCamera} />}
           {withCamera && <CameraBar onPick={onCameraPick} />}
           {withCamera && <ShowTagsToggle />}
         </div>
-        <div className="pointer-events-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+        <div className="pointer-events-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
           <ControllerChip runtime={runtime} />
           {tools}
           <InstructorMenu runtime={runtime} controls={faults} />

@@ -2557,15 +2557,17 @@ export function LadderEditor(props: LadderEditorProps) {
             )}
           </div>
           {allEmpty && !readOnly && (
-            <div className="pointer-events-none mx-auto mt-4 max-w-lg px-4 pb-8" style={{ marginLeft: Math.max(16, (endRail.railL + 24) * zoom) }}>
-              <div className="rounded-xl border border-dashed border-[var(--ld-chrome-border)] bg-[var(--ld-chrome)]/60 px-5 py-4 text-[12.5px] leading-relaxed text-[var(--ld-chrome-muted)]">
-                <div className="mb-1 text-[13px] font-semibold text-[var(--ld-chrome-text)]" data-testid="ld-empty-title">
-                  {noRungs ? 'This routine is empty' : 'No instructions yet'}
-                </div>
-                {noRungs ? 'Pick an instruction from the toolbar' : `Click ${rungs.length === 1 ? 'the rung' : 'a rung'} and pick an instruction from the toolbar`}, or just
-                type <span className="font-mono font-semibold whitespace-nowrap text-[var(--ld-chrome-text)]" data-testid="ld-empty-example">{exampleEntry}</span> and press{' '}
-                <K>Enter</K> — like the ASCII editor in Studio 5000. Drag toolbar buttons onto a rung wire, right-click for more.
-              </div>
+            <div
+              className="pointer-events-none mt-3 pr-4 pb-6 text-[12px] leading-relaxed text-[var(--ld-chrome-muted)]"
+              style={{ marginLeft: Math.max(16, (endRail.railL + 24) * zoom) }}
+            >
+              <span className="font-semibold text-[var(--ld-chrome-text)]" data-testid="ld-empty-title">
+                {noRungs ? 'This routine is empty' : 'No instructions yet'}
+              </span>
+              .{' '}
+              {noRungs ? 'Pick an instruction from the toolbar' : `Click ${rungs.length === 1 ? 'the rung' : 'a rung'}`} and type{' '}
+              <span className="font-mono font-semibold whitespace-nowrap text-[var(--ld-chrome-text)]" data-testid="ld-empty-example">{exampleEntry}</span> +{' '}
+              <K>Enter</K>, or drag an instruction from the toolbar.
             </div>
           )}
         </div>

@@ -6,7 +6,7 @@ import { AlertCircle, Check, RefreshCw, CircleDashed, Eye, FlaskConical, Loader2
 import { memo, useCallback, useSyncExternalStore, type ReactNode } from 'react';
 import type { MissionDef, TestResult } from '../../game/types';
 import type { SceneLogic } from '../../sim/types';
-import { Button, Kbd, ProgressBar, cn } from '../../ui';
+import { Button, ProgressBar, cn } from '../../ui';
 import { describeFailure, violatedInvariants } from './stepText';
 import type { TestProgressStore, TestStatus } from './testRun';
 
@@ -116,8 +116,17 @@ function TestPanelImpl({
             )}
           </div>
         </div>
-        <Button size="sm" variant="primary" onClick={onRun} disabled={running} icon={running ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} data-testid="run-tests">
-          {running ? 'Testing…' : 'Verify & Test'}
+        {/* the mission bar has the primary Verify & Test; this one is a quiet re-run next to the results */}
+        <Button
+          size="xs"
+          variant="secondary"
+          onClick={onRun}
+          disabled={running}
+          icon={running ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+          title="Verify & Test (Ctrl+Enter)"
+          data-testid="run-tests"
+        >
+          {running ? 'Testing…' : 'Run'}
         </Button>
       </div>
 
@@ -242,9 +251,6 @@ function TestPanelImpl({
             <StarLine ok={allPassed && hintsUsed === 0} label={hintsUsed === 0 ? 'No hints used' : `${hintsUsed} hint${hintsUsed === 1 ? '' : 's'} used (max 2 stars)`} neutral={!allPassed && hintsUsed === 0} />
           </ul>
         </div>
-        <p className="text-center text-[10.5px] text-slate-600">
-          <Kbd>Ctrl</Kbd> + <Kbd>Enter</Kbd> runs Verify &amp; Test
-        </p>
       </div>
     </div>
   );

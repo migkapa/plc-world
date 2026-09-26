@@ -44,6 +44,11 @@ export interface OnlineToolbarProps {
   allowKeySwitch?: boolean;
   /** Communication path (default derived from the hardware). */
   path?: string;
+  /**
+   * 'calm' (game workspace): forces / edits / faults collapse to icons unless something is going on, and the status
+   * lights, key switch, path and scan time live in the "More" menu. 'full' (default) is the Studio 5000 layout.
+   */
+  density?: 'full' | 'calm';
   className?: string;
 }
 
@@ -202,7 +207,7 @@ function Tile({
   );
 }
 
-export function OnlineToolbar({ controller, editsState = 'none', editsTitle, onModeChange, online = true, onGoOnline, onGoOffline, allowKeySwitch, path, className }: OnlineToolbarProps) {
+export function OnlineToolbar({ controller, editsState = 'none', editsTitle, onModeChange, online = true, onGoOnline, onGoOffline, allowKeySwitch, path, className, density = 'full'}: OnlineToolbarProps) {
   const [st, refreshStatus] = useStatus(controller);
   const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const [confirmForces, setConfirmForces] = useState(false);
@@ -323,7 +328,21 @@ export function OnlineToolbar({ controller, editsState = 'none', editsTitle, onM
   // below 560 px the forces / edits / faults tiles keep only their icons (label in the tooltip and for screen readers).
   const moreMenu = (): MenuEntry[] => {
     const now = controller.getStatus();
+    const lights: MenuEntry[] =
+      density === 'calm'
+        ? [
+            {
+              heading: [
+                online && now.running ? 'Run Mode ●' : 'Run Mode ○',
+                now.ok === 'green' ? 'Controller OK ●' : 'Controller Fault ✕',
+                now.ioLed === 'green' ? 'I/O OK ●' : now.ioLed === 'off' ? 'No I/O' : 'I/O not OK ✕',
+              ].join('  ·  '),
+            },
+            'sep',
+          ]
+        : [];
     return [
+      ...lights,
       { heading: allowKeySwitch ? 'Key switch' : 'Key switch (turn it on the 3D controller)' },
       ...keyPositions.map(
         (k): MenuEntry => ({
@@ -342,6 +361,9 @@ export function OnlineToolbar({ controller, editsState = 'none', editsTitle, onM
       },
     ];
   };
+
+  const calm = density === 'calm';
+  const quietForces = !online || forcesCount === 0;
 
   return (
     <div
@@ -377,17 +399,17 @@ export function OnlineToolbar({ controller, editsState = 'none', editsTitle, onM
           menu
           onClick={(el) => openMenu(el, forcesMenu())}
           title="I/O forces"
-          className={cn('min-w-[118px] justify-between @max-[640px]:min-w-0', online && forcesCount > 0 && !st.forcesEnabled && 'ld-blink')}
+          className={cn(calm ? (quietForces ? 'min-w-0' : '') : 'min-w-[118px] justify-between @max-[640px]:min-w-0', online && forcesCount > 0 && !st.forcesEnabled && 'ld-blink')}
         >
           <span className="flex items-center gap-1.5">
             <Zap size={12} />
-            <span className="@max-[560px]:sr-only">{forcesCount === 0 ? 'No Forces' : st.forcesEnabled ? 'Forces Enabled' : 'Forces Disabled'}</span>
+            <span className={cn('@max-[560px]:sr-only', calm && quietForces && 'sr-only')}>{forcesCount === 0 ? 'No Forces' : st.forcesEnabled ? 'Forces Enabled' : 'Forces Disabled'}</span>
           </span>
         </Tile>
         {/* edits */}
-        <Tile tone={online ? EDITS[editsState].tone : 'neutral'} title={editsTitle ?? EDITS[editsState].title} className="min-w-[104px] @max-[640px]:min-w-0">
+        <Tile tone={online ? EDITS[editsState].tone : 'neutral'} title={editsTitle ?? EDITS[editsState].title} className={calm ? 'min-w-0' : 'min-w-[104px] @max-[640px]:min-w-0'}>
           <span className="flex items-center gap-1.5" data-testid="edits-tile" data-state={editsState}>
-            <Pencil size={11} /> <span className="@max-[560px]:sr-only">{EDITS[editsState].label}</span>
+            <Pencil size={11} /> <span className={cn('@max-[560px]:sr-only', calm && editsState === 'none' && 'sr-only')}>{EDITS[editsState].label}</span>
           </span>
         </Tile>
         {/* faults */}
@@ -398,7 +420,7 @@ export function OnlineToolbar({ controller, editsState = 'none', editsTitle, onM
           title={st.majorFault ? st.majorFault.message : 'Controller faults'}
         >
           {faulted ? <AlertOctagon size={12} /> : <TriangleAlert size={12} />}
-          <span className={cn(!faulted && '@max-[560px]:sr-only')}>
+          <span className={cn(!faulted && '@max-[560px]:sr-only', calm && !faulted && st.minorFaults.length === 0 && 'sr-only')}>
           {faulted && st.majorFault ? `Major Fault ${faultId(st.majorFault.type, st.majorFault.code)}` : st.minorFaults.length > 0 ? `${st.minorFaults.length} Minor Fault${st.minorFaults.length === 1 ? '' : 's'}` : 'No Faults'}
         </span>
         </Tile>
@@ -407,17 +429,19 @@ export function OnlineToolbar({ controller, editsState = 'none', editsTitle, onM
             Clear Majors
           </Button>
         )}
-        <div className="mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)]" />
+        <div className={cn('mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)]', calm && 'hidden')} />
         {/* status lights */}
+        <div className={cn(calm && 'hidden')}>
         <div className="grid shrink-0 grid-cols-2 gap-x-3 gap-y-0.5 text-[10.5px] leading-[14px] @max-[940px]:gap-x-1.5" data-testid="status-lights">
           <Led state={online && running ? 'green' : 'off'} label="Run Mode" />
           <Led state={!online ? 'off' : st.ok === 'green' ? 'green' : st.ok === 'off' ? 'off' : 'flashing-red'} label={st.ok === 'green' || !online ? 'Controller OK' : 'Controller Fault'} />
           <Led state={online ? 'green' : 'off'} label="Energy Storage OK" />
           <Led state={!online ? 'off' : st.ioLed === 'green' ? 'green' : st.ioLed === 'off' ? 'off' : st.ioLed === 'flashing-red' ? 'flashing-red' : 'flashing-green'} label="I/O OK" title={st.ioLed === 'off' ? 'No I/O modules configured' : 'All I/O connections running'} />
         </div>
-        <div className="mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)] @max-[800px]:hidden" />
+        </div>
+        <div className={cn('mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)] @max-[800px]:hidden', calm && 'hidden')} />
         {/* key switch */}
-        <div className="flex shrink-0 items-center gap-1.5 @max-[800px]:hidden" title="Controller key switch" data-testid="key-switch">
+        <div className={cn('flex shrink-0 items-center gap-1.5 @max-[800px]:hidden', calm && 'hidden')} title="Controller key switch" data-testid="key-switch">
           <KeyRound size={13} className="text-[var(--ld-chrome-muted)]" />
           <div className="flex overflow-hidden rounded-md border border-[var(--ld-chrome-border)]">
             {keyPositions.map((k) => (
@@ -438,9 +462,9 @@ export function OnlineToolbar({ controller, editsState = 'none', editsTitle, onM
             ))}
           </div>
         </div>
-        <div className="mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)] @max-[800px]:hidden" />
+        <div className={cn('mx-1 h-7 w-px shrink-0 bg-[var(--ld-chrome-border)] @max-[800px]:hidden', calm && 'hidden')} />
         {/* path & scan */}
-        <div className="flex min-w-0 shrink-0 flex-col leading-[14px] @max-[800px]:hidden">
+        <div className={cn('flex min-w-0 shrink-0 flex-col leading-[14px] @max-[800px]:hidden', calm && 'hidden')}>
           <span className="truncate @max-[940px]:hidden">
             Path: <span className="font-mono text-[var(--ld-chrome-text)]">{path ?? defaultCommPath(controller)}</span>
           </span>
@@ -450,7 +474,10 @@ export function OnlineToolbar({ controller, editsState = 'none', editsTitle, onM
         <button
           type="button"
           onClick={(e) => openMenu(e.currentTarget, moreMenu())}
-          className="hidden h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-[var(--ld-chrome-border)] bg-[var(--ld-chrome-2)] px-1.5 text-[var(--ld-chrome-text)] hover:brightness-110 focus-visible:ring-2 focus-visible:ring-sky-400/70 focus-visible:outline-none @max-[800px]:inline-flex"
+          className={cn(
+            'hidden h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-[var(--ld-chrome-border)] bg-[var(--ld-chrome-2)] px-1.5 text-[var(--ld-chrome-text)] hover:brightness-110 focus-visible:ring-2 focus-visible:ring-sky-400/70 focus-visible:outline-none @max-[800px]:inline-flex',
+            calm && 'inline-flex',
+          )}
           title={`Key switch ${st.keySwitch}, communication path and scan time`}
           aria-label="More controller status: key switch, path and scan time"
           data-testid="toolbar-more"

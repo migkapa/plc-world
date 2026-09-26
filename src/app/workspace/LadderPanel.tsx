@@ -419,6 +419,7 @@ function LadderPanelImpl({ ws, editorRef, allowedInstructions, replayController,
       <div className="flex shrink-0 items-stretch">
         <ScrollFade className="min-w-0 flex-1">
           <OnlineToolbar
+            density="calm"
             controller={replayController ?? ws.controller}
             online
             editsState={editsState}

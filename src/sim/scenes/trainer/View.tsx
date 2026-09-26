@@ -65,7 +65,7 @@ import {
 } from './kit';
 import { SoundWaves } from './fx';
 import { rackCableRuns } from './rackRuns';
-import { LabRoom, ROOM, ROOM_OCCLUDERS, WindowLight } from './Room';
+import { BenchStage, ROOM, STAGE_OCCLUDERS } from './Room';
 import { useDisposeOnUnmount } from '../../../twin/dispose';
 
 // ---------------------------------------------------------------------------
@@ -1065,7 +1065,7 @@ function InputLeds({ state }: { state: TrainerState }) {
 // ---------------------------------------------------------------------------
 
 const OCCLUDERS: Array<[Vec3, Vec3]> = [
-  ...ROOM_OCCLUDERS,
+  ...STAGE_OCCLUDERS,
   // upright pegboard panel
   [
     [UPRIGHT.x0, TOP + 0.03, UPRIGHT.z - 0.03],
@@ -1134,8 +1134,7 @@ export function TrainerView({ state, runtime }: SceneViewProps<TrainerState>) {
 
   return (
     <TagLayer occluders={OCCLUDERS} pinStyle="pill">
-      <LabRoom />
-      <WindowLight />
+      <BenchStage />
       <pointLight position={[0.0, 2.6, 1.6]} intensity={4} distance={6} decay={1.8} color="#fff1dd" />
       <MergeStatic>
         <Bench />

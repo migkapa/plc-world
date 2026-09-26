@@ -368,13 +368,29 @@ export interface PlcController {
   removeForce(operand: string): void;
   removeAllForces(): void;
   enableForces(enabled: boolean): void;
+  /**
+   * Installed forces. Keys are canonical, alias-resolved operand paths: forcing alias 'Stop_PB'
+   * (-> Local:1:I.Data.1) gives the key 'Local:1:I.Data.1'. Use `getForce()` to look up by operand text.
+   */
   getForces(): Record<string, boolean | number>;
+  /**
+   * Forced value of an operand as written in logic (alias or canonical path; `program` for
+   * program-scoped aliases), or undefined when it is not forced.
+   */
+  getForce?(operand: string, program?: string): boolean | number | undefined;
 
   // --- field I/O (used by the simulation runtime / scenes) ---
   /** Write a value coming from field wiring into an input image operand (e.g. 'Local:1:I.Data.0'). Forces take precedence. */
   writeInputFromField(operand: string, value: boolean | number): void;
   /** Read what the output module drives to the field. Returns false/0 when the controller is not running (PROG/FAULTED). */
   readOutputForField(operand: string): boolean | number;
+  /**
+   * Optional: the value the field wiring last wrote to an input operand, IGNORING forces (i.e. the voltage at
+   * the module terminal). A forced input's tag shows the forced value, but a real input module's ST indicator
+   * shows the field state — the 3D twins use this to teach that difference. Implementations can return the
+   * value remembered while the input is forced, else the input tag value.
+   */
+  readInputFromField?(operand: string): boolean | number;
 
   // --- events ---
   subscribe(listener: (e: ControllerEvent) => void): () => void;

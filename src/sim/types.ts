@@ -99,9 +99,31 @@ export interface SceneDefinition<S = unknown> {
   View: ComponentType<SceneViewProps<S>>;
   /** Camera presets for the view switcher. First is the default. */
   cameras: Array<{ id: string; label: string; position: [number, number, number]; target: [number, number, number] }>;
+  /**
+   * Optional "where is this device" map for automatic camera moves (test replays look at the device a step
+   * operates or checks): control id / observable id / I/O alias tag → the id of the camera preset (in `cameras`)
+   * that shows that device best. Ids not listed fall back to the scene rules in src/app/workspace/replayCamera.ts.
+   */
+  focus?: Record<string, string>;
   /** Thumbnail accent colour for cards. */
   accent?: string;
+  /** Stage lighting preset (see src/twin/Stage.tsx); default 'hall'. */
+  environment?: 'hall' | 'street' | 'studio';
+  /** Optional demo program (neutral text rungs) that makes the plant come alive in previews/showroom. */
+  demoRungs?: string[];
+  /** Internal tags (BOOL / TIMER / COUNTER / DINT…) the demo program uses; loaded together with `demoRungs`. */
+  demoTags?: TagDef[];
+  /**
+   * How to put the demo in motion: demo programs never start by themselves (like a real machine they wait for the
+   * operator). A preview taps these after loading `demoRungs` (see `applyDemoStart()` in src/sim/demo.ts): a string
+   * is a momentary control pressed once, `[id, value]` sets a control first (e.g. a selector to HAND). Absent: the
+   * demo runs on its own (trainer ramp, traffic sequencer, parking arrivals).
+   */
+  demoStart?: DemoStartStep[];
 }
+
+/** One step of `SceneDefinition.demoStart`: tap a momentary control, or set a control to a value. */
+export type DemoStartStep = string | readonly [control: string, value: boolean | number];
 
 /**
  * Couples a controller with a scene and runs them in lock-step with a fixed time step.

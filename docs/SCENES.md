@@ -24,6 +24,43 @@ General rules
 - Physical interlocks that exist in real hardwired circuits are simulated (e.g. an E-stop drops out a
   contactor even if the PLC output is on).
 
+Demo programs & 3D views
+
+- Demo programs (`SceneDefinition.demoRungs` + `demoTags`) never start a machine by themselves — like the real
+  plant they wait for the operator. `SceneDefinition.demoStart` says how to put them in motion (`'start'` = tap a
+  momentary control, `['hoa', 0]` = set a control first); `applyDemoStart()` / `describeDemoStart()` in
+  `src/sim/demo.ts` apply or describe it. The scene-dev harness applies it automatically (`&start=0` to skip), the
+  sandbox's "Load example" loads the rungs + tags and tells the user how to start. Scenes without `demoStart`
+  (trainer, traffic-light, parking-garage) run on their own.
+- Lamp devices (800F pilot lights / illuminated push buttons, 855T / 856T stack lights) render their own dark,
+  slightly translucent unlit lens and a lit core above the Stage's bloom threshold for every colour — no scene-side
+  lens boosting. Far-view readability halos (`Glow` in `conveyor-sort/kit.tsx`) use `fadeInFrom` so they only show
+  where the lens is a few pixels wide.
+- Field-device cables are opt-in: `cableTo` / `tubes` / `cables` routes (`{ to, via }`, or `'floor'` for a floor
+  conduit stub); without one a device shows no cable beyond its own connector.
+- `ControlLogixRack` / `CompactLogixRack` have a built-in screen-size LOD (`lod`, default 90 px): below it a
+  one-draw-call impostor replaces the live rack. `DistanceLod` (`src/twin/lod.tsx`) is the generic switch.
+- three.js resources a component allocates in `useMemo` are released with `useDisposeOnUnmount()`
+  (`src/twin/dispose.ts`), never with a bare `useEffect` cleanup (React 19 StrictMode's simulated unmount would
+  free a resource the remounted component keeps using). Module-level caches of shared geometries / materials /
+  textures are fine: when a `SceneCanvas` unmounts, `releaseRendererAfterUnmount()` (`src/twin/releaseRenderer.ts`)
+  removes the dead renderer's dispose listeners from every resource it used, disposes it and detaches its canvas.
+- The DOM HUD over a scene (`SceneCanvas overlay`: camera bar, tools, replay caption, operator pad) always paints
+  above everything the canvas layers itself (the `<Canvas>` is its own stacking context). Screen-space layers keep
+  out of it with `hudRects(canvas)` (`src/twin/hud.ts`: the overlay's outermost `pointer-events: auto` boxes, in
+  canvas pixels) — both TagLayers treat those boxes as obstacles. With `hudFraming` (the workspace twin panel) the
+  projection centre moves into the band the HUD leaves free, so camera presets frame their target above the pad.
+- **Device highlight** ("where is this device?"): `useSceneOverlay().setHighlight(aliases, source)` /
+  `clearHighlight(source)` / `showDevice(alias)` (`src/sim/scenes/overlay.ts`). Both TagLayers match every `IoTag` /
+  `IoHotspot` whose lines / I/O points name a highlighted alias or its address (case-insensitive), show its full chip
+  (cyan border) and draw a pulsing cyan outline around the on-screen footprint of its hover box
+  (`src/sim/scenes/highlight.ts`: plain DOM in the chip layer; dashed when the device is behind a wall / panel back;
+  static for reduced motion). They report where the first highlighted alias is (`target`: world position, radius,
+  on screen or which side it is off to) for the twin's "Show" button and the fly-to camera
+  (`src/app/workspace/highlight/DeviceCamera.tsx`). New scene devices get all of this by carrying an `IoTag` /
+  `IoHotspot` with the right alias — nothing scene-specific to add; a hover box that fits the device keeps the
+  outline tight.
+
 ---
 
 ## 1. `trainer` — PLC Trainer Bench (ControlLogix)
@@ -93,7 +130,9 @@ Physics
 Controls: `start` (momentary, key S), `stop` (momentary, key X), `jog` (momentary, key J),
 `estop` (maintained; true = mushroom pushed), `hoa` (selector: 0 = HAND, 1 = OFF, 2 = AUTO; default 1),
 `remote_run` (maintained; upstream run request; default false), `overload_trip` (fault; default false),
-`overload_reset` (momentary: resets a tripped overload if the cause is gone), `jam` (fault; default false).
+`overload_reset` (momentary: a press resets a tripped overload if the cause is gone — no `overload_trip`, no
+`jam` — and its thermal memory has cooled below 25 %, ≈ 2.25 s after a jam trip; holding it cannot defeat a
+trip), `jam` (fault; default false).
 
 Observables: `contactor` (bool, coil energized), `motorRunning` (bool, rpm > 100), `motorRpm`,
 `runLight`, `faultLight`, `horn`, `readyLight` (bool), `motorStarts` (count of contactor off→on),
@@ -126,6 +165,10 @@ Physics
   `spawn_ew` / `spawn_ns` controls add one car immediately. Cars stop at the stop line on red/yellow
   (yellow: stop only if they can), proceed on green, queue behind each other.
 - `Car_Sensor_EW` = 1 while at least one EW car waits at the stop line.
+- Drivers read each head like real drivers: a lamp relit within 3.2 s is flashing (≥ ~19 flashes/min;
+  flickers < 150 ms ignored). Flashing yellow = proceed with caution, flashing red or a dark head = all-way
+  stop, a steady yellow lasting > 8 s is treated as caution. Nobody pulls into a crossing car already in
+  (or committed to) the intersection, so only conflicting signals cause crashes.
 - `conflict` = (NS green or yellow) AND (EW green or yellow) at the same time, OR Walk on while NS
   green/yellow. When a conflict lasts ≥ 100 ms, `conflicts` increments once per occurrence (a car
   crash animation plays in the view).
@@ -229,16 +272,20 @@ slot 2 `1756-OB16E`, slot 3 `1756-IF8`, slot 4 `1756-OF8`, slot 5 `1756-EN2T`.
 Physics
 - Inflow (%/s) = 4.5 × max(Fill_Valve ? 1 : 0, clamp(FCV_101,0,100)/100). Outflow = 5 %/s while
   `Drain_Valve` open and level > 0. Level clamps at 0 and 100; at 100 with inflow the tank spills
-  (`spills` increments once per overflow event, `overflow` true while spilling).
+  (`spills` increments once per overflow event, `overflow` true while spilling). An event lasts until the
+  level drops below 99.5 % or nothing has spilled for 2 s, so a fill valve chattering at the rim is one spill.
 - Temperature (°C): heater adds 1.2 °C/s × (50 / max(level, 20)) while `Heater` on and level ≥ 10 %;
-  heater on with level < 10 % counts `dryHeatMs` (bad). Cooling toward 20 °C at 0.02 × (T − 20) per s;
-  inflow at 15 °C mixes in proportionally.
+  heater on with level < 10 % counts `dryHeatMs` (bad). Cooling toward 20 °C at 0.005 × (T − 20) per s
+  (insulated tank, τ ≈ 200 s); inflow at 15 °C mixes in proportionally; the liquid is capped at 100 °C
+  (boiling). Reference heat-up for mission time limits: 15 → 60 °C at 90 % level takes ≈ 79 s.
+  (With 0.02 the heater equilibrium would be ≈ 53 °C at 90 % and the batch below could never complete.)
 - Agitator: runs when `Mixer` output on and E-stop released; `Mixer_Running` follows with 100 ms.
   Running with level < 10 % counts `dryRunMs`.
 - Transmitter noise: ±0.05 % deterministic (seeded).
 - Batch accounting: a batch is complete when the tank was filled ≥ 85 %, heated to ≥ 60 °C while the
   mixer ran ≥ 5 s cumulative, then drained below 5 % → `batches` increments.
-- Faults: `lt_fail` (LT_101 reads 0.0 and module channel fault), `lsh_fail` (LSH_101 stuck at 0).
+- Faults: `lt_fail` (open loop: LT_101 reads 0.0 and the 1756-IF8 sets `Local:3:I.Ch0Fault` and
+  `Local:3:I.Ch0Underrange`), `lsh_fail` (LSH_101 stuck at 0).
 
 Controls: `start` (momentary), `stop` (momentary), `estop` (maintained), `discharge` (momentary),
 `lt_fail` (fault), `lsh_fail` (fault).
@@ -274,7 +321,8 @@ Physics
 - Driver behavior at the entry: arrives on the loop, waits 0.8 s, presses `Ticket_PB` for 0.3 s
   (repeats every 4 s while waiting), drives through once the gate is up (the car occupies the PE for
   ~1.0 s), then parks. If the garage is physically full the car leaves by the exit lane after 5 s
-  (`carsTurnedAway`).
+  (`carsTurnedAway`). If the PLC opens the gate on a full garage anyway, one car without a space is let in
+  at a time (it circles and queues for the exit; `carsInside` exceeds 12); the others are turned away.
 - Parked cars leave after a random dwell (seeded PRNG) when `auto_traffic` is on; `spawn_exit` sends one
   parked car (if any) to the exit loop immediately. Exit gate: car waits on `Exit_Loop` until the gate is up.
 - Lowering a gate while a car is under it (PE on) → `gateHits` increments (the arm bounces).

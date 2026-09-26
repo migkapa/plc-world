@@ -12,6 +12,12 @@ export type TestStep =
   /** Press a momentary control for `ms` (default 200 ms) and release it. */
   | { do: 'tap'; id: string; ms?: number }
   /**
+   * Remote mode change of the controller (key switch stays in REM), e.g. to prove that a latched
+   * output does not restart the machine after a PROG -> RUN transition (prescan / S:FS lessons).
+   * `RUN` fails the step if the controller refuses (faulted / verification errors).
+   */
+  | { do: 'mode'; mode: 'PROG' | 'RUN' }
+  /**
    * Check an observable (scene) or a tag (controller) value.
    * - `equals`: exact match (booleans, integers)
    * - `min`/`max`: numeric range (inclusive)
@@ -37,6 +43,17 @@ export interface MissionTest {
   steps: TestStep[];
 }
 
+/** A value probe + condition (used by `MissionInvariant.when`). */
+export interface MissionCondition {
+  observe?: string;
+  tag?: string;
+  /** Scene control value (e.g. `{ control: 'estop', equals: true }` = while the E-stop is pushed). */
+  control?: string;
+  equals?: boolean | number;
+  min?: number;
+  max?: number;
+}
+
 /** Condition that must hold at every simulation step of every test (e.g. "never both directions green"). */
 export interface MissionInvariant {
   observe?: string;
@@ -45,9 +62,29 @@ export interface MissionInvariant {
   min?: number;
   max?: number;
   message: string;
+  /** Only enforce the invariant while this condition holds (e.g. only while the E-stop is pushed). */
+  when?: MissionCondition;
+  /**
+   * Tolerated violation time in ms (default 0): the invariant fails only when it is violated for
+   * longer than this, e.g. 20 ms = two scans for logic that reacts through an internal bit.
+   */
+  graceMs?: number;
 }
 
 export type MissionKind = 'build' | 'troubleshoot' | 'boss';
+
+/**
+ * One proof of a mission objective (see `MissionDef.objectiveTests`):
+ * - `n` — test n (index into `tests`) as a whole;
+ * - `{ test, steps?, from?, to?, observe? }` — only the expect steps of test n that match every given filter (step
+ *   indices, an index range, observables / tags). For a test that checks several objectives: the proof is broken
+ *   when the test fails at one of these steps, holds when it fails after the last one, and is unknown otherwise;
+ * - `{ invariant }` — invariant n (index into `invariants`): broken when any test trips it.
+ */
+export type ObjectiveProof =
+  | number
+  | { test: number; steps?: number[]; from?: number; to?: number; observe?: string[] }
+  | { invariant: number };
 
 export interface MissionDef {
   id: string;
@@ -67,6 +104,18 @@ export interface MissionDef {
   briefing: string;
   /** Checklist shown in the mission HUD. */
   objectives: string[];
+  /**
+   * What proves each objective: `objectiveTests[i]` lists the proofs of `objectives[i]` (same length). After a
+   * test run the checklist ticks an objective when all its proofs hold, crosses it when one is broken and leaves
+   * it open otherwise. A test failure caused by an invariant is charged to the objectives that list that
+   * invariant. Without this map an objective is ticked only when every test passed.
+   */
+  objectiveTests?: ObjectiveProof[][];
+  /**
+   * Operator-pad controls this mission is about (control ids), shown first; the plant's other controls wait
+   * behind a "More" chip. Default: the controls its tests operate.
+   */
+  controls?: string[];
   /** Instruction mnemonics this mission introduces or practices (shown as chips). */
   concepts: string[];
   /** Starting program (neutral text rungs). Empty array = empty routine with one blank rung. */
@@ -81,6 +130,12 @@ export interface MissionDef {
   parInstructions?: number;
   /** Restrict the palette (undefined = everything). */
   allowedInstructions?: string[];
+  /**
+   * Instructions the program must use (e.g. ['OTL','OTU'] in a latch lesson); checked like a verify error.
+   * An entry may name the operand too, e.g. 'OTL(Motor_Starter)' (case-insensitive, aliases resolved), so a
+   * dummy instruction on an unrelated tag does not satisfy the lesson.
+   */
+  requiredInstructions?: string[];
   /** Mission ids that must be completed first (defaults to the previous mission in the chapter). */
   requires?: string[];
   /** Short text shown on success. */
@@ -156,4 +211,18 @@ export interface PlayerProfile {
   streakDays: number;
   lastActiveDay?: string;
   settings: { sound: boolean; reducedMotion: boolean; quality: 'low' | 'medium' | 'high' };
+  /** Cumulative counters for achievements (e.g. sandboxMs, forcesUsed, rungEdits). */
+  stats?: Record<string, number>;
+  /**
+   * Guided tours (tour id → how it ended). A finished or skipped tour does not start by itself again; the
+   * player can replay it from the workspace '?' menu. A completed tour is never downgraded to skipped.
+   */
+  tutorials?: Record<string, TutorialRecord>;
+}
+
+/** How a guided tour ended (see `PlayerProfile.tutorials`). */
+export interface TutorialRecord {
+  status: 'completed' | 'skipped';
+  /** Timestamp of the (last) completion or skip. */
+  at: number;
 }
